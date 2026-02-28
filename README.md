@@ -1,12 +1,29 @@
 # Analisi Trasparenza Salariale
 
-Applicazione Vue.js per l'analisi e la visualizzazione della trasparenza retributiva.
+Applicazione Vue.js per l'analisi e la visualizzazione della trasparenza retributiva. Carica un file Excel con i dati retributivi: l'app riconosce le colonne (con euristiche o con **Google Gemini**) e calcola gli indicatori di trasparenza (divari di genere, quartili, ecc.).
 
 ## Setup
 
 ```bash
 npm install
 ```
+
+### Riconoscimento colonne con Google AI (opzionale)
+
+Per usare **Google Gemini** per suggerire automaticamente quale colonna è genere, retribuzione base, bonus, ecc.:
+
+1. Ottieni una API key da [Google AI Studio](https://aistudio.google.com/apikey).
+
+2. **In locale:** copia `.env.example` in `.env.local` e imposta `VITE_GOOGLE_AI_API_KEY=la_tua_chiave`.
+
+3. **Su Vercel:** imposta la variabile direttamente nel progetto:
+   - Vercel → tuo progetto → **Settings** → **Environment Variables**
+   - Nome: `VITE_GOOGLE_AI_API_KEY`
+   - Valore: la tua API key Google
+   - Seleziona gli ambienti (Production, Preview, Development) e salva.
+   - Esegui un nuovo **Redeploy** perché le variabili vengono lette al build.
+
+Senza API key l'app usa solo le regole euristiche (parole chiave sulle intestazioni).
 
 ## Sviluppo
 

@@ -1,0 +1,35 @@
+/* Palette e variabili – stile dashboard */
+:root {
+  --bg-page: #F7F9FC;
+  --bg-card: #FFFFFF;
+  --accent-blue: #2B86ED;
+  --accent-blue-light: #60B0F4;
+  --text-primary: #333333;
+  --text-secondary: #888888;
+  --text-muted: #AAAAAA;
+  --border-light: #EEEEEE;
+  --border: #DDDDDD;
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --sidebar-width: 260px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+}
