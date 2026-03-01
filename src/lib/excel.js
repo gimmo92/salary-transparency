@@ -34,22 +34,29 @@ export async function parseExcelFromUrl(url) {
 function parseExcelArrayBuffer(data) {
   const workbook = XLSX.read(data, { type: 'array' })
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
-  // Leggiamo come array di array per usare esplicitamente la prima riga come intestazioni
+  if (!firstSheet || !firstSheet['!ref']) return { rows: [], headers: [] }
+  // Forza lettura da A1: il "used range" a volte esclude la prima riga
+  const range = XLSX.utils.decode_range(firstSheet['!ref'])
+  range.s.r = 0
+  range.s.c = 0
+  firstSheet['!ref'] = XLSX.utils.encode_range(range)
   const rawRows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', raw: false })
   if (!rawRows.length) return { rows: [], headers: [] }
   const headerRow = rawRows[0]
-  const numCols = Math.max(headerRow.length, ...rawRows.slice(1).map((r) => (r && r.length) || 0))
-  // Intestazioni: valore della prima riga, o "Colonna A/B/..." se vuoto
+  const numCols = Math.max(
+    Array.isArray(headerRow) ? headerRow.length : 0,
+    ...rawRows.slice(1).map((r) => (Array.isArray(r) ? r.length : 0) || 0)
+  )
+  // Intestazioni: valore della cella nella prima riga (A1, B1, C1, ...)
   const headers = Array.from({ length: numCols }, (_, i) => {
-    const cell = headerRow[i]
-    const text = cell != null && String(cell).trim() !== '' ? String(cell).trim() : ''
-    return text || `Colonna ${XLSX.utils.encode_col(i)}`
+    const cell = Array.isArray(headerRow) ? headerRow[i] : undefined
+    const s = cell != null ? String(cell).trim() : ''
+    return s || `Colonna ${XLSX.utils.encode_col(i)}`
   })
-  // Dati dalla riga 2 in poi, come array di oggetti con chiavi = headers
   const rows = rawRows.slice(1).map((row) => {
     const obj = {}
     headers.forEach((h, i) => {
-      obj[h] = row && row[i] != null ? row[i] : ''
+      obj[h] = Array.isArray(row) && row[i] != null ? row[i] : ''
     })
     return obj
   })
