@@ -23,7 +23,7 @@ Per usare **Google Gemini** per suggerire automaticamente quale colonna è gener
    - Seleziona gli ambienti (Production, Preview, Development) e salva.
    - Esegui un nuovo **Redeploy** perché le variabili vengono lette al build.
 
-Senza API key l'app usa solo le regole euristiche (parole chiave sulle intestazioni).
+Senza API key l'app usa solo le regole euristiche (parole chiave sulle intestazioni). Il mapping AI usa il modello `gemini-2.5-flash`.
 
 ## Sviluppo
 

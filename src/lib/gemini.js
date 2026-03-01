@@ -1,6 +1,6 @@
 import { COLUMN_ROLES } from './excel.js'
 
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 /**
  * Chiama l'API Google Gemini per suggerire il mapping colonne -> ruoli.
