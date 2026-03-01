@@ -1,6 +1,14 @@
 import { COLUMN_ROLES } from './excel.js'
 
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+const VALID_ROLES = [
+  COLUMN_ROLES.gender,
+  COLUMN_ROLES.baseSalary,
+  COLUMN_ROLES.variableComponents,
+  COLUMN_ROLES.totalSalary,
+  COLUMN_ROLES.category,
+]
+const VALID_ROLE_SET = new Set(VALID_ROLES)
 
 /**
  * Chiama l'API Google Gemini per suggerire il mapping colonne -> ruoli.
@@ -18,13 +26,7 @@ export async function suggestColumnMappingWithGemini(apiKey, headers, sampleRows
     return row
   })
 
-  const roleList = [
-    COLUMN_ROLES.gender,
-    COLUMN_ROLES.baseSalary,
-    COLUMN_ROLES.variableComponents,
-    COLUMN_ROLES.totalSalary,
-    COLUMN_ROLES.category,
-  ].join(', ')
+  const roleList = VALID_ROLES.join(', ')
 
   const prompt = `Sei un assistente per l'analisi di dati retributivi. Data la tabella sotto (intestazioni e un campione di righe), indica quale colonna corrisponde a ciascun ruolo.
 
@@ -70,14 +72,13 @@ ${JSON.stringify(sample, null, 0)}
     const data = await res.json()
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text
     if (!text) throw new Error('Risposta Gemini senza testo')
-    text = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-    const raw = JSON.parse(text)
+    const raw = parseGeminiJson(text)
     const mapping = {}
     const headerToIndex = Object.fromEntries(headers.map((h, i) => [h, i]))
     const norm = (s) => String(s).toLowerCase().trim()
 
     for (const [columnName, role] of Object.entries(raw)) {
-      if (!roleList.includes(role)) continue
+      if (!VALID_ROLE_SET.has(role)) continue
       let idx = headerToIndex[columnName]
       if (idx == null)
         idx = headers.findIndex((h) => norm(h) === norm(columnName))
@@ -89,4 +90,90 @@ ${JSON.stringify(sample, null, 0)}
     if (e instanceof SyntaxError) throw new Error('Risposta Gemini non valida (JSON)')
     throw e
   }
+}
+
+function parseGeminiJson(text) {
+  const cleaned = String(text)
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim()
+
+  const candidates = [
+    cleaned,
+    extractDelimited(cleaned, '{', '}'),
+    extractDelimited(cleaned, '[', ']'),
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    const parsed = tryParseJson(candidate)
+    if (parsed) return normalizeParsedMapping(parsed)
+  }
+
+  const fromPairs = parsePairsFromText(cleaned)
+  if (Object.keys(fromPairs).length) return fromPairs
+
+  throw new SyntaxError('Invalid Gemini JSON response')
+}
+
+function tryParseJson(value) {
+  try {
+    // Tolleranza minima: elimina trailing commas prima di } o ]
+    const sanitized = String(value).replace(/,\s*([}\]])/g, '$1')
+    return JSON.parse(sanitized)
+  } catch {
+    return null
+  }
+}
+
+function normalizeParsedMapping(parsed) {
+  if (Array.isArray(parsed)) {
+    // Supporta formato alternativo:
+    // [{ "columnName": "...", "role": "genere" }, ...]
+    const out = {}
+    for (const item of parsed) {
+      const columnName = item?.columnName ?? item?.column ?? item?.header ?? item?.name
+      const role = item?.role
+      if (!columnName || !VALID_ROLE_SET.has(role)) continue
+      out[String(columnName)] = role
+    }
+    return out
+  }
+  if (parsed && typeof parsed === 'object') {
+    return parsed
+  }
+  return {}
+}
+
+function parsePairsFromText(text) {
+  const out = {}
+  const quotedPairs = /["']([^"']+)["']\s*:\s*["']([^"']+)["']/g
+  let match = quotedPairs.exec(text)
+  while (match) {
+    const [, columnName, role] = match
+    if (VALID_ROLE_SET.has(role)) out[columnName] = role
+    match = quotedPairs.exec(text)
+  }
+  if (Object.keys(out).length) return out
+
+  // Fallback su righe tipo: COLONNA -> ruolo
+  const rolePattern = Array.from(VALID_ROLE_SET).join('|')
+  const linePairs = new RegExp(`^\\s*(.+?)\\s*(?:[:=\\-]|->)\\s*(${rolePattern})\\s*$`, 'i')
+  for (const line of String(text).split('\n')) {
+    const m = line.match(linePairs)
+    if (!m) continue
+    const columnName = m[1].replace(/^["']|["']$/g, '').trim()
+    const role = m[2].trim()
+    if (columnName && VALID_ROLE_SET.has(role)) out[columnName] = role
+  }
+  return out
+}
+
+function extractDelimited(text, open, close) {
+  const start = text.indexOf(open)
+  const end = text.lastIndexOf(close)
+  if (start === -1 || end === -1 || end <= start) return null
+  return text.slice(start, end + 1)
 }
