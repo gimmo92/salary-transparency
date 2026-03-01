@@ -5,16 +5,22 @@
 export function computeIndicators(normalizedData) {
   const M = normalizedData.filter((r) => r.gender === 'M')
   const F = normalizedData.filter((r) => r.gender === 'F')
-  const n = normalizedData.length
+  const safeNumber = (v) => Number.isFinite(v) ? v : null
+
+  const values = (arr, key) => arr
+    .map((r) => safeNumber(r[key]))
+    .filter((v) => v != null)
 
   const avg = (arr, key) => {
-    if (!arr.length) return 0
-    const sum = arr.reduce((s, r) => s + (r[key] ?? 0), 0)
-    return sum / arr.length
+    const vals = values(arr, key)
+    if (!vals.length) return 0
+    const sum = vals.reduce((s, v) => s + v, 0)
+    return sum / vals.length
   }
   const median = (arr, key) => {
-    if (!arr.length) return 0
-    const sorted = [...arr].map((r) => r[key] ?? 0).sort((a, b) => a - b)
+    const vals = values(arr, key)
+    if (!vals.length) return 0
+    const sorted = [...vals].sort((a, b) => a - b)
     const mid = Math.floor(sorted.length / 2)
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
   }
@@ -40,9 +46,10 @@ export function computeIndicators(normalizedData) {
   const gapMedVarPct = (medVarM - medVarF) / (medVarM || 1) * 100
 
   const pctWithVariable = (arr) => {
-    if (!arr.length) return 0
-    const withVar = arr.filter((r) => (r[varKey] ?? 0) > 0).length
-    return (withVar / arr.length) * 100
+    const valid = arr.filter((r) => safeNumber(r[varKey]) != null)
+    if (!valid.length) return 0
+    const withVar = valid.filter((r) => (r[varKey] ?? 0) > 0).length
+    return (withVar / valid.length) * 100
   }
 
   const sortedAll = [...normalizedData].sort((a, b) => (a[totalKey] ?? 0) - (b[totalKey] ?? 0))

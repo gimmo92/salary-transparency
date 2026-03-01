@@ -214,11 +214,15 @@ export function buildNormalizedData(rows, headers, mapping) {
   return rows
     .map((row) => {
       const num = (key) => {
+        if (!key) return null
         const v = row[key]
-        if (v == null || v === '') return 0
-        const s = String(v).replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
+        if (v == null) return null
+        const raw = String(v).trim()
+        if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null
+        const s = raw.replace(/\s/g, '').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '')
+        if (!s || s === '-' || s === '.') return null
         const n = parseFloat(s)
-        return Number.isNaN(n) ? 0 : n
+        return Number.isNaN(n) ? null : n
       }
       const gender = roleToKey[COLUMN_ROLES.gender] ? row[roleToKey[COLUMN_ROLES.gender]] : null
       const g = normalizeGender(gender)
@@ -227,13 +231,13 @@ export function buildNormalizedData(rows, headers, mapping) {
         gender: g,
         baseSalary: num(roleToKey[COLUMN_ROLES.baseSalary] ?? ''),
         variableComponents: num(roleToKey[COLUMN_ROLES.variableComponents] ?? ''),
-        totalSalary: num(roleToKey[COLUMN_ROLES.totalSalary] ?? '') || null,
+        totalSalary: num(roleToKey[COLUMN_ROLES.totalSalary] ?? ''),
         category: roleToKey[COLUMN_ROLES.category] ? String(row[roleToKey[COLUMN_ROLES.category]] || '').trim() : '',
       }
     })
     .map((r) => ({
       ...r,
-      totalSalary: r.totalSalary != null && r.totalSalary > 0 ? r.totalSalary : r.baseSalary + r.variableComponents,
+      totalSalary: r.totalSalary != null ? r.totalSalary : ((r.baseSalary ?? 0) + (r.variableComponents ?? 0)),
     }))
     .filter((r) => r.gender !== null)
 }
