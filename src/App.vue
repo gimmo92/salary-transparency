@@ -37,6 +37,7 @@ const headerRowIndex = ref(1)
 const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
+const analysisLoading = ref(false)
 const indicatorsResult = ref(null)
 const indicatorsSource = ref('locale')
 
@@ -97,41 +98,47 @@ async function onLoadFromUrl() {
 }
 
 async function confirmMapping() {
-  const normalized = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
-  if (normalized.length === 0) {
-    uploadError.value = 'Nessun dato valido dopo il mapping. Verifica la colonna Genere (M/F).'
-    return
-  }
-  uploadError.value = ''
-  const localIndicators = computeIndicators(normalized)
-  if (googleApiKey) {
-    geminiLoading.value = true
-    try {
-      const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalized)
-      const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
-      const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
-      const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
-      const delta = comparable ? Math.abs(aiGap - localGap) : 0
-      if (comparable && delta > 10) {
+  if (analysisLoading.value) return
+  analysisLoading.value = true
+  try {
+    const normalized = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+    if (normalized.length === 0) {
+      uploadError.value = 'Nessun dato valido dopo il mapping. Verifica la colonna Genere (M/F).'
+      return
+    }
+    uploadError.value = ''
+    const localIndicators = computeIndicators(normalized)
+    if (googleApiKey) {
+      geminiLoading.value = true
+      try {
+        const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalized)
+        const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
+        const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
+        const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
+        const delta = comparable ? Math.abs(aiGap - localGap) : 0
+        if (comparable && delta > 10) {
+          indicatorsResult.value = localIndicators
+          indicatorsSource.value = 'locale'
+          uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti su indicatore b). Uso motore locale.`
+        } else {
+          indicatorsResult.value = aiIndicators
+          indicatorsSource.value = 'ai'
+        }
+      } catch (aiErr) {
         indicatorsResult.value = localIndicators
         indicatorsSource.value = 'locale'
-        uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti su indicatore b). Uso motore locale.`
-      } else {
-        indicatorsResult.value = aiIndicators
-        indicatorsSource.value = 'ai'
+        uploadError.value = 'Calcolo AI non riuscito, uso fallback locale: ' + (aiErr.message || String(aiErr))
+      } finally {
+        geminiLoading.value = false
       }
-    } catch (aiErr) {
+    } else {
       indicatorsResult.value = localIndicators
       indicatorsSource.value = 'locale'
-      uploadError.value = 'Calcolo AI non riuscito, uso fallback locale: ' + (aiErr.message || String(aiErr))
-    } finally {
-      geminiLoading.value = false
     }
-  } else {
-    indicatorsResult.value = localIndicators
-    indicatorsSource.value = 'locale'
+    analisiStep.value = 'results'
+  } finally {
+    analysisLoading.value = false
   }
-  analisiStep.value = 'results'
 }
 
 function toggleSelectAll() {
@@ -245,7 +252,7 @@ function formatNum(n) {
           </div>
           <div v-for="role in roleKeys" :key="role" class="mapping-row">
             <span>{{ getRoleLabel(role) }}</span>
-            <select v-model.number="columnMapping[role]" class="mapping-select">
+            <select v-model.number="columnMapping[role]" class="mapping-select" :disabled="analysisLoading">
               <option :value="undefined">– Nessuna –</option>
               <option v-for="(h, i) in excelHeaders" :key="i" :value="i">{{ h }}</option>
             </select>
@@ -253,8 +260,15 @@ function formatNum(n) {
         </div>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         <div class="mapping-actions">
-          <button class="btn-secondary" @click="goToUpload">Indietro</button>
-          <button class="btn-primary" @click="confirmMapping">Calcola indicatori</button>
+          <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
+          <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
+            <span v-if="analysisLoading">Generazione analisi...</span>
+            <span v-else>Calcola indicatori</span>
+          </button>
+        </div>
+        <div v-if="analysisLoading" class="analysis-loader">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Sto elaborando i dati e generando l'analisi...</span>
         </div>
       </div>
 
@@ -956,6 +970,30 @@ function formatNum(n) {
   display: flex;
   gap: 0.75rem;
   margin-top: 1.25rem;
+}
+
+.analysis-loader {
+  margin-top: 1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .results .indicator-cards {

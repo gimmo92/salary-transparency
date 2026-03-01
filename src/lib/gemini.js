@@ -57,7 +57,7 @@ ${JSON.stringify(sample, null, 0)}
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.1,
-          maxOutputTokens: 1024,
+          maxOutputTokens: 8192,
           responseMimeType: 'application/json',
         },
       }),
@@ -140,7 +140,7 @@ Restituisci SOLO JSON valido con questa struttura ESATTA (stesse chiavi):
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 16384,
         responseMimeType: 'application/json',
       },
     }),
