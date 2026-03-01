@@ -20,40 +20,64 @@ export function parseExcelFile(file) {
 }
 
 /**
- * Scarica un file Excel da un URL (link diretto) e restituisce righe e intestazioni.
- * L'URL deve essere un link di download diretto; il server deve inviare CORS headers consentendo l'origine.
+ * Converte un link Google Sheets (condivisione/modifica) nell'URL di export .xlsx.
+ * Es: .../d/ID/edit... → .../d/ID/export?format=xlsx
  */
-export async function parseExcelFromUrl(url) {
-  const res = await fetch(url, { mode: 'cors' })
+export function toGoogleSheetsExportUrl(url) {
+  try {
+    const u = new URL(url)
+    if (!/^https?:\/\/(docs\.google\.com|drive\.google\.com)/i.test(u.origin)) return url
+    const match = u.pathname.match(/\/d\/([a-zA-Z0-9_-]+)/)
+    if (!match) return url
+    const id = match[1]
+    return `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx&id=${id}`
+  } catch {
+    return url
+  }
+}
+
+/**
+ * Scarica un file Excel da un URL (link diretto o Google Sheets) e restituisce righe e intestazioni.
+ * Se l'URL è un link Google Sheets, viene convertito in export .xlsx.
+ * @param {string} url
+ * @param {{ headerRowIndex?: number }} options - headerRowIndex: 0 = prima riga, 1 = seconda riga (per fogli con intestazioni in riga 2)
+ */
+export async function parseExcelFromUrl(url, options = {}) {
+  const resolvedUrl = toGoogleSheetsExportUrl(url.trim())
+  const res = await fetch(resolvedUrl, { mode: 'cors' })
   if (!res.ok) throw new Error(`Errore di rete: ${res.status} ${res.statusText}`)
   const buffer = await res.arrayBuffer()
   const data = new Uint8Array(buffer)
-  return parseExcelArrayBuffer(data)
+  return parseExcelArrayBuffer(data, options)
 }
 
-function parseExcelArrayBuffer(data) {
+/**
+ * @param {Uint8Array} data
+ * @param {{ headerRowIndex?: number }} options - 0 = riga 1, 1 = riga 2 (per fogli tipo Google dove la riga 2 ha CODICE, DIPENDENTE, SESSO...)
+ */
+function parseExcelArrayBuffer(data, options = {}) {
+  const headerRowIndex = Math.max(0, parseInt(options.headerRowIndex, 10) || 0)
   const workbook = XLSX.read(data, { type: 'array' })
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
   if (!firstSheet || !firstSheet['!ref']) return { rows: [], headers: [] }
-  // Forza lettura da A1: il "used range" a volte esclude la prima riga
   const range = XLSX.utils.decode_range(firstSheet['!ref'])
   range.s.r = 0
   range.s.c = 0
   firstSheet['!ref'] = XLSX.utils.encode_range(range)
   const rawRows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', raw: false })
-  if (!rawRows.length) return { rows: [], headers: [] }
-  const headerRow = rawRows[0]
+  if (!rawRows.length || rawRows.length <= headerRowIndex) return { rows: [], headers: [] }
+  const headerRow = rawRows[headerRowIndex]
+  const dataStart = headerRowIndex + 1
   const numCols = Math.max(
     Array.isArray(headerRow) ? headerRow.length : 0,
-    ...rawRows.slice(1).map((r) => (Array.isArray(r) ? r.length : 0) || 0)
+    ...rawRows.slice(dataStart).map((r) => (Array.isArray(r) ? r.length : 0) || 0)
   )
-  // Intestazioni: valore della cella nella prima riga (A1, B1, C1, ...)
   const headers = Array.from({ length: numCols }, (_, i) => {
     const cell = Array.isArray(headerRow) ? headerRow[i] : undefined
     const s = cell != null ? String(cell).trim() : ''
     return s || `Colonna ${XLSX.utils.encode_col(i)}`
   })
-  const rows = rawRows.slice(1).map((row) => {
+  const rows = rawRows.slice(dataStart).map((row) => {
     const obj = {}
     headers.forEach((h, i) => {
       obj[h] = Array.isArray(row) && row[i] != null ? row[i] : ''

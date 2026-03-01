@@ -33,6 +33,7 @@ const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
 const excelUrl = ref('')
+const headerRowIndex = ref(1)
 const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
@@ -66,7 +67,7 @@ async function onLoadFromUrl() {
   uploadLoading.value = true
   geminiLoading.value = false
   try {
-    const { rows, headers } = await parseExcelFromUrl(url)
+    const { rows, headers } = await parseExcelFromUrl(url, { headerRowIndex: headerRowIndex.value })
     excelRows.value = rows
     excelHeaders.value = headers
     const heuristic = detectColumnRoles(headers, rows)
@@ -186,7 +187,15 @@ function formatNum(n) {
             <span v-else>Carica e mappa colonne</span>
           </button>
         </div>
-        <p class="url-hint">Il link deve essere un URL di download diretto. Alcuni servizi (es. Google Drive) potrebbero richiedere un link di tipo "Chiunque con il link può visualizzare" e "Scarica" per funzionare.</p>
+        <div class="header-row-option">
+          <label>Intestazioni colonne nella riga:</label>
+          <select v-model.number="headerRowIndex" class="header-row-select">
+            <option :value="0">1 (prima riga)</option>
+            <option :value="1">2 (seconda riga)</option>
+          </select>
+          <span class="header-row-hint">Usa «2» per fogli Google/Excel dove la prima riga è vuota o contiene numeri (es. il tuo file con CODICE, DIPENDENTE, SESSO…).</span>
+        </div>
+        <p class="url-hint">Puoi incollare direttamente un link Google Sheets (es. docs.google.com/spreadsheets/…): verrà convertito in download .xlsx. Per altri servizi serve un URL di download diretto.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
 
@@ -789,6 +798,33 @@ function formatNum(n) {
 .url-input:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.header-row-option {
+  margin-bottom: 1rem;
+}
+
+.header-row-option label {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  margin-bottom: 0.35rem;
+}
+
+.header-row-select {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  margin-right: 0.5rem;
+}
+
+.header-row-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .url-hint {
