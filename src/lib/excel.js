@@ -211,18 +211,42 @@ export function buildNormalizedData(rows, headers, mapping) {
       roleToKey[role] = headers[colIndex]
   })
 
+  const parseFlexibleNumber = (value) => {
+    if (value == null) return null
+    const raw = String(value).trim()
+    if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null
+
+    // Tieni solo cifre e separatori comuni
+    const cleaned = raw.replace(/\s/g, '').replace(/[^\d,.-]/g, '')
+    if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === ',') return null
+
+    const hasComma = cleaned.includes(',')
+    const hasDot = cleaned.includes('.')
+
+    let normalized = cleaned
+
+    if (hasComma && hasDot) {
+      // Formato tipico IT: 1.234,56
+      normalized = cleaned.replace(/\./g, '').replace(',', '.')
+    } else if (hasComma && !hasDot) {
+      // 1234,56 -> 1234.56
+      normalized = cleaned.replace(',', '.')
+    } else if (hasDot && !hasComma) {
+      // Se sembra separatore migliaia (es: 1.234 o 1.234.567), rimuovi i punti.
+      // Altrimenti trattalo come decimale (es: 1234.56)
+      const thousandPattern = /^\d{1,3}(\.\d{3})+$/
+      normalized = thousandPattern.test(cleaned) ? cleaned.replace(/\./g, '') : cleaned
+    }
+
+    const n = parseFloat(normalized)
+    return Number.isFinite(n) ? n : null
+  }
+
   return rows
     .map((row) => {
       const num = (key) => {
         if (!key) return null
-        const v = row[key]
-        if (v == null) return null
-        const raw = String(v).trim()
-        if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null
-        const s = raw.replace(/\s/g, '').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '')
-        if (!s || s === '-' || s === '.') return null
-        const n = parseFloat(s)
-        return Number.isNaN(n) ? null : n
+        return parseFlexibleNumber(row[key])
       }
       const gender = roleToKey[COLUMN_ROLES.gender] ? row[roleToKey[COLUMN_ROLES.gender]] : null
       const g = normalizeGender(gender)

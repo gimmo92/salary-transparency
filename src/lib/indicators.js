@@ -28,26 +28,31 @@ export function computeIndicators(normalizedData) {
   const totalKey = 'totalSalary'
   const baseKey = 'baseSalary'
   const varKey = 'variableComponents'
+  const gapPercent = (maleValue, femaleValue) => {
+    if (!Number.isFinite(maleValue) || maleValue === 0) return null
+    if (!Number.isFinite(femaleValue)) return null
+    return ((maleValue - femaleValue) / maleValue) * 100
+  }
 
   const avgM = avg(M, totalKey)
   const avgF = avg(F, totalKey)
-  const gapPct = (avgM - avgF) / (avgM || 1) * 100
+  const gapPct = gapPercent(avgM, avgF)
 
   const avgVarM = avg(M, varKey)
   const avgVarF = avg(F, varKey)
-  const gapVarPct = (avgVarM - avgVarF) / (avgVarM || 1) * 100
+  const gapVarPct = gapPercent(avgVarM, avgVarF)
 
   const avgBaseM = avg(M, baseKey)
   const avgBaseF = avg(F, baseKey)
-  const gapBasePct = (avgBaseM - avgBaseF) / (avgBaseM || 1) * 100
+  const gapBasePct = gapPercent(avgBaseM, avgBaseF)
 
   const medM = median(M, totalKey)
   const medF = median(F, totalKey)
-  const gapMedPct = (medM - medF) / (medM || 1) * 100
+  const gapMedPct = gapPercent(medM, medF)
 
   const medVarM = median(M, varKey)
   const medVarF = median(F, varKey)
-  const gapMedVarPct = (medVarM - medVarF) / (medVarM || 1) * 100
+  const gapMedVarPct = gapPercent(medVarM, medVarF)
 
   const pctWithVariable = (arr) => {
     const valid = arr.filter((r) => safeNumber(r[varKey]) != null)
@@ -86,8 +91,8 @@ export function computeIndicators(normalizedData) {
     const avgBaseF = avg(fF, baseKey)
     const avgVarM = avg(mM, varKey)
     const avgVarF = avg(fF, varKey)
-    const gapBase = (avgBaseM - avgBaseF) / (avgBaseM || 1) * 100
-    const gapVar = (avgVarM - avgVarF) / (avgVarM || 1) * 100
+    const gapBase = gapPercent(avgBaseM, avgBaseF)
+    const gapVar = gapPercent(avgVarM, avgVarF)
     return {
       categoria: cat,
       n: inCat.length,
