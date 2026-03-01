@@ -92,6 +92,76 @@ ${JSON.stringify(sample, null, 0)}
   }
 }
 
+/**
+ * Calcola gli indicatori (a)-(g) con Gemini partendo dai dati normalizzati.
+ * Restituisce la stessa struttura di computeIndicators() in indicators.js
+ */
+export async function computeIndicatorsWithGemini(apiKey, normalizedData) {
+  if (!apiKey) throw new Error('API key Gemini mancante')
+  if (!Array.isArray(normalizedData) || !normalizedData.length)
+    throw new Error('Nessun dato disponibile per il calcolo AI')
+
+  const compactRows = normalizedData.map((r) => ({
+    gender: r.gender,
+    baseSalary: Number(r.baseSalary || 0),
+    variableComponents: Number(r.variableComponents || 0),
+    totalSalary: Number(r.totalSalary || 0),
+    category: String(r.category || 'Non specificata'),
+  }))
+
+  const prompt = `Sei un analista retributivo. Calcola ESATTAMENTE gli indicatori richiesti sul dataset fornito.
+
+Dataset (JSON array):
+${JSON.stringify(compactRows)}
+
+Definizioni:
+- Gruppo femminile: gender = "F"
+- Gruppo maschile: gender = "M"
+- Se totalSalary manca usa baseSalary + variableComponents (nel dataset è già valorizzato)
+- Divario % = ((valoreMaschile - valoreFemminile) / valoreMaschile) * 100
+- Quartili: ordina per totalSalary crescente e dividi in 4 gruppi con logica ceil(n/4), come:
+  Q1 = primi ceil(n/4), Q2 = successivi, Q3 = successivi, Q4 = restanti
+
+Restituisci SOLO JSON valido con questa struttura ESATTA (stesse chiavi):
+{
+  "a_divarioRetributivoGenere": { "descrizione": "...", "percentuale": 0, "mediaMaschile": 0, "mediaFemminile": 0, "nMaschi": 0, "nFemmine": 0 },
+  "b_divarioComponentiVariabili": { "descrizione": "...", "percentuale": 0, "mediaMaschile": 0, "mediaFemminile": 0 },
+  "c_divarioMedianoGenere": { "descrizione": "...", "percentuale": 0, "medianaMaschile": 0, "medianaFemminile": 0 },
+  "d_divarioMedianoComponentiVariabili": { "descrizione": "...", "percentuale": 0, "medianaMaschile": 0, "medianaFemminile": 0 },
+  "e_percentualeConComponentiVariabili": { "descrizione": "...", "femminile": 0, "maschile": 0, "nFemmine": 0, "nMaschi": 0 },
+  "f_percentualePerQuartile": { "descrizione": "...", "quartili": [ { "quartile": 1, "femminile": 0, "maschile": 0, "totale": 0 } ] },
+  "g_divarioPerCategoria": { "descrizione": "...", "perCategoria": [ { "categoria": "...", "n": 0, "divarioBase": 0, "divarioVariabile": 0 } ] }
+}`
+
+  const res = await fetch(`${GEMINI_API}?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 4096,
+        responseMimeType: 'application/json',
+      },
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const msg = err.error?.message || err.error?.status || `API ${res.status}`
+    throw new Error(msg)
+  }
+
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('Risposta Gemini senza testo (calcolo indicatori)')
+
+  const raw = parseGeminiJson(text)
+  const normalized = normalizeIndicatorsShape(raw)
+  if (!normalized) throw new Error('Risposta AI incompleta per gli indicatori')
+  return normalized
+}
+
 function parseGeminiJson(text) {
   const cleaned = String(text)
     .trim()
@@ -176,4 +246,22 @@ function extractDelimited(text, open, close) {
   const end = text.lastIndexOf(close)
   if (start === -1 || end === -1 || end <= start) return null
   return text.slice(start, end + 1)
+}
+
+function normalizeIndicatorsShape(raw) {
+  const obj = raw?.indicators && typeof raw.indicators === 'object' ? raw.indicators : raw
+  if (!obj || typeof obj !== 'object') return null
+  const required = [
+    'a_divarioRetributivoGenere',
+    'b_divarioComponentiVariabili',
+    'c_divarioMedianoGenere',
+    'd_divarioMedianoComponentiVariabili',
+    'e_percentualeConComponentiVariabili',
+    'f_percentualePerQuartile',
+    'g_divarioPerCategoria',
+  ]
+  for (const k of required) {
+    if (!obj[k]) return null
+  }
+  return obj
 }

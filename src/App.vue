@@ -8,7 +8,7 @@ import {
   getRoleLabel,
 } from './lib/excel.js'
 import { computeIndicators } from './lib/indicators.js'
-import { suggestColumnMappingWithGemini } from './lib/gemini.js'
+import { suggestColumnMappingWithGemini, computeIndicatorsWithGemini } from './lib/gemini.js'
 
 const activeSection = ref('dashboard')
 const selectAll = ref(false)
@@ -38,6 +38,7 @@ const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
 const indicatorsResult = ref(null)
+const indicatorsSource = ref('locale')
 
 const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
 
@@ -95,14 +96,29 @@ async function onLoadFromUrl() {
   }
 }
 
-function confirmMapping() {
+async function confirmMapping() {
   const normalized = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
   if (normalized.length === 0) {
     uploadError.value = 'Nessun dato valido dopo il mapping. Verifica la colonna Genere (M/F).'
     return
   }
   uploadError.value = ''
-  indicatorsResult.value = computeIndicators(normalized)
+  if (googleApiKey) {
+    geminiLoading.value = true
+    try {
+      indicatorsResult.value = await computeIndicatorsWithGemini(googleApiKey, normalized)
+      indicatorsSource.value = 'ai'
+    } catch (aiErr) {
+      indicatorsResult.value = computeIndicators(normalized)
+      indicatorsSource.value = 'locale'
+      uploadError.value = 'Calcolo AI non riuscito, uso fallback locale: ' + (aiErr.message || String(aiErr))
+    } finally {
+      geminiLoading.value = false
+    }
+  } else {
+    indicatorsResult.value = computeIndicators(normalized)
+    indicatorsSource.value = 'locale'
+  }
   analisiStep.value = 'results'
 }
 
@@ -233,6 +249,7 @@ function formatNum(n) {
       <!-- Step 3: Risultati indicatori (a)–(g) -->
       <div v-else-if="analisiStep === 'results' && indicatorsResult" class="analisi-content results">
         <h2 class="analisi-title">Risultati analisi trasparenza salariale</h2>
+        <p class="result-source">Calcolo: <strong>{{ indicatorsSource === 'ai' ? 'Gemini (AI)' : 'Motore locale' }}</strong></p>
         <div class="indicator-cards">
           <section class="indicator-card">
             <h3>(a) Divario retributivo di genere</h3>
@@ -771,6 +788,12 @@ function formatNum(n) {
   font-size: 0.9375rem;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+.result-source {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 
 .url-input-wrap {
