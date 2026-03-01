@@ -103,20 +103,32 @@ async function confirmMapping() {
     return
   }
   uploadError.value = ''
+  const localIndicators = computeIndicators(normalized)
   if (googleApiKey) {
     geminiLoading.value = true
     try {
-      indicatorsResult.value = await computeIndicatorsWithGemini(googleApiKey, normalized)
-      indicatorsSource.value = 'ai'
+      const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalized)
+      const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
+      const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
+      const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
+      const delta = comparable ? Math.abs(aiGap - localGap) : 0
+      if (comparable && delta > 10) {
+        indicatorsResult.value = localIndicators
+        indicatorsSource.value = 'locale'
+        uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti su indicatore b). Uso motore locale.`
+      } else {
+        indicatorsResult.value = aiIndicators
+        indicatorsSource.value = 'ai'
+      }
     } catch (aiErr) {
-      indicatorsResult.value = computeIndicators(normalized)
+      indicatorsResult.value = localIndicators
       indicatorsSource.value = 'locale'
       uploadError.value = 'Calcolo AI non riuscito, uso fallback locale: ' + (aiErr.message || String(aiErr))
     } finally {
       geminiLoading.value = false
     }
   } else {
-    indicatorsResult.value = computeIndicators(normalized)
+    indicatorsResult.value = localIndicators
     indicatorsSource.value = 'locale'
   }
   analisiStep.value = 'results'

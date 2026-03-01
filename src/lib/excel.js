@@ -126,8 +126,8 @@ export function detectColumnRoles(headers, rows, sampleSize = 50) {
     'normale', 'fisso', 'lorda', 'lordo', 'ral', 'stipendio base', 'base '
   ]
   const variableKeywords = [
-    'variabile', 'bonus', 'premio', 'incentivo', 'complementare', 'componente',
-    'variable', 'incentive', 'premium', 'straordinari', 'overtime'
+    'variabile', 'variab', 'bonus', 'premio', 'incentivo', 'complementare', 'componente',
+    'variable', 'incentive', 'premium', 'straordinari', 'overtime', 'tot comp variab', 'tot comp var'
   ]
   const totalKeywords = [
     'totale', 'total', 'complessiva', 'retribuzione totale', 'totale lordo', 'complesso'
@@ -187,6 +187,16 @@ export function detectColumnRoles(headers, rows, sampleSize = 50) {
     if (catScore > 0 && suggestions[COLUMN_ROLES.category] === undefined)
       suggestions[COLUMN_ROLES.category] = index
   })
+
+  // Regole forti su intestazioni note del dataset retributivo
+  const normHeaders = headers.map((h) => normalized(h))
+  const strongGenderIdx = normHeaders.findIndex((h) => /^sesso$|^genere$/.test(h))
+  if (strongGenderIdx >= 0) suggestions[COLUMN_ROLES.gender] = strongGenderIdx
+
+  const strongVarIdx = normHeaders.findIndex((h) =>
+    /tot\s*comp\s*variab|totale\s*comp(onenti)?\s*variab|componenti?\s*(complementari|variabili)/.test(h)
+  )
+  if (strongVarIdx >= 0) suggestions[COLUMN_ROLES.variableComponents] = strongVarIdx
 
   return suggestions
 }
