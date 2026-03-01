@@ -34,6 +34,7 @@ export async function parseExcelFromUrl(url) {
 function parseExcelArrayBuffer(data) {
   const workbook = XLSX.read(data, { type: 'array' })
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
+  // Prima riga del foglio = intestazioni colonne (comportamento default di sheet_to_json)
   const json = XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: false })
   const headers = json.length ? Object.keys(json[0]) : []
   return { rows: json, headers }
