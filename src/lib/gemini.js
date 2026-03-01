@@ -63,12 +63,13 @@ ${JSON.stringify(sample, null, 0)}
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(err.error?.message || `API ${res.status}`)
+      const msg = err.error?.message || err.error?.status || `API ${res.status}`
+      throw new Error(msg)
     }
 
     const data = await res.json()
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!text) return null
+    if (!text) throw new Error('Risposta Gemini senza testo')
     text = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
     const raw = JSON.parse(text)
     const mapping = {}
@@ -85,7 +86,7 @@ ${JSON.stringify(sample, null, 0)}
 
     return Object.keys(mapping).length ? mapping : null
   } catch (e) {
-    console.warn('Gemini column mapping failed:', e)
-    return null
+    if (e instanceof SyntaxError) throw new Error('Risposta Gemini non valida (JSON)')
+    throw e
   }
 }

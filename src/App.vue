@@ -39,7 +39,7 @@ const uploadLoading = ref(false)
 const geminiLoading = ref(false)
 const indicatorsResult = ref(null)
 
-const googleApiKey = import.meta.env.VITE_GOOGLE_AI_API_KEY || ''
+const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
 
 const roleKeys = [COLUMN_ROLES.gender, COLUMN_ROLES.baseSalary, COLUMN_ROLES.variableComponents, COLUMN_ROLES.totalSalary, COLUMN_ROLES.category]
 
@@ -78,9 +78,13 @@ async function onLoadFromUrl() {
         const geminiMapping = await suggestColumnMappingWithGemini(googleApiKey, headers, rows)
         if (geminiMapping && Object.keys(geminiMapping).length > 0)
           suggested = { ...heuristic, ...geminiMapping }
+      } catch (geminiErr) {
+        uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Verifica la chiave API o usa il mapping manuale.'
       } finally {
         geminiLoading.value = false
       }
+    } else {
+      uploadError.value = 'Gemini non attivo: manca VITE_GOOGLE_AI_API_KEY nel build environment di Vercel. Uso mapping euristico.'
     }
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
@@ -195,6 +199,9 @@ function formatNum(n) {
           </select>
           <span class="header-row-hint">Usa «2» per fogli Google/Excel dove la prima riga è vuota o contiene numeri (es. il tuo file con CODICE, DIPENDENTE, SESSO…).</span>
         </div>
+        <p class="api-key-warn">
+          Stato Gemini: <strong>{{ googleApiKey ? 'attivo (VITE_GOOGLE_AI_API_KEY presente nel build)' : 'non attivo (VITE_GOOGLE_AI_API_KEY mancante nel build)' }}</strong>.
+        </p>
         <p class="url-hint">Puoi incollare direttamente un link Google Sheets (es. docs.google.com/spreadsheets/…): verrà convertito in download .xlsx. Per altri servizi serve un URL di download diretto.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
@@ -824,6 +831,13 @@ function formatNum(n) {
 .header-row-hint {
   font-size: 0.8125rem;
   color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.api-key-warn {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 
