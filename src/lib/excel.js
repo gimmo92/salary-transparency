@@ -9,11 +9,7 @@ export function parseExcelFile(file) {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target.result)
-        const workbook = XLSX.read(data, { type: 'array' })
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
-        const json = XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: false })
-        const headers = json.length ? Object.keys(json[0]) : []
-        resolve({ rows: json, headers })
+        resolve(parseExcelArrayBuffer(data))
       } catch (err) {
         reject(err)
       }
@@ -21,6 +17,26 @@ export function parseExcelFile(file) {
     reader.onerror = () => reject(reader.error)
     reader.readAsArrayBuffer(file)
   })
+}
+
+/**
+ * Scarica un file Excel da un URL (link diretto) e restituisce righe e intestazioni.
+ * L'URL deve essere un link di download diretto; il server deve inviare CORS headers consentendo l'origine.
+ */
+export async function parseExcelFromUrl(url) {
+  const res = await fetch(url, { mode: 'cors' })
+  if (!res.ok) throw new Error(`Errore di rete: ${res.status} ${res.statusText}`)
+  const buffer = await res.arrayBuffer()
+  const data = new Uint8Array(buffer)
+  return parseExcelArrayBuffer(data)
+}
+
+function parseExcelArrayBuffer(data) {
+  const workbook = XLSX.read(data, { type: 'array' })
+  const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
+  const json = XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: false })
+  const headers = json.length ? Object.keys(json[0]) : []
+  return { rows: json, headers }
 }
 
 /** Ruoli colonne che l’AI deve riconoscere */

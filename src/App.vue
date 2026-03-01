@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import {
-  parseExcelFile,
+  parseExcelFromUrl,
   detectColumnRoles,
   buildNormalizedData,
   COLUMN_ROLES,
@@ -32,6 +32,7 @@ const analisiStep = ref('idle') // idle | upload | mapping | results
 const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
+const excelUrl = ref('')
 const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
@@ -55,14 +56,17 @@ function goToUpload() {
   uploadError.value = ''
 }
 
-async function onFileSelect(e) {
-  const file = e.target?.files?.[0]
-  if (!file) return
+async function onLoadFromUrl() {
+  const url = (excelUrl.value || '').trim()
+  if (!url) {
+    uploadError.value = 'Inserisci il collegamento al file Excel.'
+    return
+  }
   uploadError.value = ''
   uploadLoading.value = true
   geminiLoading.value = false
   try {
-    const { rows, headers } = await parseExcelFile(file)
+    const { rows, headers } = await parseExcelFromUrl(url)
     excelRows.value = rows
     excelHeaders.value = headers
     const heuristic = detectColumnRoles(headers, rows)
@@ -80,10 +84,9 @@ async function onFileSelect(e) {
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
   } catch (err) {
-    uploadError.value = err.message || 'Errore nella lettura del file Excel.'
+    uploadError.value = err.message || 'Impossibile leggere il file. Verifica che il link sia un URL di download diretto (.xlsx) e che il server consenta CORS.'
   } finally {
     uploadLoading.value = false
-    e.target.value = ''
   }
 }
 
@@ -118,38 +121,36 @@ function formatNum(n) {
 </script>
 
 <template>
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <div class="logo">
+  <div class="app-layout">
+    <header class="tab-bar">
+      <div class="tab-bar-brand">
         <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
         </svg>
         <span class="logo-text">Analisi TS</span>
       </div>
-      <p class="sections-label">SEZIONI</p>
-    </div>
-    <nav class="nav">
-      <button
-        v-for="s in sections"
-        :key="s.id"
-        class="nav-item"
-        :class="{ active: activeSection === s.id }"
-        @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'"
-      >
-        <span class="nav-icon">
-          <svg v-if="s.icon === 'dashboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-          <svg v-else-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
-          <svg v-else-if="s.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
-          <svg v-else-if="s.icon === 'compare'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M8 21H3v-5M21 3l-9 9M3 21l9-9"/></svg>
-          <svg v-else-if="s.icon === 'law'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-        </span>
-        <span class="nav-label">{{ s.label }}</span>
-      </button>
-    </nav>
-  </aside>
+      <nav class="tabs">
+        <button
+          v-for="s in sections"
+          :key="s.id"
+          class="tab"
+          :class="{ active: activeSection === s.id }"
+          @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'"
+        >
+          <span class="tab-icon">
+            <svg v-if="s.icon === 'dashboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <svg v-else-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+            <svg v-else-if="s.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+            <svg v-else-if="s.icon === 'compare'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M8 21H3v-5M21 3l-9 9M3 21l9-9"/></svg>
+            <svg v-else-if="s.icon === 'law'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          </span>
+          <span class="tab-label">{{ s.label }}</span>
+        </button>
+      </nav>
+    </header>
 
-  <div class="main-wrap">
+    <div class="main-wrap">
     <header class="main-header">
       <button class="btn-primary" @click="startNuovaAnalisi">
         <span>NUOVA ANALISI</span>
@@ -161,16 +162,31 @@ function formatNum(n) {
 
     <!-- Flusso Analisi Excel: Upload → Mapping → Risultati -->
     <template v-if="showAnalisiFlow">
-      <!-- Step 1: Upload -->
+      <!-- Step 1: Link Excel in cloud -->
       <div v-if="analisiStep === 'upload'" class="analisi-content">
-        <h2 class="analisi-title">Carica file Excel</h2>
-        <p class="analisi-desc">Carica un file .xlsx con i dati retributivi dell'azienda. L'app riconoscerà automaticamente le colonne (genere, retribuzione base, componenti variabili, ecc.) tramite analisi delle intestazioni e dei valori.</p>
-        <label class="upload-zone" :class="{ loading: uploadLoading || geminiLoading }">
-          <input type="file" accept=".xlsx,.xls" @change="onFileSelect" hidden />
-          <span v-if="uploadLoading">Lettura file in corso…</span>
-          <span v-else-if="geminiLoading">Riconoscimento colonne con Google AI…</span>
-          <span v-else>Trascina il file qui o clicca per selezionare</span>
-        </label>
+        <h2 class="analisi-title">Collegamento al file Excel</h2>
+        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud (es. OneDrive, Google Drive, SharePoint, URL pubblico). L'app lo scaricherà e mapperà automaticamente le colonne (genere, retribuzione base, componenti variabili, ecc.).</p>
+        <div class="url-input-wrap">
+          <input
+            v-model="excelUrl"
+            type="url"
+            class="url-input"
+            placeholder="https://... file.xlsx"
+            :disabled="uploadLoading || geminiLoading"
+            @keydown.enter="onLoadFromUrl"
+          />
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="uploadLoading || geminiLoading || !excelUrl.trim()"
+            @click="onLoadFromUrl"
+          >
+            <span v-if="uploadLoading">Scaricamento…</span>
+            <span v-else-if="geminiLoading">Riconoscimento colonne…</span>
+            <span v-else>Carica e mappa colonne</span>
+          </button>
+        </div>
+        <p class="url-hint">Il link deve essere un URL di download diretto. Alcuni servizi (es. Google Drive) potrebbero richiedere un link di tipo "Chiunque con il link può visualizzare" e "Scarica" per funzionare.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
 
@@ -328,6 +344,7 @@ function formatNum(n) {
         </article>
       </div>
     </template>
+    </div>
   </div>
 
   <div class="help-widget">
@@ -342,25 +359,28 @@ function formatNum(n) {
 </template>
 
 <style scoped>
-.sidebar {
-  width: var(--sidebar-width);
-  min-width: var(--sidebar-width);
-  background: var(--bg-card);
-  box-shadow: var(--shadow-soft);
+.app-layout {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  min-height: 100vh;
 }
 
-.sidebar-header {
-  padding: 1.5rem 1.25rem;
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0 1.5rem;
+  min-height: 56px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-soft);
   border-bottom: 1px solid var(--border-light);
 }
 
-.logo {
+.tab-bar-brand {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  margin-right: 0.5rem;
 }
 
 .logo-icon {
@@ -375,59 +395,53 @@ function formatNum(n) {
   color: var(--text-primary);
 }
 
-.sections-label {
-  margin: 1rem 0 0;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-}
-
-.nav {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.75rem 0;
-}
-
-.nav-item {
+.tabs {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  width: 100%;
-  padding: 0.65rem 1.25rem;
+  gap: 0.25rem;
+  flex: 1;
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 0.9375rem;
-  text-align: left;
+  font-size: 0.875rem;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
 }
 
-.nav-item:hover {
+.tab:hover {
   background: rgba(43, 134, 237, 0.06);
   color: var(--accent-blue);
 }
 
-.nav-item.active {
-  background: rgba(43, 134, 237, 0.12);
+.tab.active {
   color: var(--accent-blue);
+  font-weight: 600;
+  border-bottom-color: var(--accent-blue);
 }
 
-.nav-icon {
+.tab-icon {
   display: flex;
   flex-shrink: 0;
 }
 
-.nav-icon svg {
-  width: 20px;
-  height: 20px;
+.tab-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
-.nav-label {
-  flex: 1;
+.tab-label {
+  flex: 0 1 auto;
 }
 
 .main-wrap {
@@ -741,6 +755,47 @@ function formatNum(n) {
   font-size: 0.9375rem;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+.url-input-wrap {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.url-input {
+  flex: 1;
+  min-width: 280px;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.url-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(43, 134, 237, 0.2);
+}
+
+.url-input::placeholder {
+  color: var(--text-muted);
+}
+
+.url-input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.url-hint {
+  margin: 0 0 1rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .upload-zone {

@@ -14,7 +14,6 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 20px;
-  --sidebar-width: 260px;
 }
 
 * {
@@ -31,5 +30,4 @@ body {
 
 #app {
   min-height: 100vh;
-  display: flex;
 }
