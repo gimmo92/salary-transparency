@@ -121,7 +121,10 @@ async function confirmMapping() {
           indicatorsSource.value = 'locale'
           uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti su indicatore b). Uso motore locale.`
         } else {
-          indicatorsResult.value = aiIndicators
+        indicatorsResult.value = {
+          ...aiIndicators,
+          h_divarioRetribuzioneBase: aiIndicators?.h_divarioRetribuzioneBase ?? localIndicators.h_divarioRetribuzioneBase,
+        }
           indicatorsSource.value = 'ai'
         }
       } catch (aiErr) {
@@ -289,6 +292,12 @@ function formatNum(n) {
             <p class="indicator-desc">{{ indicatorsResult.b_divarioComponentiVariabili.descrizione }}</p>
             <div class="indicator-value">{{ formatPct(indicatorsResult.b_divarioComponentiVariabili.percentuale) }}</div>
             <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaFemminile) }}</p>
+          </section>
+          <section class="indicator-card">
+            <h3>Divario retribuzione base</h3>
+            <p class="indicator-desc">{{ indicatorsResult.h_divarioRetribuzioneBase?.descrizione || 'Divario retributivo di genere sulla retribuzione base' }}</p>
+            <div class="indicator-value">{{ formatPct(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }}</div>
+            <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaFemminile) }}</p>
           </section>
           <section class="indicator-card">
             <h3>(c) Divario mediano di genere</h3>

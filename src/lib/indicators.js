@@ -37,6 +37,10 @@ export function computeIndicators(normalizedData) {
   const avgVarF = avg(F, varKey)
   const gapVarPct = (avgVarM - avgVarF) / (avgVarM || 1) * 100
 
+  const avgBaseM = avg(M, baseKey)
+  const avgBaseF = avg(F, baseKey)
+  const gapBasePct = (avgBaseM - avgBaseF) / (avgBaseM || 1) * 100
+
   const medM = median(M, totalKey)
   const medF = median(F, totalKey)
   const gapMedPct = (medM - medF) / (medM || 1) * 100
@@ -106,6 +110,12 @@ export function computeIndicators(normalizedData) {
       percentuale: gapVarPct,
       mediaMaschile: avgVarM,
       mediaFemminile: avgVarF,
+    },
+    h_divarioRetribuzioneBase: {
+      descrizione: 'Divario retributivo di genere sulla retribuzione base',
+      percentuale: gapBasePct,
+      mediaMaschile: avgBaseM,
+      mediaFemminile: avgBaseF,
     },
     c_divarioMedianoGenere: {
       descrizione: 'Divario retributivo mediano di genere',
