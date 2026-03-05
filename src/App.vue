@@ -8,7 +8,20 @@ import {
   getRoleLabel,
 } from './lib/excel.js'
 import { computeIndicators } from './lib/indicators.js'
-import { suggestColumnMappingWithGemini, computeIndicatorsWithGemini } from './lib/gemini.js'
+import {
+  suggestColumnMappingWithGemini,
+  computeIndicatorsWithGemini,
+  suggestJobGradingMappingWithGemini,
+  scoreJobRolesWithGemini,
+} from './lib/gemini.js'
+import {
+  JOB_GRADING_ROLES,
+  getJobGradingRoleLabel,
+  detectJobGradingColumnsHeuristic,
+  buildNormalizedJobGradingData,
+  aggregateRolesForGrading,
+  enrichWithBandsAndDeviation,
+} from './lib/jobGrading.js'
 
 const activeSection = ref('dashboard')
 const selectAll = ref(false)
@@ -21,6 +34,7 @@ const cards = ref([
 const sections = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
   { id: 'dati', label: 'Dati retributivi', icon: 'table' },
+  { id: 'job_grading', label: 'Job Grading', icon: 'chart' },
   { id: 'report', label: 'Report', icon: 'chart' },
   { id: 'confronti', label: 'Confronti', icon: 'compare' },
   { id: 'normativa', label: 'Normativa', icon: 'law' },
@@ -46,12 +60,42 @@ const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
 const roleKeys = [COLUMN_ROLES.gender, COLUMN_ROLES.baseSalary, COLUMN_ROLES.variableComponents, COLUMN_ROLES.totalSalary, COLUMN_ROLES.category]
 
 const showAnalisiFlow = computed(() => activeSection.value === 'dati')
+const showJobGradingFlow = computed(() => activeSection.value === 'job_grading')
+
+// Flusso Job Grading
+const jobStep = ref('idle') // idle | upload | mapping | results
+const jobExcelUrl = ref('')
+const jobHeaderRowIndex = ref(1)
+const jobRows = ref([])
+const jobHeaders = ref([])
+const jobMapping = ref({})
+const jobError = ref('')
+const jobLoading = ref(false)
+const jobAnalysisLoading = ref(false)
+const jobGeminiLoading = ref(false)
+const jobResults = ref([])
+const jobSource = ref('locale')
+const jobRoleKeys = [
+  JOB_GRADING_ROLES.baseSalary,
+  JOB_GRADING_ROLES.variableComponents,
+  JOB_GRADING_ROLES.totalSalary,
+  JOB_GRADING_ROLES.role,
+  JOB_GRADING_ROLES.level,
+  JOB_GRADING_ROLES.description,
+]
 
 function startNuovaAnalisi() {
   activeSection.value = 'dati'
   analisiStep.value = 'upload'
   uploadError.value = ''
   indicatorsResult.value = null
+}
+
+function startJobGrading() {
+  activeSection.value = 'job_grading'
+  jobStep.value = 'upload'
+  jobError.value = ''
+  jobResults.value = []
 }
 
 function goToUpload() {
@@ -161,6 +205,138 @@ function formatPct(n) {
 function formatNum(n) {
   return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 })
 }
+
+function scoreBadgeClass(band) {
+  return `band-${band}`
+}
+
+async function onLoadJobGradingFromUrl() {
+  const url = (jobExcelUrl.value || '').trim()
+  if (!url) {
+    jobError.value = 'Inserisci il collegamento al file Excel.'
+    return
+  }
+  jobError.value = ''
+  jobLoading.value = true
+  try {
+    const { rows, headers } = await parseExcelFromUrl(url, { headerRowIndex: jobHeaderRowIndex.value })
+    jobRows.value = rows
+    jobHeaders.value = headers
+    const heuristic = detectJobGradingColumnsHeuristic(headers)
+    let suggested = { ...heuristic }
+    if (googleApiKey) {
+      jobGeminiLoading.value = true
+      try {
+        const ai = await suggestJobGradingMappingWithGemini(googleApiKey, headers, rows)
+        if (ai && Object.keys(ai).length) suggested = { ...heuristic, ...ai }
+      } finally {
+        jobGeminiLoading.value = false
+      }
+    }
+    jobMapping.value = suggested
+    jobStep.value = 'mapping'
+  } catch (err) {
+    jobError.value = err.message || 'Errore nel caricamento file per Job Grading.'
+  } finally {
+    jobLoading.value = false
+  }
+}
+
+function fallbackLocalJobScores(roles) {
+  return roles.map((r) => {
+    const text = `${r.role || ''} ${r.level || ''} ${r.description || ''}`.toLowerCase()
+    const clamp = (x) => Math.max(0, Math.min(100, Math.round(x)))
+    const kw = (list) => list.reduce((c, w) => c + (text.includes(w) ? 1 : 0), 0)
+    const competenze = clamp(35 + kw(['specialist', 'tecnico', 'engineer', 'analyst', 'senior']) * 10 + text.length / 50)
+    const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
+    const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
+    const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
+    const totalScore = competenze + responsabilita + sforzo + condizioni
+    return {
+      role: r.role,
+      competenze_richieste: competenze,
+      responsabilita,
+      sforzo_mentale: sforzo,
+      condizioni_lavorative: condizioni,
+      totalScore,
+    }
+  })
+}
+
+async function confirmJobGradingMapping() {
+  if (jobAnalysisLoading.value) return
+  jobAnalysisLoading.value = true
+  jobError.value = ''
+  try {
+    const requiredForJob = [JOB_GRADING_ROLES.role, JOB_GRADING_ROLES.level, JOB_GRADING_ROLES.description]
+    const missing = requiredForJob.filter((k) => typeof jobMapping.value[k] !== 'number')
+    if (missing.length) {
+      jobError.value = `Completa il mapping colonne: ${missing.map(getJobGradingRoleLabel).join(', ')}`
+      return
+    }
+    const hasAnyComp = [JOB_GRADING_ROLES.baseSalary, JOB_GRADING_ROLES.variableComponents, JOB_GRADING_ROLES.totalSalary]
+      .some((k) => typeof jobMapping.value[k] === 'number')
+    if (!hasAnyComp) {
+      jobError.value = 'Mappa almeno una colonna retributiva (base, variabile o totale).'
+      return
+    }
+    const normalized = buildNormalizedJobGradingData(jobRows.value, jobHeaders.value, jobMapping.value)
+    if (!normalized.length) {
+      jobError.value = 'Nessun dato valido dopo il mapping Job Grading.'
+      return
+    }
+    const aggregated = aggregateRolesForGrading(normalized)
+    let scored = fallbackLocalJobScores(aggregated)
+    jobSource.value = 'locale'
+
+    if (googleApiKey) {
+      jobGeminiLoading.value = true
+      try {
+        const aiInput = aggregated.map((r) => ({
+          role: r.role,
+          level: r.level,
+          job_description: r.description,
+        }))
+        const aiScores = await scoreJobRolesWithGemini(googleApiKey, aiInput)
+        const mapAi = new Map(aiScores.map((x) => [String(x.role || '').toLowerCase().trim(), x]))
+        scored = aggregated.map((r) => {
+          const ai = mapAi.get(String(r.role || '').toLowerCase().trim())
+          if (!ai) {
+            const local = fallbackLocalJobScores([r])[0]
+            return { ...local, role: r.role }
+          }
+          const c = Number(ai.competenze_richieste ?? 0)
+          const resp = Number(ai.responsabilita ?? 0)
+          const s = Number(ai.sforzo_mentale ?? 0)
+          const cond = Number(ai.condizioni_lavorative ?? 0)
+          const total = Number(ai.totalScore ?? (c + resp + s + cond))
+          return {
+            role: r.role,
+            competenze_richieste: c,
+            responsabilita: resp,
+            sforzo_mentale: s,
+            condizioni_lavorative: cond,
+            totalScore: total,
+          }
+        })
+        jobSource.value = 'ai'
+      } catch (err) {
+        jobError.value = 'Job Grading AI non disponibile, uso fallback locale: ' + (err.message || String(err))
+      } finally {
+        jobGeminiLoading.value = false
+      }
+    }
+
+    const merged = aggregated.map((r) => {
+      const s = scored.find((x) => x.role === r.role) || {}
+      return { ...r, ...s }
+    })
+    jobResults.value = enrichWithBandsAndDeviation(merged)
+    jobStep.value = 'results'
+  } finally {
+    jobAnalysisLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -178,7 +354,7 @@ function formatNum(n) {
           :key="s.id"
           class="tab"
           :class="{ active: activeSection === s.id }"
-          @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'"
+          @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'job_grading' && jobStep === 'idle') jobStep = 'upload'"
         >
           <span class="tab-icon">
             <svg v-if="s.icon === 'dashboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -195,7 +371,7 @@ function formatNum(n) {
 
     <div class="main-wrap">
     <header class="main-header">
-      <button class="btn-primary" @click="startNuovaAnalisi">
+      <button class="btn-primary" @click="activeSection === 'job_grading' ? startJobGrading() : startNuovaAnalisi()">
         <span>NUOVA ANALISI</span>
       </button>
       <button class="btn-icon" aria-label="Impostazioni">
@@ -359,6 +535,111 @@ function formatNum(n) {
         <div class="mapping-actions">
           <button class="btn-secondary" @click="analisiStep = 'mapping'">Modifica mapping</button>
           <button class="btn-primary" @click="goToUpload">Nuova analisi</button>
+        </div>
+      </div>
+    </template>
+
+    <!-- Flusso Job Grading -->
+    <template v-else-if="showJobGradingFlow">
+      <div v-if="jobStep === 'upload'" class="analisi-content">
+        <h2 class="analisi-title">Job Grading - Collegamento file Excel</h2>
+        <p class="analisi-desc">Incolla il link al file Excel: mappo con AI le colonne retributive (base, variabile, totale), ruolo, livello e job description.</p>
+        <div class="url-input-wrap">
+          <input
+            v-model="jobExcelUrl"
+            type="url"
+            class="url-input"
+            placeholder="https://... file.xlsx"
+            :disabled="jobLoading || jobGeminiLoading"
+            @keydown.enter="onLoadJobGradingFromUrl"
+          />
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="jobLoading || jobGeminiLoading || !jobExcelUrl.trim()"
+            @click="onLoadJobGradingFromUrl"
+          >
+            <span v-if="jobLoading">Scaricamento…</span>
+            <span v-else-if="jobGeminiLoading">Mapping AI…</span>
+            <span v-else>Carica per Job Grading</span>
+          </button>
+        </div>
+        <div class="header-row-option">
+          <label>Intestazioni colonne nella riga:</label>
+          <select v-model.number="jobHeaderRowIndex" class="header-row-select">
+            <option :value="0">1 (prima riga)</option>
+            <option :value="1">2 (seconda riga)</option>
+          </select>
+        </div>
+        <p class="api-key-warn">
+          Stato Gemini: <strong>{{ googleApiKey ? 'attivo' : 'non attivo' }}</strong>
+        </p>
+        <p v-if="jobError" class="upload-error">{{ jobError }}</p>
+      </div>
+
+      <div v-else-if="jobStep === 'mapping'" class="analisi-content">
+        <h2 class="analisi-title">Job Grading - Verifica mapping colonne</h2>
+        <p class="analisi-desc">Controlla il mapping delle colonne richieste per il job grading prima della valutazione.</p>
+        <div class="mapping-table">
+          <div class="mapping-row header">
+            <span>Dato richiesto</span>
+            <span>Colonna nel file</span>
+          </div>
+          <div v-for="role in jobRoleKeys" :key="role" class="mapping-row">
+            <span>{{ getJobGradingRoleLabel(role) }}</span>
+            <select v-model.number="jobMapping[role]" class="mapping-select" :disabled="jobAnalysisLoading">
+              <option :value="undefined">– Nessuna –</option>
+              <option v-for="(h, i) in jobHeaders" :key="i" :value="i">{{ h }}</option>
+            </select>
+          </div>
+        </div>
+        <p v-if="jobError" class="upload-error">{{ jobError }}</p>
+        <div class="mapping-actions">
+          <button class="btn-secondary" :disabled="jobAnalysisLoading" @click="jobStep = 'upload'">Indietro</button>
+          <button class="btn-primary" :disabled="jobAnalysisLoading" @click="confirmJobGradingMapping">
+            <span v-if="jobAnalysisLoading">Generazione job grading...</span>
+            <span v-else>Esegui Job Grading</span>
+          </button>
+        </div>
+        <div v-if="jobAnalysisLoading" class="analysis-loader">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Analizzo ruoli, descrizioni e livelli con AI NLP...</span>
+        </div>
+      </div>
+
+      <div v-else-if="jobStep === 'results'" class="analisi-content results">
+        <h2 class="analisi-title">Risultati Job Grading</h2>
+        <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Fallback locale' }}</strong></p>
+        <p v-if="jobError" class="upload-error">{{ jobError }}</p>
+
+        <div v-for="band in [1,2,3,4,5]" :key="band" class="band-section" v-show="jobResults.some(r => r.band === band)">
+          <h3 class="band-title" :class="scoreBadgeClass(band)">Fascia {{ band }}</h3>
+          <div class="job-table">
+            <div class="job-row header">
+              <span>Ruolo</span>
+              <span>Competenze</span>
+              <span>Responsabilità</span>
+              <span>Sforzo mentale</span>
+              <span>Condizioni</span>
+              <span>Totale</span>
+              <span>Retribuzione</span>
+              <span>Scost. media fascia</span>
+            </div>
+            <div class="job-row" v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
+              <span>{{ r.role }} <small v-if="r.level">({{ r.level }})</small></span>
+              <span>{{ formatNum(r.competenze_richieste) }}</span>
+              <span>{{ formatNum(r.responsabilita) }}</span>
+              <span>{{ formatNum(r.sforzo_mentale) }}</span>
+              <span>{{ formatNum(r.condizioni_lavorative) }}</span>
+              <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
+              <span>{{ formatNum(r.avgTotalSalary) }}</span>
+              <span>{{ formatPct(r.deviationFromBandAvgPct) }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="mapping-actions">
+          <button class="btn-secondary" @click="jobStep = 'mapping'">Modifica mapping</button>
+          <button class="btn-primary" @click="startJobGrading">Nuova analisi job grading</button>
         </div>
       </div>
     </template>
@@ -829,6 +1110,45 @@ function formatNum(n) {
   margin: 0 0 1rem;
   font-size: 0.875rem;
   color: var(--text-secondary);
+}
+
+.band-section {
+  margin-bottom: 1.25rem;
+}
+
+.band-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.band-1 { color: #1f7a8c; }
+.band-2 { color: #2b86ed; }
+.band-3 { color: #4a7c59; }
+.band-4 { color: #8a6d3b; }
+.band-5 { color: #8b3a3a; }
+
+.job-table {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.job-row {
+  display: grid;
+  grid-template-columns: 1.7fr repeat(5, 0.9fr) 1fr 1.1fr;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--border-light);
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.job-row.header {
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  font-weight: 600;
 }
 
 .url-input-wrap {

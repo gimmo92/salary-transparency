@@ -162,6 +162,124 @@ Restituisci SOLO JSON valido con questa struttura ESATTA (stesse chiavi):
   return normalized
 }
 
+export async function suggestJobGradingMappingWithGemini(apiKey, headers, sampleRows) {
+  if (!apiKey || !headers?.length) return null
+  const sample = sampleRows.slice(0, 20).map((r) => {
+    const row = {}
+    headers.forEach((h) => { row[h] = r[h] != null ? String(r[h]).slice(0, 120) : '' })
+    return row
+  })
+  const prompt = `Mappa le colonne del file sui ruoli richiesti per job grading.
+Ruoli possibili (usa ESATTAMENTE questi identificatori):
+- retribuzione_base
+- componenti_variabili
+- retribuzione_totale
+- ruolo
+- livello_inquadramento
+- job_description
+
+Restituisci SOLO JSON valido con formato:
+{ "nome_colonna_esatto": "identificatore_ruolo", ... }
+
+Intestazioni: ${JSON.stringify(headers)}
+Campione righe: ${JSON.stringify(sample)}`
+
+  const res = await fetch(`${GEMINI_API}?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 16384,
+        responseMimeType: 'application/json',
+      },
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const msg = err.error?.message || err.error?.status || `API ${res.status}`
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('Risposta Gemini senza testo (job grading mapping)')
+  const raw = parseGeminiJson(text)
+
+  const valid = new Set([
+    'retribuzione_base',
+    'componenti_variabili',
+    'retribuzione_totale',
+    'ruolo',
+    'livello_inquadramento',
+    'job_description',
+  ])
+  const headerToIndex = Object.fromEntries(headers.map((h, i) => [h, i]))
+  const norm = (s) => String(s).toLowerCase().trim()
+  const mapping = {}
+  for (const [columnName, role] of Object.entries(raw)) {
+    if (!valid.has(role)) continue
+    let idx = headerToIndex[columnName]
+    if (idx == null) idx = headers.findIndex((h) => norm(h) === norm(columnName))
+    if (idx >= 0) mapping[role] = idx
+  }
+  return Object.keys(mapping).length ? mapping : null
+}
+
+export async function scoreJobRolesWithGemini(apiKey, roleRows) {
+  if (!apiKey) throw new Error('API key Gemini mancante')
+  if (!Array.isArray(roleRows) || !roleRows.length) throw new Error('Nessun ruolo da analizzare')
+
+  const prompt = `Assegna punteggi 0-100 per ogni ruolo in base a:
+1) competenze_richieste
+2) responsabilita
+3) sforzo_mentale
+4) condizioni_lavorative
+5) totalScore = somma dei 4 punteggi (0-400)
+
+Input ruoli:
+${JSON.stringify(roleRows)}
+
+Restituisci SOLO JSON con formato:
+{
+  "roles": [
+    {
+      "role": "...",
+      "competenze_richieste": 0,
+      "responsabilita": 0,
+      "sforzo_mentale": 0,
+      "condizioni_lavorative": 0,
+      "totalScore": 0
+    }
+  ]
+}`
+
+  const res = await fetch(`${GEMINI_API}?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 32768,
+        responseMimeType: 'application/json',
+      },
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const msg = err.error?.message || err.error?.status || `API ${res.status}`
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('Risposta Gemini senza testo (job grading scores)')
+  const raw = parseGeminiJson(text)
+  const roles = Array.isArray(raw?.roles) ? raw.roles : (Array.isArray(raw) ? raw : [])
+  if (!roles.length) throw new Error('Risposta AI senza ruoli valutati')
+  return roles
+}
+
 function parseGeminiJson(text) {
   const cleaned = String(text)
     .trim()
