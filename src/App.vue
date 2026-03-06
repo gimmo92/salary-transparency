@@ -108,6 +108,10 @@ function analysisTypeLabel(t) {
   return t || '–'
 }
 
+function isGapAlert(pct) {
+  return pct != null && Math.abs(pct) > 5
+}
+
 function onScoreEdit(r) {
   r.totalScore = (Number(r.competenze_richieste) || 0)
     + (Number(r.responsabilita) || 0)
@@ -563,32 +567,32 @@ async function confirmJobGradingMapping() {
           <section class="indicator-card">
             <h3>(a) Divario retributivo di genere</h3>
             <p class="indicator-desc">{{ indicatorsResult.a_divarioRetributivoGenere.descrizione }}</p>
-            <div class="indicator-value">{{ formatPct(indicatorsResult.a_divarioRetributivoGenere.percentuale) }}</div>
+            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.a_divarioRetributivoGenere.percentuale) }">{{ formatPct(indicatorsResult.a_divarioRetributivoGenere.percentuale) }}</div>
             <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaFemminile) }}</p>
             <p class="indicator-detail">N maschi: {{ indicatorsResult.a_divarioRetributivoGenere.nMaschi }} · N femmine: {{ indicatorsResult.a_divarioRetributivoGenere.nFemmine }}</p>
           </section>
           <section class="indicator-card">
             <h3>(b) Divario nelle componenti variabili</h3>
             <p class="indicator-desc">{{ indicatorsResult.b_divarioComponentiVariabili.descrizione }}</p>
-            <div class="indicator-value">{{ formatPct(indicatorsResult.b_divarioComponentiVariabili.percentuale) }}</div>
+            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.b_divarioComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.b_divarioComponentiVariabili.percentuale) }}</div>
             <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaFemminile) }}</p>
           </section>
           <section class="indicator-card">
             <h3>Divario retribuzione base</h3>
             <p class="indicator-desc">{{ indicatorsResult.h_divarioRetribuzioneBase?.descrizione || 'Divario retributivo di genere sulla retribuzione base' }}</p>
-            <div class="indicator-value">{{ formatPct(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }}</div>
+            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }">{{ formatPct(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }}</div>
             <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaFemminile) }}</p>
           </section>
           <section class="indicator-card">
             <h3>(c) Divario mediano di genere</h3>
             <p class="indicator-desc">{{ indicatorsResult.c_divarioMedianoGenere.descrizione }}</p>
-            <div class="indicator-value">{{ formatPct(indicatorsResult.c_divarioMedianoGenere.percentuale) }}</div>
+            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.c_divarioMedianoGenere.percentuale) }">{{ formatPct(indicatorsResult.c_divarioMedianoGenere.percentuale) }}</div>
             <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaFemminile) }}</p>
           </section>
           <section class="indicator-card">
             <h3>(d) Divario mediano nelle componenti variabili</h3>
             <p class="indicator-desc">{{ indicatorsResult.d_divarioMedianoComponentiVariabili.descrizione }}</p>
-            <div class="indicator-value">{{ formatPct(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }}</div>
+            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }}</div>
             <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaFemminile) }}</p>
           </section>
           <section class="indicator-card wide">
@@ -630,8 +634,8 @@ async function confirmJobGradingMapping() {
               <div v-for="cat in indicatorsResult.g_divarioPerCategoria.perCategoria" :key="cat.categoria" class="category-row">
                 <span>{{ cat.categoria }}</span>
                 <span>{{ cat.n }}</span>
-                <span>{{ formatPct(cat.divarioBase) }}</span>
-                <span>{{ formatPct(cat.divarioVariabile) }}</span>
+                <span :class="{ 'gap-alert': isGapAlert(cat.divarioBase) }">{{ formatPct(cat.divarioBase) }}</span>
+                <span :class="{ 'gap-alert': isGapAlert(cat.divarioVariabile) }">{{ formatPct(cat.divarioVariabile) }}</span>
               </div>
             </div>
           </section>
@@ -738,7 +742,7 @@ async function confirmJobGradingMapping() {
               <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" min="0" max="100" /></span>
               <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
               <span>{{ formatNum(r.avgTotalSalary) }}</span>
-              <span>{{ formatPct(r.deviationFromBandAvgPct) }}</span>
+              <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">{{ formatPct(r.deviationFromBandAvgPct) }}</span>
             </div>
           </div>
         </div>
@@ -1244,6 +1248,10 @@ async function confirmJobGradingMapping() {
   max-width: 56rem;
 }
 
+.analisi-content.results {
+  max-width: 100%;
+}
+
 .analisi-title {
   margin: 0 0 0.5rem;
   font-size: 1.35rem;
@@ -1398,6 +1406,17 @@ async function confirmJobGradingMapping() {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.gap-alert {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.indicator-value.gap-alert {
+  background: rgba(220, 38, 38, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.4rem;
 }
 
 .job-row.header {
