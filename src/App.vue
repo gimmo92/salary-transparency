@@ -22,6 +22,7 @@ import {
   aggregateRolesForGrading,
   enrichWithBandsAndDeviation,
 } from './lib/jobGrading.js'
+import { saveAnalysis } from './lib/persistence.js'
 
 const activeSection = ref('dashboard')
 const selectAll = ref(false)
@@ -54,6 +55,7 @@ const geminiLoading = ref(false)
 const analysisLoading = ref(false)
 const indicatorsResult = ref(null)
 const indicatorsSource = ref('locale')
+const saveStatus = ref('')
 
 const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
 
@@ -75,6 +77,7 @@ const jobAnalysisLoading = ref(false)
 const jobGeminiLoading = ref(false)
 const jobResults = ref([])
 const jobSource = ref('locale')
+const jobSaveStatus = ref('')
 const jobRoleKeys = [
   JOB_GRADING_ROLES.baseSalary,
   JOB_GRADING_ROLES.variableComponents,
@@ -89,6 +92,7 @@ function startNuovaAnalisi() {
   analisiStep.value = 'upload'
   uploadError.value = ''
   indicatorsResult.value = null
+  saveStatus.value = ''
 }
 
 function startJobGrading() {
@@ -96,6 +100,7 @@ function startJobGrading() {
   jobStep.value = 'upload'
   jobError.value = ''
   jobResults.value = []
+  jobSaveStatus.value = ''
 }
 
 function goToUpload() {
@@ -181,6 +186,21 @@ async function confirmMapping() {
     } else {
       indicatorsResult.value = localIndicators
       indicatorsSource.value = 'locale'
+    }
+    try {
+      const saved = await saveAnalysis({
+        analysisType: 'pay_transparency',
+        sourceUrl: excelUrl.value,
+        headerRowIndex: headerRowIndex.value,
+        headers: excelHeaders.value,
+        mapping: columnMapping.value,
+        rows: normalized,
+        results: indicatorsResult.value,
+        calculationSource: indicatorsSource.value,
+      })
+      saveStatus.value = `Analisi salvata nel database (ID: ${saved.id})`
+    } catch (saveErr) {
+      saveStatus.value = `Analisi non salvata nel database: ${saveErr.message || String(saveErr)}`
     }
     analisiStep.value = 'results'
   } finally {
@@ -332,6 +352,21 @@ async function confirmJobGradingMapping() {
       return { ...r, ...s }
     })
     jobResults.value = enrichWithBandsAndDeviation(merged)
+    try {
+      const saved = await saveAnalysis({
+        analysisType: 'job_grading',
+        sourceUrl: jobExcelUrl.value,
+        headerRowIndex: jobHeaderRowIndex.value,
+        headers: jobHeaders.value,
+        mapping: jobMapping.value,
+        rows: normalized,
+        results: { roles: jobResults.value, source: jobSource.value },
+        calculationSource: jobSource.value,
+      })
+      jobSaveStatus.value = `Job grading salvato nel database (ID: ${saved.id})`
+    } catch (saveErr) {
+      jobSaveStatus.value = `Job grading non salvato nel database: ${saveErr.message || String(saveErr)}`
+    }
     jobStep.value = 'results'
   } finally {
     jobAnalysisLoading.value = false
@@ -455,6 +490,7 @@ async function confirmJobGradingMapping() {
       <div v-else-if="analisiStep === 'results' && indicatorsResult" class="analisi-content results">
         <h2 class="analisi-title">Risultati analisi trasparenza salariale</h2>
         <p class="result-source">Calcolo: <strong>{{ indicatorsSource === 'ai' ? 'Gemini (AI)' : 'Motore locale' }}</strong></p>
+        <p v-if="saveStatus" class="save-status">{{ saveStatus }}</p>
         <div class="indicator-cards">
           <section class="indicator-card">
             <h3>(a) Divario retributivo di genere</h3>
@@ -610,6 +646,7 @@ async function confirmJobGradingMapping() {
       <div v-else-if="jobStep === 'results'" class="analisi-content results">
         <h2 class="analisi-title">Risultati Job Grading</h2>
         <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Fallback locale' }}</strong></p>
+        <p v-if="jobSaveStatus" class="save-status">{{ jobSaveStatus }}</p>
         <p v-if="jobError" class="upload-error">{{ jobError }}</p>
 
         <div v-for="band in [1,2,3,4,5]" :key="band" class="band-section" v-show="jobResults.some(r => r.band === band)">
@@ -1109,6 +1146,12 @@ async function confirmJobGradingMapping() {
 .result-source {
   margin: 0 0 1rem;
   font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.save-status {
+  margin: 0 0 1rem;
+  font-size: 0.8125rem;
   color: var(--text-secondary);
 }
 

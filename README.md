@@ -25,6 +25,20 @@ Per usare **Google Gemini** per suggerire automaticamente quale colonna è gener
 
 Senza API key l'app usa solo le regole euristiche (parole chiave sulle intestazioni). Il mapping AI usa il modello `gemini-2.5-flash`.
 
+### Salvataggio analisi su database (Vercel + PostgreSQL)
+
+L'app salva automaticamente i risultati delle analisi su endpoint serverless `POST /api/analyses`.
+
+Configura `DATABASE_URL` su Vercel:
+
+1. Crea un database PostgreSQL (es. Vercel Postgres, Neon, Supabase).
+2. In Vercel, vai su **Project Settings → Environment Variables**.
+3. Aggiungi:
+   - `DATABASE_URL=postgres://...`
+4. Fai **Redeploy** del progetto.
+
+La tabella `analyses` viene creata automaticamente al primo salvataggio.
+
 ## Sviluppo
 
 ```bash
