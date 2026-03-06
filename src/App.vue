@@ -112,6 +112,14 @@ function isGapAlert(pct) {
   return pct != null && Math.abs(pct) > 5
 }
 
+const expandedRoles = ref(new Set())
+
+function toggleRoleExpand(role) {
+  if (expandedRoles.value.has(role)) expandedRoles.value.delete(role)
+  else expandedRoles.value.add(role)
+  expandedRoles.value = new Set(expandedRoles.value)
+}
+
 function onScoreEdit(r) {
   r.totalScore = (Number(r.competenze_richieste) || 0)
     + (Number(r.responsabilita) || 0)
@@ -731,19 +739,42 @@ async function confirmJobGradingMapping() {
               <span>Sforzo mentale</span>
               <span>Condizioni</span>
               <span>Totale</span>
-              <span>Retribuzione</span>
-              <span>Scost. media fascia</span>
+              <span>Retrib. media</span>
+              <span>Scost. fascia</span>
+              <span>N</span>
             </div>
-            <div class="job-row" v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
-              <span>{{ r.role }} <small v-if="r.level">({{ r.level }})</small></span>
-              <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" min="0" max="100" /></span>
-              <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" min="0" max="100" /></span>
-              <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" min="0" max="100" /></span>
-              <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" min="0" max="100" /></span>
-              <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
-              <span>{{ formatNum(r.avgTotalSalary) }}</span>
-              <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">{{ formatPct(r.deviationFromBandAvgPct) }}</span>
-            </div>
+            <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
+              <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role) }">
+                <span>
+                  <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
+                  {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
+                </span>
+                <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
+                <span>{{ formatNum(r.avgTotalSalary) }}</span>
+                <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">{{ formatPct(r.deviationFromBandAvgPct) }}</span>
+                <span>{{ r.n }}</span>
+              </div>
+              <div v-if="expandedRoles.has(r.role) && r.people && r.people.length > 1" class="people-detail">
+                <div class="people-header">
+                  <span>#</span>
+                  <span>Retr. base</span>
+                  <span>Comp. variabile</span>
+                  <span>Retr. totale</span>
+                  <span>Scost. da media ruolo</span>
+                </div>
+                <div v-for="p in r.people" :key="p.index" class="people-row">
+                  <span>{{ p.index }}</span>
+                  <span>{{ formatNum(p.baseSalary) }}</span>
+                  <span>{{ formatNum(p.variableComponents) }}</span>
+                  <span>{{ formatNum(p.totalSalary) }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(p.deviationFromRoleAvgPct) }">{{ formatPct(p.deviationFromRoleAvgPct) }}</span>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
         <div class="mapping-actions">
@@ -1381,12 +1412,67 @@ async function confirmJobGradingMapping() {
 
 .job-row {
   display: grid;
-  grid-template-columns: 2fr repeat(5, 1fr) 1.1fr 1.2fr;
+  grid-template-columns: 2fr repeat(5, 1fr) 1fr 1fr 0.5fr;
   gap: 0.5rem;
   padding: 0.6rem 0.85rem;
   border-bottom: 1px solid var(--border-light);
   align-items: center;
   font-size: 0.82rem;
+}
+
+.job-row.clickable {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.job-row.clickable:hover {
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.job-row.expanded {
+  background: rgba(99, 102, 241, 0.06);
+  border-bottom-color: transparent;
+}
+
+.expand-icon {
+  display: inline-block;
+  width: 1em;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-right: 0.25rem;
+}
+
+.people-detail {
+  background: var(--bg-page);
+  border-bottom: 1px solid var(--border-light);
+  padding: 0.25rem 0.85rem 0.5rem 2.5rem;
+}
+
+.people-header,
+.people-row {
+  display: grid;
+  grid-template-columns: 0.4fr 1fr 1fr 1fr 1.2fr;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  font-size: 0.78rem;
+  align-items: center;
+}
+
+.people-header {
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.people-row {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.people-row:last-child {
+  border-bottom: none;
 }
 
 .score-input {

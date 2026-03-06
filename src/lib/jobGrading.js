@@ -103,6 +103,7 @@ export function aggregateRolesForGrading(normalizedRows) {
         _base: [],
         _var: [],
         _total: [],
+        people: [],
         count: 0,
       })
     }
@@ -113,18 +114,36 @@ export function aggregateRolesForGrading(normalizedRows) {
     if (Number.isFinite(row.totalSalary)) item._total.push(row.totalSalary)
     if (!item.description && row.description) item.description = row.description
     if (!item.level && row.level) item.level = row.level
+    item.people.push({
+      baseSalary: row.baseSalary,
+      variableComponents: row.variableComponents,
+      totalSalary: row.totalSalary,
+    })
   }
 
   const avg = (arr) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null
-  return [...map.values()].map((r) => ({
-    role: r.role,
-    level: r.level,
-    description: r.description,
-    n: r.count,
-    avgBaseSalary: avg(r._base),
-    avgVariableComponents: avg(r._var),
-    avgTotalSalary: avg(r._total),
-  }))
+  return [...map.values()].map((r) => {
+    const avgTotal = avg(r._total)
+    const people = r.people.map((p, i) => ({
+      index: i + 1,
+      baseSalary: p.baseSalary,
+      variableComponents: p.variableComponents,
+      totalSalary: p.totalSalary,
+      deviationFromRoleAvgPct: (avgTotal && Number.isFinite(p.totalSalary))
+        ? ((p.totalSalary - avgTotal) / avgTotal) * 100
+        : null,
+    }))
+    return {
+      role: r.role,
+      level: r.level,
+      description: r.description,
+      n: r.count,
+      avgBaseSalary: avg(r._base),
+      avgVariableComponents: avg(r._var),
+      avgTotalSalary: avgTotal,
+      people,
+    }
+  })
 }
 
 export function enrichWithBandsAndDeviation(scoredRoles) {
