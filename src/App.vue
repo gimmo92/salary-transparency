@@ -11,13 +11,9 @@ import { computeIndicators } from './lib/indicators.js'
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
-  suggestJobGradingMappingWithGemini,
   scoreJobRolesWithGemini,
 } from './lib/gemini.js'
 import {
-  JOB_GRADING_ROLES,
-  getJobGradingRoleLabel,
-  detectJobGradingColumnsHeuristic,
   buildNormalizedJobGradingData,
   aggregateRolesForGrading,
   enrichWithBandsAndDeviation,
@@ -34,8 +30,7 @@ const cards = ref([
 
 const sections = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
-  { id: 'dati', label: 'Dati retributivi', icon: 'table' },
-  { id: 'job_grading', label: 'Job Grading', icon: 'chart' },
+  { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
   { id: 'report', label: 'Report', icon: 'chart' },
   { id: 'confronti', label: 'Confronti', icon: 'compare' },
@@ -43,7 +38,7 @@ const sections = [
   { id: 'impostazioni', label: 'Impostazioni', icon: 'settings' },
 ]
 
-// Flusso analisi Excel
+// Flusso unificato
 const analisiStep = ref('idle') // idle | upload | mapping | results
 const excelRows = ref([])
 const excelHeaders = ref([])
@@ -54,18 +49,34 @@ const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
 const analysisLoading = ref(false)
+const saveStatus = ref('')
+
 const indicatorsResult = ref(null)
 const indicatorsSource = ref('locale')
-const saveStatus = ref('')
+
+const jobResults = ref([])
+const jobSource = ref('locale')
+
+const resultsTab = ref('genere') // 'genere' | 'pari_valore'
 
 const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
 
-const roleKeys = [COLUMN_ROLES.gender, COLUMN_ROLES.baseSalary, COLUMN_ROLES.variableComponents, COLUMN_ROLES.totalSalary, COLUMN_ROLES.category]
+const allRoleKeys = [
+  COLUMN_ROLES.gender,
+  COLUMN_ROLES.employeeName,
+  COLUMN_ROLES.baseSalary,
+  COLUMN_ROLES.variableComponents,
+  COLUMN_ROLES.totalSalary,
+  COLUMN_ROLES.category,
+  COLUMN_ROLES.role,
+  COLUMN_ROLES.level,
+  COLUMN_ROLES.description,
+]
 
-const showAnalisiFlow = computed(() => activeSection.value === 'dati')
-const showJobGradingFlow = computed(() => activeSection.value === 'job_grading')
+const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
 const showStorico = computed(() => activeSection.value === 'storico')
 
+// Storico
 const storicoList = ref([])
 const storicoLoading = ref(false)
 const storicoError = ref('')
@@ -105,6 +116,7 @@ function formatDate(iso) {
 function analysisTypeLabel(t) {
   if (t === 'pay_transparency') return 'Trasparenza salariale'
   if (t === 'job_grading') return 'Job Grading'
+  if (t === 'combined') return 'Analisi completa'
   return t || '–'
 }
 
@@ -112,6 +124,7 @@ function isGapAlert(pct) {
   return pct != null && Math.abs(pct) > 5
 }
 
+// Job grading helpers
 const expandedRoles = ref(new Set())
 
 function toggleRoleExpand(role) {
@@ -143,43 +156,29 @@ function recalcBandsAndDeviation() {
   jobResults.value = sorted
 }
 
-// Flusso Job Grading
-const jobStep = ref('idle') // idle | upload | mapping | results
-const jobExcelUrl = ref('')
-const jobHeaderRowIndex = ref(1)
-const jobRows = ref([])
-const jobHeaders = ref([])
-const jobMapping = ref({})
-const jobError = ref('')
-const jobLoading = ref(false)
-const jobAnalysisLoading = ref(false)
-const jobGeminiLoading = ref(false)
-const jobResults = ref([])
-const jobSource = ref('locale')
-const jobSaveStatus = ref('')
-const jobRoleKeys = [
-  JOB_GRADING_ROLES.baseSalary,
-  JOB_GRADING_ROLES.variableComponents,
-  JOB_GRADING_ROLES.totalSalary,
-  JOB_GRADING_ROLES.role,
-  JOB_GRADING_ROLES.level,
-  JOB_GRADING_ROLES.description,
-]
+function fallbackLocalJobScores(roles) {
+  return roles.map((r) => {
+    const text = `${r.role || ''} ${r.level || ''} ${r.description || ''}`.toLowerCase()
+    const clamp = (x) => Math.max(0, Math.min(100, Math.round(x)))
+    const kw = (list) => list.reduce((c, w) => c + (text.includes(w) ? 1 : 0), 0)
+    const competenze = clamp(35 + kw(['specialist', 'tecnico', 'engineer', 'analyst', 'senior']) * 10 + text.length / 50)
+    const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
+    const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
+    const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
+    const totalScore = competenze + responsabilita + sforzo + condizioni
+    return { role: r.role, competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, totalScore }
+  })
+}
 
+// Flusso unificato
 function startNuovaAnalisi() {
-  activeSection.value = 'dati'
+  activeSection.value = 'analisi'
   analisiStep.value = 'upload'
   uploadError.value = ''
   indicatorsResult.value = null
-  saveStatus.value = ''
-}
-
-function startJobGrading() {
-  activeSection.value = 'job_grading'
-  jobStep.value = 'upload'
-  jobError.value = ''
   jobResults.value = []
-  jobSaveStatus.value = ''
+  saveStatus.value = ''
+  resultsTab.value = 'genere'
 }
 
 function goToUpload() {
@@ -189,10 +188,7 @@ function goToUpload() {
 
 async function onLoadFromUrl() {
   const url = (excelUrl.value || '').trim()
-  if (!url) {
-    uploadError.value = 'Inserisci il collegamento al file Excel.'
-    return
-  }
+  if (!url) { uploadError.value = 'Inserisci il collegamento al file Excel.'; return }
   uploadError.value = ''
   uploadLoading.value = true
   geminiLoading.value = false
@@ -209,82 +205,116 @@ async function onLoadFromUrl() {
         if (geminiMapping && Object.keys(geminiMapping).length > 0)
           suggested = { ...heuristic, ...geminiMapping }
       } catch (geminiErr) {
-        uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Verifica la chiave API o usa il mapping manuale.'
-      } finally {
-        geminiLoading.value = false
-      }
+        uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Usa il mapping manuale.'
+      } finally { geminiLoading.value = false }
     } else {
-      uploadError.value = 'Gemini non attivo: manca VITE_GOOGLE_AI_API_KEY nel build environment di Vercel. Uso mapping euristico.'
+      uploadError.value = 'Gemini non attivo: manca VITE_GOOGLE_AI_API_KEY. Uso mapping euristico.'
     }
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
   } catch (err) {
-    uploadError.value = err.message || 'Impossibile leggere il file. Verifica che il link sia un URL di download diretto (.xlsx) e che il server consenta CORS.'
-  } finally {
-    uploadLoading.value = false
-  }
+    uploadError.value = err.message || 'Impossibile leggere il file.'
+  } finally { uploadLoading.value = false }
 }
 
 async function confirmMapping() {
   if (analysisLoading.value) return
   analysisLoading.value = true
+  uploadError.value = ''
   try {
-    const normalized = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
-    if (normalized.length === 0) {
-      uploadError.value = 'Nessun dato valido dopo il mapping. Verifica la colonna Genere (M/F).'
-      return
-    }
-    uploadError.value = ''
-    const localIndicators = computeIndicators(normalized)
-    if (googleApiKey) {
-      geminiLoading.value = true
-      try {
-        const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalized)
-        const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
-        const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
-        const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
-        const delta = comparable ? Math.abs(aiGap - localGap) : 0
-        if (comparable && delta > 10) {
+    // --- Analisi di genere ---
+    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+    if (normalizedGender.length > 0) {
+      const localIndicators = computeIndicators(normalizedGender)
+      if (googleApiKey) {
+        geminiLoading.value = true
+        try {
+          const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalizedGender)
+          const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
+          const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
+          const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
+          const delta = comparable ? Math.abs(aiGap - localGap) : 0
+          if (comparable && delta > 10) {
+            indicatorsResult.value = localIndicators
+            indicatorsSource.value = 'locale'
+            uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti). Uso motore locale.`
+          } else {
+            indicatorsResult.value = {
+              ...aiIndicators,
+              h_divarioRetribuzioneBase: aiIndicators?.h_divarioRetribuzioneBase ?? localIndicators.h_divarioRetribuzioneBase,
+            }
+            indicatorsSource.value = 'ai'
+          }
+        } catch (aiErr) {
           indicatorsResult.value = localIndicators
           indicatorsSource.value = 'locale'
-          uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti su indicatore b). Uso motore locale.`
-        } else {
-        indicatorsResult.value = {
-          ...aiIndicators,
-          h_divarioRetribuzioneBase: aiIndicators?.h_divarioRetribuzioneBase ?? localIndicators.h_divarioRetribuzioneBase,
-        }
-          indicatorsSource.value = 'ai'
-        }
-      } catch (aiErr) {
+          uploadError.value = 'Calcolo AI non riuscito, uso fallback locale: ' + (aiErr.message || String(aiErr))
+        } finally { geminiLoading.value = false }
+      } else {
         indicatorsResult.value = localIndicators
         indicatorsSource.value = 'locale'
-        uploadError.value = 'Calcolo AI non riuscito, uso fallback locale: ' + (aiErr.message || String(aiErr))
-      } finally {
-        geminiLoading.value = false
       }
     } else {
-      indicatorsResult.value = localIndicators
-      indicatorsSource.value = 'locale'
+      indicatorsResult.value = null
     }
+
+    // --- Job grading (lavori di pari valore) ---
+    const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
+    if (normalizedJob.length > 0) {
+      const aggregated = aggregateRolesForGrading(normalizedJob)
+      let scored = fallbackLocalJobScores(aggregated)
+      jobSource.value = 'locale'
+
+      if (googleApiKey) {
+        geminiLoading.value = true
+        try {
+          const aiInput = aggregated.map((r) => ({ role: r.role, level: r.level, job_description: r.description }))
+          const aiScores = await scoreJobRolesWithGemini(googleApiKey, aiInput)
+          const mapAi = new Map(aiScores.map((x) => [String(x.role || '').toLowerCase().trim(), x]))
+          scored = aggregated.map((r) => {
+            const ai = mapAi.get(String(r.role || '').toLowerCase().trim())
+            if (!ai) return { ...fallbackLocalJobScores([r])[0], role: r.role }
+            const c = Number(ai.competenze_richieste ?? 0), resp = Number(ai.responsabilita ?? 0)
+            const s = Number(ai.sforzo_mentale ?? 0), cond = Number(ai.condizioni_lavorative ?? 0)
+            return { role: r.role, competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, totalScore: Number(ai.totalScore ?? (c + resp + s + cond)) }
+          })
+          jobSource.value = 'ai'
+        } catch (err) {
+          uploadError.value += (uploadError.value ? ' | ' : '') + 'Job Grading AI fallback locale: ' + (err.message || String(err))
+        } finally { geminiLoading.value = false }
+      }
+
+      const merged = aggregated.map((r) => ({ ...r, ...(scored.find((x) => x.role === r.role) || {}) }))
+      jobResults.value = enrichWithBandsAndDeviation(merged)
+    } else {
+      jobResults.value = []
+    }
+
+    if (!indicatorsResult.value && jobResults.value.length === 0) {
+      uploadError.value = 'Nessun dato valido. Verifica il mapping delle colonne (Genere per analisi di genere, Ruolo per job grading).'
+      return
+    }
+
+    // Salvataggio DB
     try {
       const saved = await saveAnalysis({
-        analysisType: 'pay_transparency',
+        analysisType: 'combined',
         sourceUrl: excelUrl.value,
         headerRowIndex: headerRowIndex.value,
         headers: excelHeaders.value,
         mapping: columnMapping.value,
-        rows: normalized,
-        results: indicatorsResult.value,
-        calculationSource: indicatorsSource.value,
+        rows: excelRows.value.slice(0, 500),
+        results: { gender: indicatorsResult.value, jobGrading: jobResults.value },
+        calculationSource: `gender:${indicatorsSource.value},job:${jobSource.value}`,
       })
       saveStatus.value = `Analisi salvata nel database (ID: ${saved.id})`
     } catch (saveErr) {
-      saveStatus.value = `Analisi non salvata nel database: ${saveErr.message || String(saveErr)}`
+      saveStatus.value = `Analisi non salvata: ${saveErr.message || String(saveErr)}`
     }
+
+    resultsTab.value = indicatorsResult.value ? 'genere' : 'pari_valore'
     analisiStep.value = 'results'
-  } finally {
-    analysisLoading.value = false
-  }
+  } finally { analysisLoading.value = false }
 }
 
 function toggleSelectAll() {
@@ -298,159 +328,9 @@ function toggleCard(id) {
   selectAll.value = cards.value.every(c => c.selected)
 }
 
-function formatPct(n) {
-  return n == null ? '–' : n.toFixed(2) + '%'
-}
-function formatNum(n) {
-  return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 })
-}
-
-function scoreBadgeClass(band) {
-  return `band-${band}`
-}
-
-async function onLoadJobGradingFromUrl() {
-  const url = (jobExcelUrl.value || '').trim()
-  if (!url) {
-    jobError.value = 'Inserisci il collegamento al file Excel.'
-    return
-  }
-  jobError.value = ''
-  jobLoading.value = true
-  try {
-    const { rows, headers } = await parseExcelFromUrl(url, { headerRowIndex: jobHeaderRowIndex.value })
-    jobRows.value = rows
-    jobHeaders.value = headers
-    const heuristic = detectJobGradingColumnsHeuristic(headers)
-    let suggested = { ...heuristic }
-    if (googleApiKey) {
-      jobGeminiLoading.value = true
-      try {
-        const ai = await suggestJobGradingMappingWithGemini(googleApiKey, headers, rows)
-        if (ai && Object.keys(ai).length) suggested = { ...heuristic, ...ai }
-      } finally {
-        jobGeminiLoading.value = false
-      }
-    }
-    jobMapping.value = suggested
-    jobStep.value = 'mapping'
-  } catch (err) {
-    jobError.value = err.message || 'Errore nel caricamento file per Job Grading.'
-  } finally {
-    jobLoading.value = false
-  }
-}
-
-function fallbackLocalJobScores(roles) {
-  return roles.map((r) => {
-    const text = `${r.role || ''} ${r.level || ''} ${r.description || ''}`.toLowerCase()
-    const clamp = (x) => Math.max(0, Math.min(100, Math.round(x)))
-    const kw = (list) => list.reduce((c, w) => c + (text.includes(w) ? 1 : 0), 0)
-    const competenze = clamp(35 + kw(['specialist', 'tecnico', 'engineer', 'analyst', 'senior']) * 10 + text.length / 50)
-    const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
-    const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
-    const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
-    const totalScore = competenze + responsabilita + sforzo + condizioni
-    return {
-      role: r.role,
-      competenze_richieste: competenze,
-      responsabilita,
-      sforzo_mentale: sforzo,
-      condizioni_lavorative: condizioni,
-      totalScore,
-    }
-  })
-}
-
-async function confirmJobGradingMapping() {
-  if (jobAnalysisLoading.value) return
-  jobAnalysisLoading.value = true
-  jobError.value = ''
-  try {
-    const requiredForJob = [JOB_GRADING_ROLES.role, JOB_GRADING_ROLES.level, JOB_GRADING_ROLES.description]
-    const missing = requiredForJob.filter((k) => typeof jobMapping.value[k] !== 'number')
-    if (missing.length) {
-      jobError.value = `Completa il mapping colonne: ${missing.map(getJobGradingRoleLabel).join(', ')}`
-      return
-    }
-    const hasAnyComp = [JOB_GRADING_ROLES.baseSalary, JOB_GRADING_ROLES.variableComponents, JOB_GRADING_ROLES.totalSalary]
-      .some((k) => typeof jobMapping.value[k] === 'number')
-    if (!hasAnyComp) {
-      jobError.value = 'Mappa almeno una colonna retributiva (base, variabile o totale).'
-      return
-    }
-    const normalized = buildNormalizedJobGradingData(jobRows.value, jobHeaders.value, jobMapping.value)
-    if (!normalized.length) {
-      jobError.value = 'Nessun dato valido dopo il mapping Job Grading.'
-      return
-    }
-    const aggregated = aggregateRolesForGrading(normalized)
-    let scored = fallbackLocalJobScores(aggregated)
-    jobSource.value = 'locale'
-
-    if (googleApiKey) {
-      jobGeminiLoading.value = true
-      try {
-        const aiInput = aggregated.map((r) => ({
-          role: r.role,
-          level: r.level,
-          job_description: r.description,
-        }))
-        const aiScores = await scoreJobRolesWithGemini(googleApiKey, aiInput)
-        const mapAi = new Map(aiScores.map((x) => [String(x.role || '').toLowerCase().trim(), x]))
-        scored = aggregated.map((r) => {
-          const ai = mapAi.get(String(r.role || '').toLowerCase().trim())
-          if (!ai) {
-            const local = fallbackLocalJobScores([r])[0]
-            return { ...local, role: r.role }
-          }
-          const c = Number(ai.competenze_richieste ?? 0)
-          const resp = Number(ai.responsabilita ?? 0)
-          const s = Number(ai.sforzo_mentale ?? 0)
-          const cond = Number(ai.condizioni_lavorative ?? 0)
-          const total = Number(ai.totalScore ?? (c + resp + s + cond))
-          return {
-            role: r.role,
-            competenze_richieste: c,
-            responsabilita: resp,
-            sforzo_mentale: s,
-            condizioni_lavorative: cond,
-            totalScore: total,
-          }
-        })
-        jobSource.value = 'ai'
-      } catch (err) {
-        jobError.value = 'Job Grading AI non disponibile, uso fallback locale: ' + (err.message || String(err))
-      } finally {
-        jobGeminiLoading.value = false
-      }
-    }
-
-    const merged = aggregated.map((r) => {
-      const s = scored.find((x) => x.role === r.role) || {}
-      return { ...r, ...s }
-    })
-    jobResults.value = enrichWithBandsAndDeviation(merged)
-    try {
-      const saved = await saveAnalysis({
-        analysisType: 'job_grading',
-        sourceUrl: jobExcelUrl.value,
-        headerRowIndex: jobHeaderRowIndex.value,
-        headers: jobHeaders.value,
-        mapping: jobMapping.value,
-        rows: normalized,
-        results: { roles: jobResults.value, source: jobSource.value },
-        calculationSource: jobSource.value,
-      })
-      jobSaveStatus.value = `Job grading salvato nel database (ID: ${saved.id})`
-    } catch (saveErr) {
-      jobSaveStatus.value = `Job grading non salvato nel database: ${saveErr.message || String(saveErr)}`
-    }
-    jobStep.value = 'results'
-  } finally {
-    jobAnalysisLoading.value = false
-  }
-}
+function formatPct(n) { return n == null ? '–' : n.toFixed(2) + '%' }
+function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 }) }
+function scoreBadgeClass(band) { return `band-${band}` }
 </script>
 
 <template>
@@ -468,7 +348,7 @@ async function confirmJobGradingMapping() {
           :key="s.id"
           class="tab"
           :class="{ active: activeSection === s.id }"
-          @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'job_grading' && jobStep === 'idle') jobStep = 'upload'; if (s.id === 'storico') loadStorico()"
+          @click="activeSection = s.id; if (s.id === 'analisi' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'storico') loadStorico()"
         >
           <span class="tab-icon">
             <svg v-if="s.icon === 'dashboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -486,7 +366,7 @@ async function confirmJobGradingMapping() {
 
     <div class="main-wrap">
     <header class="main-header">
-      <button class="btn-primary" @click="activeSection === 'job_grading' ? startJobGrading() : startNuovaAnalisi()">
+      <button class="btn-primary" @click="startNuovaAnalisi">
         <span>NUOVA ANALISI</span>
       </button>
       <button class="btn-icon" aria-label="Impostazioni">
@@ -494,27 +374,15 @@ async function confirmJobGradingMapping() {
       </button>
     </header>
 
-    <!-- Flusso Analisi Excel: Upload → Mapping → Risultati -->
+    <!-- Flusso unificato: Upload → Mapping → Risultati (2 sub-tab) -->
     <template v-if="showAnalisiFlow">
-      <!-- Step 1: Link Excel in cloud -->
+      <!-- Step 1: Link Excel -->
       <div v-if="analisiStep === 'upload'" class="analisi-content">
         <h2 class="analisi-title">Collegamento al file Excel</h2>
-        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud (es. OneDrive, Google Drive, SharePoint, URL pubblico). L'app lo scaricherà e mapperà automaticamente le colonne (genere, retribuzione base, componenti variabili, ecc.).</p>
+        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud. L'app mapperà automaticamente le colonne per l'analisi di genere e la valutazione dei lavori di pari valore (job grading).</p>
         <div class="url-input-wrap">
-          <input
-            v-model="excelUrl"
-            type="url"
-            class="url-input"
-            placeholder="https://... file.xlsx"
-            :disabled="uploadLoading || geminiLoading"
-            @keydown.enter="onLoadFromUrl"
-          />
-          <button
-            type="button"
-            class="btn-primary"
-            :disabled="uploadLoading || geminiLoading || !excelUrl.trim()"
-            @click="onLoadFromUrl"
-          >
+          <input v-model="excelUrl" type="url" class="url-input" placeholder="https://... file.xlsx" :disabled="uploadLoading || geminiLoading" @keydown.enter="onLoadFromUrl" />
+          <button type="button" class="btn-primary" :disabled="uploadLoading || geminiLoading || !excelUrl.trim()" @click="onLoadFromUrl">
             <span v-if="uploadLoading">Scaricamento…</span>
             <span v-else-if="geminiLoading">Riconoscimento colonne…</span>
             <span v-else>Carica e mappa colonne</span>
@@ -526,25 +394,23 @@ async function confirmJobGradingMapping() {
             <option :value="0">1 (prima riga)</option>
             <option :value="1">2 (seconda riga)</option>
           </select>
-          <span class="header-row-hint">Usa «2» per fogli Google/Excel dove la prima riga è vuota o contiene numeri (es. il tuo file con CODICE, DIPENDENTE, SESSO…).</span>
+          <span class="header-row-hint">Usa «2» se la prima riga è vuota o contiene numeri.</span>
         </div>
-        <p class="api-key-warn">
-          Stato Gemini: <strong>{{ googleApiKey ? 'attivo (VITE_GOOGLE_AI_API_KEY presente nel build)' : 'non attivo (VITE_GOOGLE_AI_API_KEY mancante nel build)' }}</strong>.
-        </p>
-        <p class="url-hint">Puoi incollare direttamente un link Google Sheets (es. docs.google.com/spreadsheets/…): verrà convertito in download .xlsx. Per altri servizi serve un URL di download diretto.</p>
+        <p class="api-key-warn">Stato Gemini: <strong>{{ googleApiKey ? 'attivo' : 'non attivo' }}</strong></p>
+        <p class="url-hint">Puoi incollare un link Google Sheets: verrà convertito in download .xlsx.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
 
-      <!-- Step 2: Mapping colonne -->
+      <!-- Step 2: Mapping colonne unificato -->
       <div v-else-if="analisiStep === 'mapping'" class="analisi-content">
         <h2 class="analisi-title">Verifica assegnazione colonne</h2>
-        <p class="analisi-desc">Controlla quale colonna del file è stata associata a ogni dato. Puoi modificare le scelte prima di calcolare gli indicatori.</p>
+        <p class="analisi-desc">Associa ogni dato richiesto alla colonna corrispondente del file. I campi servono sia per l'analisi di genere sia per il job grading.</p>
         <div class="mapping-table">
           <div class="mapping-row header">
             <span>Dato richiesto</span>
             <span>Colonna nel file</span>
           </div>
-          <div v-for="role in roleKeys" :key="role" class="mapping-row">
+          <div v-for="role in allRoleKeys" :key="role" class="mapping-row">
             <span>{{ getRoleLabel(role) }}</span>
             <select v-model.number="columnMapping[role]" class="mapping-select" :disabled="analysisLoading">
               <option :value="undefined">– Nessuna –</option>
@@ -557,229 +423,139 @@ async function confirmJobGradingMapping() {
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
           <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
             <span v-if="analysisLoading">Generazione analisi...</span>
-            <span v-else>Calcola indicatori</span>
+            <span v-else>Esegui analisi completa</span>
           </button>
         </div>
         <div v-if="analysisLoading" class="analysis-loader">
           <span class="spinner" aria-hidden="true"></span>
-          <span>Sto elaborando i dati e generando l'analisi...</span>
+          <span>Elaboro analisi di genere e job grading...</span>
         </div>
       </div>
 
-      <!-- Step 3: Risultati indicatori (a)–(g) -->
-      <div v-else-if="analisiStep === 'results' && indicatorsResult" class="analisi-content results">
-        <h2 class="analisi-title">Risultati analisi trasparenza salariale</h2>
-        <p class="result-source">Calcolo: <strong>{{ indicatorsSource === 'ai' ? 'Gemini (AI)' : 'Motore locale' }}</strong></p>
+      <!-- Step 3: Risultati con sub-tab -->
+      <div v-else-if="analisiStep === 'results'" class="analisi-content results">
+        <h2 class="analisi-title">Risultati analisi</h2>
         <p v-if="saveStatus" class="save-status">{{ saveStatus }}</p>
-        <div class="indicator-cards">
-          <section class="indicator-card">
-            <h3>(a) Divario retributivo di genere</h3>
-            <p class="indicator-desc">{{ indicatorsResult.a_divarioRetributivoGenere.descrizione }}</p>
-            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.a_divarioRetributivoGenere.percentuale) }">{{ formatPct(indicatorsResult.a_divarioRetributivoGenere.percentuale) }}</div>
-            <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaFemminile) }}</p>
-            <p class="indicator-detail">N maschi: {{ indicatorsResult.a_divarioRetributivoGenere.nMaschi }} · N femmine: {{ indicatorsResult.a_divarioRetributivoGenere.nFemmine }}</p>
-          </section>
-          <section class="indicator-card">
-            <h3>(b) Divario nelle componenti variabili</h3>
-            <p class="indicator-desc">{{ indicatorsResult.b_divarioComponentiVariabili.descrizione }}</p>
-            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.b_divarioComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.b_divarioComponentiVariabili.percentuale) }}</div>
-            <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaFemminile) }}</p>
-          </section>
-          <section class="indicator-card">
-            <h3>Divario retribuzione base</h3>
-            <p class="indicator-desc">{{ indicatorsResult.h_divarioRetribuzioneBase?.descrizione || 'Divario retributivo di genere sulla retribuzione base' }}</p>
-            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }">{{ formatPct(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }}</div>
-            <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaFemminile) }}</p>
-          </section>
-          <section class="indicator-card">
-            <h3>(c) Divario mediano di genere</h3>
-            <p class="indicator-desc">{{ indicatorsResult.c_divarioMedianoGenere.descrizione }}</p>
-            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.c_divarioMedianoGenere.percentuale) }">{{ formatPct(indicatorsResult.c_divarioMedianoGenere.percentuale) }}</div>
-            <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaFemminile) }}</p>
-          </section>
-          <section class="indicator-card">
-            <h3>(d) Divario mediano nelle componenti variabili</h3>
-            <p class="indicator-desc">{{ indicatorsResult.d_divarioMedianoComponentiVariabili.descrizione }}</p>
-            <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }}</div>
-            <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaFemminile) }}</p>
-          </section>
-          <section class="indicator-card wide">
-            <h3>(e) Percentuale lavoratori con componenti variabili</h3>
-            <p class="indicator-desc">{{ indicatorsResult.e_percentualeConComponentiVariabili.descrizione }}</p>
-            <div class="indicator-row">
-              <div><strong>Femminile:</strong> {{ formatPct(indicatorsResult.e_percentualeConComponentiVariabili.femminile) }} <span class="muted">(n={{ indicatorsResult.e_percentualeConComponentiVariabili.nFemmine }})</span></div>
-              <div><strong>Maschile:</strong> {{ formatPct(indicatorsResult.e_percentualeConComponentiVariabili.maschile) }} <span class="muted">(n={{ indicatorsResult.e_percentualeConComponentiVariabili.nMaschi }})</span></div>
-            </div>
-          </section>
-          <section class="indicator-card wide">
-            <h3>(f) Percentuale per quartile retributivo</h3>
-            <p class="indicator-desc">{{ indicatorsResult.f_percentualePerQuartile.descrizione }}</p>
-            <div class="quartile-table">
-              <div class="quartile-row header">
-                <span>Quartile</span>
-                <span>% Femminile</span>
-                <span>% Maschile</span>
-                <span>Totale</span>
-              </div>
-              <div v-for="q in indicatorsResult.f_percentualePerQuartile.quartili" :key="q.quartile" class="quartile-row">
-                <span>Q{{ q.quartile }}</span>
-                <span>{{ formatPct(q.femminile) }}</span>
-                <span>{{ formatPct(q.maschile) }}</span>
-                <span>{{ q.totale }}</span>
-              </div>
-            </div>
-          </section>
-          <section class="indicator-card wide">
-            <h3>(g) Divario per categoria (base e variabile)</h3>
-            <p class="indicator-desc">{{ indicatorsResult.g_divarioPerCategoria.descrizione }}</p>
-            <div class="category-table">
-              <div class="category-row header">
-                <span>Categoria</span>
-                <span>N</span>
-                <span>Divario base %</span>
-                <span>Divario variabile %</span>
-              </div>
-              <div v-for="cat in indicatorsResult.g_divarioPerCategoria.perCategoria" :key="cat.categoria" class="category-row">
-                <span>{{ cat.categoria }}</span>
-                <span>{{ cat.n }}</span>
-                <span :class="{ 'gap-alert': isGapAlert(cat.divarioBase) }">{{ formatPct(cat.divarioBase) }}</span>
-                <span :class="{ 'gap-alert': isGapAlert(cat.divarioVariabile) }">{{ formatPct(cat.divarioVariabile) }}</span>
-              </div>
-            </div>
-          </section>
+        <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
+
+        <div class="results-subtabs">
+          <button class="subtab" :class="{ active: resultsTab === 'genere' }" :disabled="!indicatorsResult" @click="resultsTab = 'genere'">Analisi di genere</button>
+          <button class="subtab" :class="{ active: resultsTab === 'pari_valore' }" :disabled="jobResults.length === 0" @click="resultsTab = 'pari_valore'">Lavori di pari valore</button>
         </div>
+
+        <!-- Sub-tab: Analisi di genere -->
+        <div v-if="resultsTab === 'genere' && indicatorsResult">
+          <p class="result-source">Calcolo: <strong>{{ indicatorsSource === 'ai' ? 'Gemini (AI)' : 'Motore locale' }}</strong></p>
+          <div class="indicator-cards">
+            <section class="indicator-card">
+              <h3>(a) Divario retributivo di genere</h3>
+              <p class="indicator-desc">{{ indicatorsResult.a_divarioRetributivoGenere.descrizione }}</p>
+              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.a_divarioRetributivoGenere.percentuale) }">{{ formatPct(indicatorsResult.a_divarioRetributivoGenere.percentuale) }}</div>
+              <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaFemminile) }}</p>
+              <p class="indicator-detail">N maschi: {{ indicatorsResult.a_divarioRetributivoGenere.nMaschi }} · N femmine: {{ indicatorsResult.a_divarioRetributivoGenere.nFemmine }}</p>
+            </section>
+            <section class="indicator-card">
+              <h3>(b) Divario nelle componenti variabili</h3>
+              <p class="indicator-desc">{{ indicatorsResult.b_divarioComponentiVariabili.descrizione }}</p>
+              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.b_divarioComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.b_divarioComponentiVariabili.percentuale) }}</div>
+              <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaFemminile) }}</p>
+            </section>
+            <section class="indicator-card">
+              <h3>Divario retribuzione base</h3>
+              <p class="indicator-desc">{{ indicatorsResult.h_divarioRetribuzioneBase?.descrizione || 'Divario retributivo di genere sulla retribuzione base' }}</p>
+              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }">{{ formatPct(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }}</div>
+              <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaFemminile) }}</p>
+            </section>
+            <section class="indicator-card">
+              <h3>(c) Divario mediano di genere</h3>
+              <p class="indicator-desc">{{ indicatorsResult.c_divarioMedianoGenere.descrizione }}</p>
+              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.c_divarioMedianoGenere.percentuale) }">{{ formatPct(indicatorsResult.c_divarioMedianoGenere.percentuale) }}</div>
+              <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaFemminile) }}</p>
+            </section>
+            <section class="indicator-card">
+              <h3>(d) Divario mediano nelle componenti variabili</h3>
+              <p class="indicator-desc">{{ indicatorsResult.d_divarioMedianoComponentiVariabili.descrizione }}</p>
+              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }}</div>
+              <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaFemminile) }}</p>
+            </section>
+            <section class="indicator-card wide">
+              <h3>(e) Percentuale lavoratori con componenti variabili</h3>
+              <p class="indicator-desc">{{ indicatorsResult.e_percentualeConComponentiVariabili.descrizione }}</p>
+              <div class="indicator-row">
+                <div><strong>Femminile:</strong> {{ formatPct(indicatorsResult.e_percentualeConComponentiVariabili.femminile) }} <span class="muted">(n={{ indicatorsResult.e_percentualeConComponentiVariabili.nFemmine }})</span></div>
+                <div><strong>Maschile:</strong> {{ formatPct(indicatorsResult.e_percentualeConComponentiVariabili.maschile) }} <span class="muted">(n={{ indicatorsResult.e_percentualeConComponentiVariabili.nMaschi }})</span></div>
+              </div>
+            </section>
+            <section class="indicator-card wide">
+              <h3>(f) Percentuale per quartile retributivo</h3>
+              <p class="indicator-desc">{{ indicatorsResult.f_percentualePerQuartile.descrizione }}</p>
+              <div class="quartile-table">
+                <div class="quartile-row header"><span>Quartile</span><span>% Femminile</span><span>% Maschile</span><span>Totale</span></div>
+                <div v-for="q in indicatorsResult.f_percentualePerQuartile.quartili" :key="q.quartile" class="quartile-row">
+                  <span>Q{{ q.quartile }}</span><span>{{ formatPct(q.femminile) }}</span><span>{{ formatPct(q.maschile) }}</span><span>{{ q.totale }}</span>
+                </div>
+              </div>
+            </section>
+            <section class="indicator-card wide">
+              <h3>(g) Divario per categoria (base e variabile)</h3>
+              <p class="indicator-desc">{{ indicatorsResult.g_divarioPerCategoria.descrizione }}</p>
+              <div class="category-table">
+                <div class="category-row header"><span>Categoria</span><span>N</span><span>Divario base %</span><span>Divario variabile %</span></div>
+                <div v-for="cat in indicatorsResult.g_divarioPerCategoria.perCategoria" :key="cat.categoria" class="category-row">
+                  <span>{{ cat.categoria }}</span><span>{{ cat.n }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(cat.divarioBase) }">{{ formatPct(cat.divarioBase) }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(cat.divarioVariabile) }">{{ formatPct(cat.divarioVariabile) }}</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div v-else-if="resultsTab === 'genere' && !indicatorsResult" class="no-data-msg">
+          Dati di genere non disponibili. Verifica che la colonna Genere (M/F) sia mappata correttamente.
+        </div>
+
+        <!-- Sub-tab: Lavori di pari valore -->
+        <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
+          <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Fallback locale' }}</strong></p>
+          <div v-for="band in [1,2,3,4,5]" :key="band" class="band-section" v-show="jobResults.some(r => r.band === band)">
+            <h3 class="band-title" :class="scoreBadgeClass(band)">Fascia {{ band }}</h3>
+            <div class="job-table">
+              <div class="job-row header">
+                <span>Ruolo</span><span>Competenze</span><span>Responsabilità</span><span>Sforzo mentale</span><span>Condizioni</span><span>Totale</span><span>Retrib. media</span><span>Scost. fascia</span><span>N</span>
+              </div>
+              <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
+                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role) }">
+                  <span>
+                    <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
+                    {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
+                  </span>
+                  <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                  <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                  <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                  <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
+                  <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
+                  <span>{{ formatNum(r.avgTotalSalary) }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">{{ formatPct(r.deviationFromBandAvgPct) }}</span>
+                  <span>{{ r.n }}</span>
+                </div>
+                <div v-if="expandedRoles.has(r.role) && r.people && r.people.length > 1" class="people-detail">
+                  <div class="people-header"><span>#</span><span>Dipendente</span><span>Retr. base</span><span>Comp. variabile</span><span>Retr. totale</span><span>Scost. da media ruolo</span></div>
+                  <div v-for="p in r.people" :key="p.index" class="people-row">
+                    <span>{{ p.index }}</span><span>{{ p.name || '–' }}</span><span>{{ formatNum(p.baseSalary) }}</span><span>{{ formatNum(p.variableComponents) }}</span><span>{{ formatNum(p.totalSalary) }}</span>
+                    <span :class="{ 'gap-alert': isGapAlert(p.deviationFromRoleAvgPct) }">{{ formatPct(p.deviationFromRoleAvgPct) }}</span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="resultsTab === 'pari_valore' && jobResults.length === 0" class="no-data-msg">
+          Dati job grading non disponibili. Verifica che le colonne Ruolo, Livello e Job Description siano mappate.
+        </div>
+
         <div class="mapping-actions">
           <button class="btn-secondary" @click="analisiStep = 'mapping'">Modifica mapping</button>
-          <button class="btn-primary" @click="goToUpload">Nuova analisi</button>
-        </div>
-      </div>
-    </template>
-
-    <!-- Flusso Job Grading -->
-    <template v-else-if="showJobGradingFlow">
-      <div v-if="jobStep === 'upload'" class="analisi-content">
-        <h2 class="analisi-title">Job Grading - Collegamento file Excel</h2>
-        <p class="analisi-desc">Incolla il link al file Excel: mappo con AI le colonne retributive (base, variabile, totale), ruolo, livello e job description.</p>
-        <div class="url-input-wrap">
-          <input
-            v-model="jobExcelUrl"
-            type="url"
-            class="url-input"
-            placeholder="https://... file.xlsx"
-            :disabled="jobLoading || jobGeminiLoading"
-            @keydown.enter="onLoadJobGradingFromUrl"
-          />
-          <button
-            type="button"
-            class="btn-primary"
-            :disabled="jobLoading || jobGeminiLoading || !jobExcelUrl.trim()"
-            @click="onLoadJobGradingFromUrl"
-          >
-            <span v-if="jobLoading">Scaricamento…</span>
-            <span v-else-if="jobGeminiLoading">Mapping AI…</span>
-            <span v-else>Carica per Job Grading</span>
-          </button>
-        </div>
-        <div class="header-row-option">
-          <label>Intestazioni colonne nella riga:</label>
-          <select v-model.number="jobHeaderRowIndex" class="header-row-select">
-            <option :value="0">1 (prima riga)</option>
-            <option :value="1">2 (seconda riga)</option>
-          </select>
-        </div>
-        <p class="api-key-warn">
-          Stato Gemini: <strong>{{ googleApiKey ? 'attivo' : 'non attivo' }}</strong>
-        </p>
-        <p v-if="jobError" class="upload-error">{{ jobError }}</p>
-      </div>
-
-      <div v-else-if="jobStep === 'mapping'" class="analisi-content">
-        <h2 class="analisi-title">Job Grading - Verifica mapping colonne</h2>
-        <p class="analisi-desc">Controlla il mapping delle colonne richieste per il job grading prima della valutazione.</p>
-        <div class="mapping-table">
-          <div class="mapping-row header">
-            <span>Dato richiesto</span>
-            <span>Colonna nel file</span>
-          </div>
-          <div v-for="role in jobRoleKeys" :key="role" class="mapping-row">
-            <span>{{ getJobGradingRoleLabel(role) }}</span>
-            <select v-model.number="jobMapping[role]" class="mapping-select" :disabled="jobAnalysisLoading">
-              <option :value="undefined">– Nessuna –</option>
-              <option v-for="(h, i) in jobHeaders" :key="i" :value="i">{{ h }}</option>
-            </select>
-          </div>
-        </div>
-        <p v-if="jobError" class="upload-error">{{ jobError }}</p>
-        <div class="mapping-actions">
-          <button class="btn-secondary" :disabled="jobAnalysisLoading" @click="jobStep = 'upload'">Indietro</button>
-          <button class="btn-primary" :disabled="jobAnalysisLoading" @click="confirmJobGradingMapping">
-            <span v-if="jobAnalysisLoading">Generazione job grading...</span>
-            <span v-else>Esegui Job Grading</span>
-          </button>
-        </div>
-        <div v-if="jobAnalysisLoading" class="analysis-loader">
-          <span class="spinner" aria-hidden="true"></span>
-          <span>Analizzo ruoli, descrizioni e livelli con AI NLP...</span>
-        </div>
-      </div>
-
-      <div v-else-if="jobStep === 'results'" class="analisi-content results">
-        <h2 class="analisi-title">Risultati Job Grading</h2>
-        <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Fallback locale' }}</strong></p>
-        <p v-if="jobSaveStatus" class="save-status">{{ jobSaveStatus }}</p>
-        <p v-if="jobError" class="upload-error">{{ jobError }}</p>
-
-        <div v-for="band in [1,2,3,4,5]" :key="band" class="band-section" v-show="jobResults.some(r => r.band === band)">
-          <h3 class="band-title" :class="scoreBadgeClass(band)">Fascia {{ band }}</h3>
-          <div class="job-table">
-            <div class="job-row header">
-              <span>Ruolo</span>
-              <span>Competenze</span>
-              <span>Responsabilità</span>
-              <span>Sforzo mentale</span>
-              <span>Condizioni</span>
-              <span>Totale</span>
-              <span>Retrib. media</span>
-              <span>Scost. fascia</span>
-              <span>N</span>
-            </div>
-            <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
-              <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role) }">
-                <span>
-                  <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
-                  {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
-                </span>
-                <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
-                <span>{{ formatNum(r.avgTotalSalary) }}</span>
-                <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">{{ formatPct(r.deviationFromBandAvgPct) }}</span>
-                <span>{{ r.n }}</span>
-              </div>
-              <div v-if="expandedRoles.has(r.role) && r.people && r.people.length > 1" class="people-detail">
-                <div class="people-header">
-                  <span>#</span>
-                  <span>Retr. base</span>
-                  <span>Comp. variabile</span>
-                  <span>Retr. totale</span>
-                  <span>Scost. da media ruolo</span>
-                </div>
-                <div v-for="p in r.people" :key="p.index" class="people-row">
-                  <span>{{ p.index }}</span>
-                  <span>{{ formatNum(p.baseSalary) }}</span>
-                  <span>{{ formatNum(p.variableComponents) }}</span>
-                  <span>{{ formatNum(p.totalSalary) }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(p.deviationFromRoleAvgPct) }">{{ formatPct(p.deviationFromRoleAvgPct) }}</span>
-                </div>
-              </div>
-            </template>
-          </div>
-        </div>
-        <div class="mapping-actions">
-          <button class="btn-secondary" @click="jobStep = 'mapping'">Modifica mapping</button>
-          <button class="btn-primary" @click="startJobGrading">Nuova analisi job grading</button>
+          <button class="btn-primary" @click="startNuovaAnalisi">Nuova analisi</button>
         </div>
       </div>
     </template>
@@ -1297,6 +1073,47 @@ async function confirmJobGradingMapping() {
   line-height: 1.5;
 }
 
+.results-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.subtab {
+  padding: 0.6rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.subtab:hover:not(:disabled) {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.subtab.active {
+  background: linear-gradient(90deg, var(--accent-blue-light) 0%, var(--accent-blue) 100%);
+  color: white;
+  border-color: transparent;
+}
+
+.subtab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.no-data-msg {
+  padding: 2rem 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
 .result-source {
   margin: 0 0 1rem;
   font-size: 0.875rem;
@@ -1451,7 +1268,7 @@ async function confirmJobGradingMapping() {
 .people-header,
 .people-row {
   display: grid;
-  grid-template-columns: 0.4fr 1fr 1fr 1fr 1.2fr;
+  grid-template-columns: 0.3fr 1.5fr 1fr 1fr 1fr 1.2fr;
   gap: 0.5rem;
   padding: 0.35rem 0;
   font-size: 0.78rem;

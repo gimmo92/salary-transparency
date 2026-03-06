@@ -94,6 +94,10 @@ export const COLUMN_ROLES = {
   variableComponents: 'componenti_variabili',
   totalSalary: 'retribuzione_totale',
   category: 'categoria_lavoratore',
+  employeeName: 'nome_dipendente',
+  role: 'ruolo',
+  level: 'livello_inquadramento',
+  description: 'job_description',
 }
 
 const ROLE_LABELS = {
@@ -102,6 +106,10 @@ const ROLE_LABELS = {
   [COLUMN_ROLES.variableComponents]: 'Componenti variabili / complementari',
   [COLUMN_ROLES.totalSalary]: 'Retribuzione totale',
   [COLUMN_ROLES.category]: 'Categoria lavoratore',
+  [COLUMN_ROLES.employeeName]: 'Nome / Cognome',
+  [COLUMN_ROLES.role]: 'Ruolo',
+  [COLUMN_ROLES.level]: 'Livello di inquadramento',
+  [COLUMN_ROLES.description]: 'Job description',
 }
 
 export function getRoleLabel(role) {
@@ -197,6 +205,18 @@ export function detectColumnRoles(headers, rows, sampleSize = 50) {
     /tot\s*comp\s*variab|totale\s*comp(onenti)?\s*variab|componenti?\s*(complementari|variabili)/.test(h)
   )
   if (strongVarIdx >= 0) suggestions[COLUMN_ROLES.variableComponents] = strongVarIdx
+
+  // Job grading columns
+  const idx = (re) => normHeaders.findIndex((x) => re.test(x))
+  const nameIdx = idx(/dipendente|nome\s*(e\s*)?cognome|cognome|nominativo|employee|full\s*name|worker/)
+  const roleIdx = idx(/(^| )ruolo($| )|mansione|job title|position/)
+  const levelIdx = idx(/livello|inquadramento|grade|classification|qualifica/)
+  const descIdx = idx(/job description|descrizione|attivit|responsabil|task/)
+
+  if (nameIdx >= 0 && suggestions[COLUMN_ROLES.employeeName] === undefined) suggestions[COLUMN_ROLES.employeeName] = nameIdx
+  if (roleIdx >= 0 && suggestions[COLUMN_ROLES.role] === undefined) suggestions[COLUMN_ROLES.role] = roleIdx
+  if (levelIdx >= 0 && suggestions[COLUMN_ROLES.level] === undefined) suggestions[COLUMN_ROLES.level] = levelIdx
+  if (descIdx >= 0 && suggestions[COLUMN_ROLES.description] === undefined) suggestions[COLUMN_ROLES.description] = descIdx
 
   return suggestions
 }

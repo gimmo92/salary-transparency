@@ -5,6 +5,7 @@ export const JOB_GRADING_ROLES = {
   role: 'ruolo',
   level: 'livello_inquadramento',
   description: 'job_description',
+  employeeName: 'nome_dipendente',
 }
 
 export const JOB_GRADING_ROLE_LABELS = {
@@ -14,6 +15,7 @@ export const JOB_GRADING_ROLE_LABELS = {
   [JOB_GRADING_ROLES.role]: 'Ruolo',
   [JOB_GRADING_ROLES.level]: 'Livello di inquadramento',
   [JOB_GRADING_ROLES.description]: 'Job description',
+  [JOB_GRADING_ROLES.employeeName]: 'Nome / Cognome',
 }
 
 export function getJobGradingRoleLabel(role) {
@@ -32,7 +34,9 @@ export function detectJobGradingColumnsHeuristic(headers) {
   const baseIdx = idx(/sal\.?\s*ingresso|retribuzione base|stipendio base|minimo ccnl|base salary/)
   const varIdx = idx(/tot\s*comp\s*variab|componenti?\s*variabili|bonus|mbo|pdr|premi|incentiv/)
   const totalIdx = idx(/totale retribuzione|costo totale|retribuzione totale|ral|compensation total/)
+  const nameIdx = idx(/dipendente|nome\s*(e\s*)?cognome|cognome|nominativo|employee|full\s*name|worker/)
 
+  if (nameIdx >= 0) suggestions[JOB_GRADING_ROLES.employeeName] = nameIdx
   if (roleIdx >= 0) suggestions[JOB_GRADING_ROLES.role] = roleIdx
   if (levelIdx >= 0) suggestions[JOB_GRADING_ROLES.level] = levelIdx
   if (descIdx >= 0) suggestions[JOB_GRADING_ROLES.description] = descIdx
@@ -76,6 +80,7 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       const role = text(row[roleToKey[JOB_GRADING_ROLES.role]])
       const level = text(row[roleToKey[JOB_GRADING_ROLES.level]])
       const description = text(row[roleToKey[JOB_GRADING_ROLES.description]])
+      const employeeName = text(row[roleToKey[JOB_GRADING_ROLES.employeeName]])
       const baseSalary = parseNum(row[roleToKey[JOB_GRADING_ROLES.baseSalary]])
       const variableComponents = parseNum(row[roleToKey[JOB_GRADING_ROLES.variableComponents]])
       const totalSalary = parseNum(row[roleToKey[JOB_GRADING_ROLES.totalSalary]])
@@ -83,6 +88,7 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
         role,
         level,
         description,
+        employeeName,
         baseSalary,
         variableComponents,
         totalSalary: totalSalary ?? ((baseSalary ?? 0) + (variableComponents ?? 0)),
@@ -115,6 +121,7 @@ export function aggregateRolesForGrading(normalizedRows) {
     if (!item.description && row.description) item.description = row.description
     if (!item.level && row.level) item.level = row.level
     item.people.push({
+      name: row.employeeName || '',
       baseSalary: row.baseSalary,
       variableComponents: row.variableComponents,
       totalSalary: row.totalSalary,
@@ -126,6 +133,7 @@ export function aggregateRolesForGrading(normalizedRows) {
     const avgTotal = avg(r._total)
     const people = r.people.map((p, i) => ({
       index: i + 1,
+      name: p.name,
       baseSalary: p.baseSalary,
       variableComponents: p.variableComponents,
       totalSalary: p.totalSalary,

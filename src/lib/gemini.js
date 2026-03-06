@@ -7,6 +7,10 @@ const VALID_ROLES = [
   COLUMN_ROLES.variableComponents,
   COLUMN_ROLES.totalSalary,
   COLUMN_ROLES.category,
+  COLUMN_ROLES.employeeName,
+  COLUMN_ROLES.role,
+  COLUMN_ROLES.level,
+  COLUMN_ROLES.description,
 ]
 const VALID_ROLE_SET = new Set(VALID_ROLES)
 
@@ -28,7 +32,7 @@ export async function suggestColumnMappingWithGemini(apiKey, headers, sampleRows
 
   const roleList = VALID_ROLES.join(', ')
 
-  const prompt = `Sei un assistente per l'analisi di dati retributivi. Data la tabella sotto (intestazioni e un campione di righe), indica quale colonna corrisponde a ciascun ruolo.
+  const prompt = `Sei un assistente per l'analisi di dati retributivi e job grading. Data la tabella sotto (intestazioni e un campione di righe), indica quale colonna corrisponde a ciascun ruolo.
 
 RUOLI richiesti (usa ESATTAMENTE questi identificatori): ${roleList}
 
@@ -37,7 +41,11 @@ REGOLE:
 - retribuzione_base: stipendio o retribuzione di base (solo numeri)
 - componenti_variabili: bonus, premi, incentivi, straordinari (solo numeri)
 - retribuzione_totale: retribuzione complessiva (solo numeri)
-- categoria_lavoratore: ruolo, livello, qualifica, area (testo)
+- categoria_lavoratore: categoria, area, dipartimento (testo)
+- nome_dipendente: nome e/o cognome del dipendente (testo)
+- ruolo: ruolo lavorativo, mansione, job title (testo)
+- livello_inquadramento: livello, inquadramento, qualifica, grade (testo)
+- job_description: descrizione del lavoro, attività, responsabilità (testo)
 
 Rispondi SOLO con un JSON valido, senza altro testo prima o dopo. Formato:
 { "nome_colonna_esatto": "ruolo", ... }
