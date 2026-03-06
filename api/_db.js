@@ -55,3 +55,20 @@ export async function insertAnalysis(record) {
   )
 }
 
+export async function listAnalyses() {
+  await ensureSchema()
+  const p = getPool()
+  const { rows } = await p.query(
+    `SELECT id, analysis_type, source_url, calculation_source, created_at
+     FROM analyses ORDER BY created_at DESC LIMIT 100`
+  )
+  return rows
+}
+
+export async function deleteAnalysis(id) {
+  await ensureSchema()
+  const p = getPool()
+  const { rowCount } = await p.query('DELETE FROM analyses WHERE id = $1', [id])
+  return rowCount > 0
+}
+

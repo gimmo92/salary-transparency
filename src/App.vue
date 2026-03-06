@@ -22,7 +22,7 @@ import {
   aggregateRolesForGrading,
   enrichWithBandsAndDeviation,
 } from './lib/jobGrading.js'
-import { saveAnalysis } from './lib/persistence.js'
+import { saveAnalysis, fetchAnalyses, deleteAnalysisById } from './lib/persistence.js'
 
 const activeSection = ref('dashboard')
 const selectAll = ref(false)
@@ -36,6 +36,7 @@ const sections = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
   { id: 'dati', label: 'Dati retributivi', icon: 'table' },
   { id: 'job_grading', label: 'Job Grading', icon: 'chart' },
+  { id: 'storico', label: 'Storico', icon: 'history' },
   { id: 'report', label: 'Report', icon: 'chart' },
   { id: 'confronti', label: 'Confronti', icon: 'compare' },
   { id: 'normativa', label: 'Normativa', icon: 'law' },
@@ -63,6 +64,72 @@ const roleKeys = [COLUMN_ROLES.gender, COLUMN_ROLES.baseSalary, COLUMN_ROLES.var
 
 const showAnalisiFlow = computed(() => activeSection.value === 'dati')
 const showJobGradingFlow = computed(() => activeSection.value === 'job_grading')
+const showStorico = computed(() => activeSection.value === 'storico')
+
+const storicoList = ref([])
+const storicoLoading = ref(false)
+const storicoError = ref('')
+const storicoDeleting = ref(null)
+
+async function loadStorico() {
+  storicoLoading.value = true
+  storicoError.value = ''
+  try {
+    storicoList.value = await fetchAnalyses()
+  } catch (err) {
+    storicoError.value = err.message || 'Impossibile caricare lo storico.'
+  } finally {
+    storicoLoading.value = false
+  }
+}
+
+async function removeAnalysis(id) {
+  if (!confirm('Eliminare questa analisi?')) return
+  storicoDeleting.value = id
+  try {
+    await deleteAnalysisById(id)
+    storicoList.value = storicoList.value.filter((a) => a.id !== id)
+  } catch (err) {
+    storicoError.value = 'Eliminazione non riuscita: ' + (err.message || String(err))
+  } finally {
+    storicoDeleting.value = null
+  }
+}
+
+function formatDate(iso) {
+  if (!iso) return '–'
+  const d = new Date(iso)
+  return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function analysisTypeLabel(t) {
+  if (t === 'pay_transparency') return 'Trasparenza salariale'
+  if (t === 'job_grading') return 'Job Grading'
+  return t || '–'
+}
+
+function onScoreEdit(r) {
+  r.totalScore = (Number(r.competenze_richieste) || 0)
+    + (Number(r.responsabilita) || 0)
+    + (Number(r.sforzo_mentale) || 0)
+    + (Number(r.condizioni_lavorative) || 0)
+  recalcBandsAndDeviation()
+}
+
+function recalcBandsAndDeviation() {
+  const sorted = [...jobResults.value].sort((a, b) => b.totalScore - a.totalScore)
+  const n = sorted.length
+  const bandSize = Math.ceil(n / 5)
+  sorted.forEach((r, i) => { r.band = Math.min(5, Math.floor(i / bandSize) + 1) })
+  for (let b = 1; b <= 5; b++) {
+    const inBand = sorted.filter((x) => x.band === b)
+    const avg = inBand.length ? inBand.reduce((s, x) => s + (Number(x.avgTotalSalary) || 0), 0) / inBand.length : 0
+    inBand.forEach((r) => {
+      r.deviationFromBandAvgPct = avg ? (((Number(r.avgTotalSalary) || 0) - avg) / avg) * 100 : 0
+    })
+  }
+  jobResults.value = sorted
+}
 
 // Flusso Job Grading
 const jobStep = ref('idle') // idle | upload | mapping | results
@@ -389,12 +456,13 @@ async function confirmJobGradingMapping() {
           :key="s.id"
           class="tab"
           :class="{ active: activeSection === s.id }"
-          @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'job_grading' && jobStep === 'idle') jobStep = 'upload'"
+          @click="activeSection = s.id; if (s.id === 'dati' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'job_grading' && jobStep === 'idle') jobStep = 'upload'; if (s.id === 'storico') loadStorico()"
         >
           <span class="tab-icon">
             <svg v-if="s.icon === 'dashboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <svg v-else-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
             <svg v-else-if="s.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+            <svg v-else-if="s.icon === 'history'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             <svg v-else-if="s.icon === 'compare'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M8 21H3v-5M21 3l-9 9M3 21l9-9"/></svg>
             <svg v-else-if="s.icon === 'law'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
             <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
@@ -664,10 +732,10 @@ async function confirmJobGradingMapping() {
             </div>
             <div class="job-row" v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
               <span>{{ r.role }} <small v-if="r.level">({{ r.level }})</small></span>
-              <span>{{ formatNum(r.competenze_richieste) }}</span>
-              <span>{{ formatNum(r.responsabilita) }}</span>
-              <span>{{ formatNum(r.sforzo_mentale) }}</span>
-              <span>{{ formatNum(r.condizioni_lavorative) }}</span>
+              <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" min="0" max="100" /></span>
+              <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" min="0" max="100" /></span>
+              <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" min="0" max="100" /></span>
+              <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" min="0" max="100" /></span>
               <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
               <span>{{ formatNum(r.avgTotalSalary) }}</span>
               <span>{{ formatPct(r.deviationFromBandAvgPct) }}</span>
@@ -677,6 +745,53 @@ async function confirmJobGradingMapping() {
         <div class="mapping-actions">
           <button class="btn-secondary" @click="jobStep = 'mapping'">Modifica mapping</button>
           <button class="btn-primary" @click="startJobGrading">Nuova analisi job grading</button>
+        </div>
+      </div>
+    </template>
+
+    <!-- Storico analisi -->
+    <template v-else-if="showStorico">
+      <div class="analisi-content">
+        <h2 class="analisi-title">Storico analisi</h2>
+        <p v-if="storicoLoading" class="storico-status">Caricamento storico…</p>
+        <p v-if="storicoError" class="upload-error">{{ storicoError }}</p>
+        <div v-if="!storicoLoading && storicoList.length === 0 && !storicoError" class="storico-empty">
+          Nessuna analisi salvata.
+        </div>
+        <div v-if="storicoList.length > 0" class="storico-table-wrap">
+          <table class="storico-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Tipo</th>
+                <th>Sorgente</th>
+                <th>Calcolo</th>
+                <th>ID</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="a in storicoList" :key="a.id">
+                <td>{{ formatDate(a.created_at) }}</td>
+                <td>{{ analysisTypeLabel(a.analysis_type) }}</td>
+                <td class="storico-url">{{ a.source_url || '–' }}</td>
+                <td>{{ a.calculation_source || '–' }}</td>
+                <td class="storico-id">{{ a.id.slice(0, 8) }}…</td>
+                <td>
+                  <button
+                    class="btn-delete"
+                    :disabled="storicoDeleting === a.id"
+                    @click="removeAnalysis(a.id)"
+                  >
+                    {{ storicoDeleting === a.id ? '…' : 'Elimina' }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="mapping-actions">
+          <button class="btn-secondary" @click="loadStorico">Aggiorna</button>
         </div>
       </div>
     </template>
@@ -1155,6 +1270,83 @@ async function confirmJobGradingMapping() {
   color: var(--text-secondary);
 }
 
+.storico-status {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.storico-empty {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  padding: 2rem 0;
+  text-align: center;
+}
+
+.storico-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 1.5rem;
+}
+
+.storico-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.storico-table th,
+.storico-table td {
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.storico-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.storico-table tbody tr:hover {
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.storico-url {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storico-id {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.btn-delete {
+  background: none;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background: #ef4444;
+  color: #fff;
+}
+
+.btn-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .band-section {
   margin-bottom: 1.25rem;
 }
@@ -1172,20 +1364,40 @@ async function confirmJobGradingMapping() {
 .band-5 { color: #8b3a3a; }
 
 .job-table {
+  width: 100%;
   background: var(--bg-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-soft);
-  overflow: hidden;
+  overflow-x: auto;
 }
 
 .job-row {
   display: grid;
-  grid-template-columns: 1.7fr repeat(5, 0.9fr) 1fr 1.1fr;
+  grid-template-columns: 2fr repeat(5, 1fr) 1.1fr 1.2fr;
   gap: 0.5rem;
   padding: 0.6rem 0.85rem;
   border-bottom: 1px solid var(--border-light);
   align-items: center;
   font-size: 0.82rem;
+}
+
+.score-input {
+  width: 100%;
+  max-width: 72px;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  text-align: center;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  transition: border-color 0.15s;
+}
+
+.score-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
 }
 
 .job-row.header {
