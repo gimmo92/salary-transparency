@@ -1,0 +1,144 @@
+import * as XLSX from 'xlsx'
+
+export const COLUMN_ROLES = {
+  gender: 'gender',
+  employeeName: 'employeeName',
+  baseSalary: 'baseSalary',
+  variableComponents: 'variableComponents',
+  totalSalary: 'totalSalary',
+  category: 'category',
+  role: 'role',
+  level: 'level',
+  description: 'description',
+}
+
+export function getRoleLabel(role) {
+  const labels = {
+    [COLUMN_ROLES.gender]: 'Genere (M/F)',
+    [COLUMN_ROLES.employeeName]: 'Nome dipendente',
+    [COLUMN_ROLES.baseSalary]: 'Retribuzione base annua',
+    [COLUMN_ROLES.variableComponents]: 'Componenti variabili',
+    [COLUMN_ROLES.totalSalary]: 'Retribuzione totale annua',
+    [COLUMN_ROLES.category]: 'Categoria / inquadramento',
+    [COLUMN_ROLES.role]: 'Ruolo',
+    [COLUMN_ROLES.level]: 'Livello / seniority',
+    [COLUMN_ROLES.description]: 'Descrizione ruolo',
+  }
+  return labels[role] ?? role
+}
+
+export async function parseExcelFromUrl(url, { headerRowIndex = 0 } = {}) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Download non riuscito (${response.status})`)
+  }
+  const arrayBuffer = await response.arrayBuffer()
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+  const sheetName = workbook.SheetNames[0]
+  const sheet = workbook.Sheets[sheetName]
+
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
+  if (!rows.length) {
+    return { rows: [], headers: [] }
+  }
+
+  const headers = rows[headerRowIndex] || []
+  const dataRows = rows.slice(headerRowIndex + 1)
+
+  return {
+    headers: headers.map((h) => String(h ?? '').trim()),
+    rows: dataRows,
+  }
+}
+
+export function detectColumnRoles(headers, rows) {
+  const result = {}
+  const lower = headers.map((h) => String(h || '').toLowerCase())
+
+  const find = (...candidates) =>
+    lower.findIndex((h) => candidates.some((c) => h.includes(c))) ?? -1
+
+  const genderIdx = find('genere', 'gender', 'sesso')
+  if (genderIdx >= 0) result[COLUMN_ROLES.gender] = genderIdx
+
+  const nameIdx = find('nome', 'cognome', 'employee')
+  if (nameIdx >= 0) result[COLUMN_ROLES.employeeName] = nameIdx
+
+  const baseIdx = find('base', 'ral', 'retribuzione base')
+  if (baseIdx >= 0) result[COLUMN_ROLES.baseSalary] = baseIdx
+
+  const varIdx = find('variabil', 'bonus', 'premio')
+  if (varIdx >= 0) result[COLUMN_ROLES.variableComponents] = varIdx
+
+  const totIdx = find('totale', 'total')
+  if (totIdx >= 0) result[COLUMN_ROLES.totalSalary] = totIdx
+
+  const catIdx = find('categoria', 'inquadramento')
+  if (catIdx >= 0) result[COLUMN_ROLES.category] = catIdx
+
+  const roleIdx = find('ruolo', 'job title', 'posizione')
+  if (roleIdx >= 0) result[COLUMN_ROLES.role] = roleIdx
+
+  const levelIdx = find('livello', 'grade', 'band')
+  if (levelIdx >= 0) result[COLUMN_ROLES.level] = levelIdx
+
+  const descIdx = find('descrizione', 'description', 'mansione')
+  if (descIdx >= 0) result[COLUMN_ROLES.description] = descIdx
+
+  return result
+}
+
+export function buildNormalizedData(rows, headers, mapping) {
+  if (!rows?.length || !headers?.length || !mapping) return []
+
+  const idx = (key) =>
+    Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : undefined
+
+  const genderIdx = idx(COLUMN_ROLES.gender)
+  const nameIdx = idx(COLUMN_ROLES.employeeName)
+  const baseIdx = idx(COLUMN_ROLES.baseSalary)
+  const varIdx = idx(COLUMN_ROLES.variableComponents)
+  const totalIdx = idx(COLUMN_ROLES.totalSalary)
+  const catIdx = idx(COLUMN_ROLES.category)
+  const roleIdx = idx(COLUMN_ROLES.role)
+  const levelIdx = idx(COLUMN_ROLES.level)
+  const descIdx = idx(COLUMN_ROLES.description)
+
+  const parseNumber = (value) => {
+    if (value == null || value === '') return 0
+    if (typeof value === 'number') return value
+    const cleaned = String(value)
+      .replace(/\./g, '')
+      .replace(/,/g, '.')
+      .replace(/[^\d.-]/g, '')
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  return rows
+    .map((row) => {
+      const genderRaw = genderIdx != null ? row[genderIdx] : null
+      const gender =
+        String(genderRaw || '')
+          .trim()
+          .toUpperCase()
+          .charAt(0) || null
+
+      return {
+        gender,
+        name: nameIdx != null ? row[nameIdx] : null,
+        baseSalary: baseIdx != null ? parseNumber(row[baseIdx]) : 0,
+        variableComponents: varIdx != null ? parseNumber(row[varIdx]) : 0,
+        totalSalary:
+          totalIdx != null
+            ? parseNumber(row[totalIdx])
+            : parseNumber(row[baseIdx]) + parseNumber(row[varIdx]),
+        category: catIdx != null ? row[catIdx] : null,
+        role: roleIdx != null ? row[roleIdx] : null,
+        level: levelIdx != null ? row[levelIdx] : null,
+        description: descIdx != null ? row[descIdx] : null,
+      }
+    })
+    .filter((r) => r.gender === 'M' || r.gender === 'F')
+}
+
