@@ -12,6 +12,7 @@ import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
   scoreJobRolesWithGemini,
+  checkGeminiAvailable,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
@@ -51,7 +52,7 @@ const jobSource = ref('locale')
 
 const resultsTab = ref('genere') // 'genere' | 'pari_valore'
 
-const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
+const geminiEnabled = ref(false)
 
 const allRoleKeys = [
   COLUMN_ROLES.gender,
@@ -225,17 +226,17 @@ async function onLoadFromUrl() {
     excelHeaders.value = headers
     const heuristic = detectColumnRoles(headers, rows)
     let suggested = { ...heuristic }
-    if (googleApiKey) {
+    if (geminiEnabled.value) {
       geminiLoading.value = true
       try {
-        const geminiMapping = await suggestColumnMappingWithGemini(googleApiKey, headers, rows)
+        const geminiMapping = await suggestColumnMappingWithGemini(headers, rows)
         if (geminiMapping && Object.keys(geminiMapping).length > 0)
           suggested = { ...heuristic, ...geminiMapping }
       } catch (geminiErr) {
         uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Usa il mapping manuale.'
       } finally { geminiLoading.value = false }
     } else {
-      uploadError.value = 'Gemini non attivo: manca VITE_GOOGLE_AI_API_KEY. Uso mapping euristico.'
+      uploadError.value = 'Gemini non attivo: API non configurata sul server. Uso mapping euristico.'
     }
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
@@ -253,10 +254,10 @@ async function confirmMapping() {
     const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedGender.length > 0) {
       const localIndicators = computeIndicators(normalizedGender)
-      if (googleApiKey) {
+      if (geminiEnabled.value) {
         geminiLoading.value = true
         try {
-          const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalizedGender)
+          const aiIndicators = await computeIndicatorsWithGemini(normalizedGender)
           const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
           const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
           const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
@@ -292,11 +293,11 @@ async function confirmMapping() {
       let scored = fallbackLocalJobScores(aggregated)
       jobSource.value = 'locale'
 
-      if (googleApiKey) {
+      if (geminiEnabled.value) {
         geminiLoading.value = true
         try {
           const aiInput = aggregated.map((r) => ({ role: r.role, level: r.level, job_description: r.description }))
-          const aiScores = await scoreJobRolesWithGemini(googleApiKey, aiInput)
+          const aiScores = await scoreJobRolesWithGemini(aiInput)
           const mapAi = new Map(aiScores.map((x) => [String(x.role || '').toLowerCase().trim(), x]))
           scored = aggregated.map((r) => {
             const ai = mapAi.get(String(r.role || '').toLowerCase().trim())
@@ -624,7 +625,10 @@ function cancelIncreaseEdit() {
   srView.value = 'list'
 }
 
-onMounted(() => { loadRules() })
+onMounted(async () => {
+  loadRules()
+  geminiEnabled.value = await checkGeminiAvailable()
+})
 
 // PDF export job grading
 function exportJobGradingPdf() {
@@ -778,7 +782,7 @@ function exportJobGradingPdf() {
           </select>
           <span class="header-row-hint">Usa «2» se la prima riga è vuota o contiene numeri.</span>
         </div>
-        <p class="api-key-warn">Stato Gemini: <strong>{{ googleApiKey ? 'attivo' : 'non attivo' }}</strong></p>
+        <p class="api-key-warn">Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong></p>
         <p class="url-hint">Puoi incollare un link Google Sheets: verrà convertito in download .xlsx.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
