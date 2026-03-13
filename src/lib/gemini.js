@@ -13,8 +13,10 @@ async function postJson(url, body) {
 
 export async function checkGeminiAvailable() {
   try {
-    const res = await fetch('/api/gemini/mapping', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ headers: [] }) })
-    return res.status !== 404
+    const res = await fetch('/api/gemini/status')
+    if (!res.ok) return false
+    const data = await res.json()
+    return !!data.geminiEnabled
   } catch {
     return false
   }

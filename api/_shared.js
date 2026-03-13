@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 export function getModel() {
   const key = process.env.GOOGLE_AI_API_KEY
-  if (!key) throw new Error('GOOGLE_AI_API_KEY not configured on server.')
+  if (!key) throw new Error('GOOGLE_AI_API_KEY not configured. Add it in Vercel > Settings > Environment Variables.')
   const genAI = new GoogleGenerativeAI(key)
   return genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 }
