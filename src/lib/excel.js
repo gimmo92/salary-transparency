@@ -27,27 +27,18 @@ export function getRoleLabel(role) {
   return labels[role] ?? role
 }
 
-function scoreHeaderRow(row) {
-  if (!row || !Array.isArray(row)) return -1
-  const nonEmpty = row.filter((c) => c != null && String(c).trim() !== '')
-  if (nonEmpty.length < 2) return -1
-  const strings = nonEmpty.filter((c) => typeof c === 'string' && isNaN(Number(c)))
-  if (strings.length / nonEmpty.length < 0.5) return -1
-  const avgLen = strings.reduce((s, c) => s + String(c).length, 0) / (strings.length || 1)
-  return strings.length * avgLen
-}
-
 function detectHeaderRow(rows) {
-  let bestIdx = 0
-  let bestScore = -1
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    const score = scoreHeaderRow(rows[i])
-    if (score > bestScore) {
-      bestScore = score
-      bestIdx = i
-    }
+    const row = rows[i]
+    if (!row || !Array.isArray(row)) continue
+    const nonEmpty = row.filter((c) => c != null && String(c).trim() !== '')
+    if (nonEmpty.length < 2) continue
+    const strings = nonEmpty.filter((c) => typeof c === 'string' && isNaN(Number(c)))
+    const textRatio = strings.length / nonEmpty.length
+    const avgLen = strings.reduce((s, c) => s + String(c).length, 0) / (strings.length || 1)
+    if (textRatio >= 0.5 && avgLen > 2) return i
   }
-  return bestIdx
+  return 0
 }
 
 export async function parseExcelFromUrl(url) {
