@@ -37,7 +37,6 @@ const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
 const excelUrl = ref('')
-const headerRowIndex = ref(1)
 const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
@@ -221,7 +220,7 @@ async function onLoadFromUrl() {
   uploadLoading.value = true
   geminiLoading.value = false
   try {
-    const { rows, headers } = await parseExcelFromUrl(url, { headerRowIndex: headerRowIndex.value })
+    const { rows, headers } = await parseExcelFromUrl(url)
     excelRows.value = rows
     excelHeaders.value = headers
     const heuristic = detectColumnRoles(headers, rows)
@@ -328,7 +327,6 @@ async function confirmMapping() {
       const saved = await saveAnalysis({
         analysisType: 'combined',
         sourceUrl: excelUrl.value,
-        headerRowIndex: headerRowIndex.value,
         headers: excelHeaders.value,
         mapping: columnMapping.value,
         rows: excelRows.value.slice(0, 500),
@@ -773,14 +771,6 @@ function exportJobGradingPdf() {
             <span v-else-if="geminiLoading">Riconoscimento colonne…</span>
             <span v-else>Carica e mappa colonne</span>
           </button>
-        </div>
-        <div class="header-row-option">
-          <label>Intestazioni colonne nella riga:</label>
-          <select v-model.number="headerRowIndex" class="header-row-select">
-            <option :value="0">1 (prima riga)</option>
-            <option :value="1">2 (seconda riga)</option>
-          </select>
-          <span class="header-row-hint">Usa «2» se la prima riga è vuota o contiene numeri.</span>
         </div>
         <p class="api-key-warn">Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong></p>
         <p class="url-hint">Puoi incollare un link Google Sheets: verrà convertito in download .xlsx.</p>

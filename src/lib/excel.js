@@ -27,7 +27,19 @@ export function getRoleLabel(role) {
   return labels[role] ?? role
 }
 
-export async function parseExcelFromUrl(url, { headerRowIndex = 0 } = {}) {
+function detectHeaderRow(rows) {
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const row = rows[i]
+    if (!row || !Array.isArray(row)) continue
+    const nonEmpty = row.filter((c) => c != null && String(c).trim() !== '')
+    if (nonEmpty.length < 2) continue
+    const stringCount = nonEmpty.filter((c) => typeof c === 'string' && isNaN(Number(c))).length
+    if (stringCount / nonEmpty.length >= 0.5) return i
+  }
+  return 0
+}
+
+export async function parseExcelFromUrl(url) {
   const response = await fetch(url)
   if (!response.ok) {
     throw new Error(`Download non riuscito (${response.status})`)
@@ -42,6 +54,7 @@ export async function parseExcelFromUrl(url, { headerRowIndex = 0 } = {}) {
     return { rows: [], headers: [] }
   }
 
+  const headerRowIndex = detectHeaderRow(rows)
   const headers = rows[headerRowIndex] || []
   const dataRows = rows.slice(headerRowIndex + 1)
 
