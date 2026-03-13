@@ -27,16 +27,27 @@ export function getRoleLabel(role) {
   return labels[role] ?? role
 }
 
+function scoreHeaderRow(row) {
+  if (!row || !Array.isArray(row)) return -1
+  const nonEmpty = row.filter((c) => c != null && String(c).trim() !== '')
+  if (nonEmpty.length < 2) return -1
+  const strings = nonEmpty.filter((c) => typeof c === 'string' && isNaN(Number(c)))
+  if (strings.length / nonEmpty.length < 0.5) return -1
+  const avgLen = strings.reduce((s, c) => s + String(c).length, 0) / (strings.length || 1)
+  return strings.length * avgLen
+}
+
 function detectHeaderRow(rows) {
+  let bestIdx = 0
+  let bestScore = -1
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    const row = rows[i]
-    if (!row || !Array.isArray(row)) continue
-    const nonEmpty = row.filter((c) => c != null && String(c).trim() !== '')
-    if (nonEmpty.length < 2) continue
-    const stringCount = nonEmpty.filter((c) => typeof c === 'string' && isNaN(Number(c))).length
-    if (stringCount / nonEmpty.length >= 0.5) return i
+    const score = scoreHeaderRow(rows[i])
+    if (score > bestScore) {
+      bestScore = score
+      bestIdx = i
+    }
   }
-  return 0
+  return bestIdx
 }
 
 export async function parseExcelFromUrl(url) {
