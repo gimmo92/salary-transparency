@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -16,10 +16,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing headers' })
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
     const sampleRows = (rows || []).slice(0, 5)
-
     const prompt = `You are a data analyst. Given the following spreadsheet column headers and sample rows, map each header to the most appropriate role for a salary transparency analysis.
 
 Available roles (use these exact keys):
@@ -40,8 +37,22 @@ Return ONLY a JSON object mapping role keys to column indices (0-based). Only in
 
 JSON:`
 
-    const result = await model.generateContent(prompt)
-    const text = result.response.text()
+    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1 },
+      }),
+    })
+
+    if (!geminiRes.ok) {
+      const errBody = await geminiRes.text()
+      return res.status(502).json({ error: `Gemini API error ${geminiRes.status}: ${errBody.slice(0, 300)}` })
+    }
+
+    const data = await geminiRes.json()
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
     const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
     const mapping = JSON.parse(cleaned)
 
