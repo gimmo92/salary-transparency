@@ -1,19 +1,23 @@
-import { getModel, askGeminiJson } from '../_shared.js'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' })
-    return
+    return res.status(405).json({ error: 'Method not allowed' })
+  }
+
+  const apiKey = process.env.GOOGLE_AI_API_KEY
+  if (!apiKey) {
+    return res.status(500).json({ error: 'GOOGLE_AI_API_KEY not configured on server.' })
   }
 
   try {
-    const { normalizedData } = req.body
-    if (!normalizedData?.length) {
-      res.status(400).json({ error: 'Missing normalizedData' })
-      return
+    const { normalizedData } = req.body || {}
+    if (!normalizedData || !normalizedData.length) {
+      return res.status(400).json({ error: 'Missing normalizedData' })
     }
 
-    const model = getModel()
+    const genAI = new GoogleGenerativeAI(apiKey)
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
     const prompt = `You are an expert in EU pay transparency regulations. Analyze the following employee salary data and compute gender pay gap indicators.
 
@@ -68,8 +72,7 @@ Compute and return a JSON object with EXACTLY this structure:
   "g_divarioPerCategoria": {
     "descrizione": "Divario retributivo per categoria/inquadramento.",
     "perCategoria": [
-      {"categoria": "<name>", "n": <int>, "divarioBase": <number>, "divarioVariabile": <number>},
-      ...
+      {"categoria": "<name>", "n": <int>, "divarioBase": <number>, "divarioVariabile": <number>}
     ]
   },
   "h_divarioRetribuzioneBase": {
@@ -81,15 +84,18 @@ Compute and return a JSON object with EXACTLY this structure:
 }
 
 Gap formula: ((maleMean - femaleMean) / maleMean) * 100. Positive = men earn more.
-
 Return ONLY the JSON, no explanation.
 
 JSON:`
 
-    const indicators = await askGeminiJson(model, prompt)
-    res.status(200).json(indicators)
+    const result = await model.generateContent(prompt)
+    const text = result.response.text()
+    const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
+    const indicators = JSON.parse(cleaned)
+
+    return res.status(200).json(indicators)
   } catch (err) {
     console.error('Gemini indicators error:', err)
-    res.status(500).json({ error: err.message || 'Gemini indicators failed' })
+    return res.status(500).json({ error: err.message || 'Gemini indicators failed' })
   }
 }

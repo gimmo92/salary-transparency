@@ -1,19 +1,23 @@
-import { getModel, jsonResponse, errorResponse, askGeminiJson } from '../_shared.js'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' })
-    return
+    return res.status(405).json({ error: 'Method not allowed' })
+  }
+
+  const apiKey = process.env.GOOGLE_AI_API_KEY
+  if (!apiKey) {
+    return res.status(500).json({ error: 'GOOGLE_AI_API_KEY not configured on server.' })
   }
 
   try {
-    const { headers, rows } = req.body
-    if (!headers?.length) {
-      res.status(400).json({ error: 'Missing headers' })
-      return
+    const { headers, rows } = req.body || {}
+    if (!headers || !headers.length) {
+      return res.status(400).json({ error: 'Missing headers' })
     }
 
-    const model = getModel()
+    const genAI = new GoogleGenerativeAI(apiKey)
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
     const sampleRows = (rows || []).slice(0, 5)
 
     const prompt = `You are a data analyst. Given the following spreadsheet column headers and sample rows, map each header to the most appropriate role for a salary transparency analysis.
@@ -36,10 +40,14 @@ Return ONLY a JSON object mapping role keys to column indices (0-based). Only in
 
 JSON:`
 
-    const mapping = await askGeminiJson(model, prompt)
-    res.status(200).json(mapping)
+    const result = await model.generateContent(prompt)
+    const text = result.response.text()
+    const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
+    const mapping = JSON.parse(cleaned)
+
+    return res.status(200).json(mapping)
   } catch (err) {
     console.error('Gemini mapping error:', err)
-    res.status(500).json({ error: err.message || 'Gemini mapping failed' })
+    return res.status(500).json({ error: err.message || 'Gemini mapping failed' })
   }
 }
