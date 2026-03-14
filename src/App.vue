@@ -62,7 +62,7 @@ const analysisSettings = ref({
   weights: { level: 45, skills: 15, responsibility: 20, mentalEffort: 10, conditions: 10 },
   filterOutliers: true,
   strictOutliers: true,
-  bandWidth: 50,
+  bandCount: 10,
 })
 
 const weightsTotal = computed(() => {
@@ -191,7 +191,7 @@ function onScoreEdit(r) {
 function recalcBandsAndDeviation() {
   const settings = analysisSettings.value
   jobResults.value = enrichWithBandsAndDeviation(jobResults.value, {
-    bandWidth: settings.bandWidth,
+    bandCount: settings.bandCount,
     filterOutliers: settings.filterOutliers,
     strictOutliers: settings.strictOutliers,
     weights: settings.weights,
@@ -339,7 +339,7 @@ async function confirmMapping() {
 
       const merged = aggregated.map((r) => ({ ...r, ...(scored.find((x) => x.role === r.role) || {}) }))
       jobResults.value = enrichWithBandsAndDeviation(merged, {
-        bandWidth: settings.bandWidth,
+        bandCount: settings.bandCount,
         filterOutliers: settings.filterOutliers,
         strictOutliers: settings.strictOutliers,
         weights: settings.weights,
@@ -887,9 +887,9 @@ function exportJobGradingPdf() {
           </div>
 
           <div class="settings-row">
-            <label class="sr-label">Ampiezza banda (punti)</label>
-            <p class="settings-hint">Range fisso di punteggio per ogni banda (es. 50 → bande 0-50, 51-100, ecc.)</p>
-            <input type="number" v-model.number="analysisSettings.bandWidth" class="sr-input sr-input-sm" min="10" max="200" step="10" :disabled="analysisLoading" />
+            <label class="sr-label">Numero di bande</label>
+            <p class="settings-hint">I ruoli verranno distribuiti equamente nel numero di bande specificato.</p>
+            <input type="number" v-model.number="analysisSettings.bandCount" class="sr-input sr-input-sm" min="2" max="30" step="1" :disabled="analysisLoading" />
           </div>
         </div>
 

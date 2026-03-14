@@ -190,7 +190,7 @@ export function computeWeightedScore(scores, weights) {
   return baseScore * multiplier
 }
 
-export function enrichWithBandsAndDeviation(roles, { bandWidth = 50, filterOutliers = true, strictOutliers = true, weights } = {}) {
+export function enrichWithBandsAndDeviation(roles, { bandCount = 10, filterOutliers = true, strictOutliers = true, weights } = {}) {
   if (!roles.length) return []
 
   roles.forEach((r) => {
@@ -199,9 +199,10 @@ export function enrichWithBandsAndDeviation(roles, { bandWidth = 50, filterOutli
 
   const sorted = [...roles].sort((a, b) => b.totalScore - a.totalScore)
 
-  const maxScore = sorted[0]?.totalScore || 100
-  sorted.forEach((r) => {
-    r.band = Math.max(1, Math.ceil((maxScore - r.totalScore + 1) / bandWidth))
+  const n = sorted.length
+  const perBand = Math.max(1, Math.ceil(n / bandCount))
+  sorted.forEach((r, i) => {
+    r.band = Math.min(bandCount, Math.floor(i / perBand) + 1)
   })
 
   const maxBand = Math.max(...sorted.map((r) => r.band))
