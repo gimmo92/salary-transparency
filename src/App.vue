@@ -20,6 +20,8 @@ import {
   enrichWithBandsAndDeviation,
   computeWeightedScore,
   normalizeLevelScore,
+  getJobFamily,
+  getJobFamilyMultiplier,
 } from './lib/jobGrading.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
@@ -59,6 +61,7 @@ const geminiEnabled = ref(false)
 const analysisSettings = ref({
   weights: { level: 45, skills: 15, responsibility: 20, mentalEffort: 10, conditions: 10 },
   filterOutliers: true,
+  strictOutliers: true,
   bandWidth: 50,
 })
 
@@ -190,6 +193,7 @@ function recalcBandsAndDeviation() {
   jobResults.value = enrichWithBandsAndDeviation(jobResults.value, {
     bandWidth: settings.bandWidth,
     filterOutliers: settings.filterOutliers,
+    strictOutliers: settings.strictOutliers,
     weights: settings.weights,
   })
 }
@@ -205,8 +209,10 @@ function fallbackLocalJobScores(roles) {
     const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
     const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
     const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
-    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, levelScore }
-    return { role: r.role, levelScore, ...scores, totalScore: computeWeightedScore(scores, weights) }
+    const family = r.jobFamily || getJobFamily(r.role)
+    const multiplier = r.jobFamilyMultiplier ?? getJobFamilyMultiplier(family)
+    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, levelScore, jobFamilyMultiplier: multiplier }
+    return { role: r.role, levelScore, jobFamily: family, jobFamilyMultiplier: multiplier, ...scores, totalScore: computeWeightedScore(scores, weights) }
   })
 }
 
@@ -304,7 +310,7 @@ async function confirmMapping() {
     const settings = analysisSettings.value
     const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedJob.length > 0) {
-      const aggregated = aggregateRolesForGrading(normalizedJob, { filterOutliers: settings.filterOutliers })
+      const aggregated = aggregateRolesForGrading(normalizedJob, { filterOutliers: settings.filterOutliers, strictOutliers: settings.strictOutliers })
       let scored = fallbackLocalJobScores(aggregated)
       jobSource.value = 'locale'
 
@@ -320,8 +326,10 @@ async function confirmMapping() {
             const c = Number(ai.competenze_richieste ?? 0), resp = Number(ai.responsabilita ?? 0)
             const s = Number(ai.sforzo_mentale ?? 0), cond = Number(ai.condizioni_lavorative ?? 0)
             const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
-            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, levelScore }
-            return { role: r.role, levelScore, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
+            const family = r.jobFamily || getJobFamily(r.role)
+            const multiplier = r.jobFamilyMultiplier ?? getJobFamilyMultiplier(family)
+            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, levelScore, jobFamilyMultiplier: multiplier }
+            return { role: r.role, levelScore, jobFamily: family, jobFamilyMultiplier: multiplier, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
           })
           jobSource.value = 'ai'
         } catch (err) {
@@ -333,6 +341,7 @@ async function confirmMapping() {
       jobResults.value = enrichWithBandsAndDeviation(merged, {
         bandWidth: settings.bandWidth,
         filterOutliers: settings.filterOutliers,
+        strictOutliers: settings.strictOutliers,
         weights: settings.weights,
       })
     } else {
@@ -673,26 +682,23 @@ function exportJobGradingPdf() {
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
   const regText = [
-    'La valutazione dei ruoli è basata sul metodo Hay, uno standard internazionale per la classificazione e la',
-    'valutazione delle posizioni lavorative. Il metodo si fonda su quattro fattori, ciascuno espresso con un',
-    'punteggio da 0 a 100:',
+    'La valutazione dei ruoli è basata su cinque fattori ponderati con Clustering Funzionale:',
     '',
-    '1. Competenze richieste (0-100): valuta il livello di conoscenze tecniche, professionali e gestionali',
-    '   necessarie per svolgere il ruolo, inclusi titoli di studio, certificazioni e anni di esperienza richiesti.',
+    '1. Inquadramento Contrattuale (Livello CCNL): fattore predominante, normalizzato in scala 0-100',
+    '   (D1-D2=20pt, C1-C3=40pt, B1-B3=65pt, AS-A=85pt, Q=100pt).',
     '',
-    '2. Responsabilità (0-100): misura l\'impatto del ruolo sugli obiettivi organizzativi, la portata delle decisioni',
-    '   prese, il livello di autonomia e la gestione di risorse umane, economiche e materiali.',
+    '2. Competenze richieste (0-100): conoscenze tecniche, professionali e gestionali necessarie.',
     '',
-    '3. Sforzo mentale (0-100): valuta la complessità dei problemi da risolvere, il grado di analisi richiesta,',
-    '   la creatività necessaria e il livello di pensiero strategico e decisionale coinvolto.',
+    '3. Responsabilità (0-100): impatto sugli obiettivi, autonomia, gestione risorse.',
     '',
-    '4. Condizioni lavorative (0-100): considera l\'ambiente fisico di lavoro, i rischi professionali, lo stress,',
-    '   la necessità di turni, trasferte, reperibilità e altre condizioni particolari del ruolo.',
+    '4. Sforzo mentale (0-100): complessità dei problemi, analisi, pensiero strategico.',
     '',
-    'Il punteggio totale (max 400) determina la fascia di appartenenza del ruolo. I ruoli sono ordinati per',
-    'punteggio decrescente e suddivisi in 5 fasce. Per ciascun ruolo viene calcolato lo scostamento percentuale',
-    'della retribuzione media rispetto alla media della fascia di appartenenza. Scostamenti superiori al ±5%',
-    'richiedono un giustificativo documentato.',
+    '5. Condizioni lavorative (0-100): ambiente fisico, rischi, turni, trasferte.',
+    '',
+    'Job Family: ai ruoli IT/Tech è applicato un moltiplicatore di mercato (1.2x) al punteggio finale.',
+    'Outliers: sono esclusi dal calcolo record con RAL < 15k o > 150k (eccezione: Manager/Dirigenti).',
+    'La deviazione di banda è calcolata sulla mediana salariale (non sulla media) per robustezza statistica.',
+    'Scostamenti superiori al ±5% richiedono un giustificativo documentato.',
   ]
   regText.forEach((line) => {
     doc.text(line, 14, y)
@@ -700,18 +706,19 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Ruolo', 'Livello', 'Competenze', 'Responsabilità', 'Sforzo', 'Condizioni', 'Totale', 'Retrib. media', 'Scost. fascia', 'N', 'Giustificativo']]
+  const head = [['Fascia', 'Ruolo', 'Livello', 'Family', 'Competenze', 'Resp.', 'Sforzo', 'Cond.', 'Totale', 'Mediana Retrib.', 'Scost. fascia', 'N', 'Giustificativo']]
   const body = jobResults.value.map((r) => [
     r.band,
     r.role || '–',
     r.level || '–',
+    r.jobFamily || '–',
     r.competenze_richieste,
     r.responsabilita,
     r.sforzo_mentale,
     r.condizioni_lavorative,
-    r.totalScore,
-    formatNum(r.avgTotalSalary),
-    formatPct(r.deviationFromBandAvgPct),
+    formatNum(r.totalScore),
+    formatNum(r.medianTotalSalary),
+    formatPct(r.deviationFromBandMedianPct),
     r.n,
     justifications.value[r.role] || '',
   ])
@@ -868,7 +875,14 @@ function exportJobGradingPdf() {
           <div class="settings-row">
             <label class="sr-checkbox-row">
               <input type="checkbox" v-model="analysisSettings.filterOutliers" :disabled="analysisLoading" />
-              <span>Filtro Outliers (escludi record con RAL/Totale = 0, null o N/D)</span>
+              <span>Filtro base (escludi record con RAL/Totale = 0, null o N/D)</span>
+            </label>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-checkbox-row">
+              <input type="checkbox" v-model="analysisSettings.strictOutliers" :disabled="analysisLoading" />
+              <span>Strict Outlier Removal (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
             </label>
           </div>
 
@@ -982,25 +996,26 @@ function exportJobGradingPdf() {
             <h3 class="band-title" :class="scoreBadgeClass(band)">Band {{ band }}</h3>
             <div class="job-table">
               <div class="job-row header">
-                <span>Role</span><span>Livello</span><span>Skills</span><span>Responsibility</span><span>Mental Effort</span><span>Conditions</span><span>Total</span><span>Avg. Comp.</span><span>Band Dev.</span><span>N</span>
+                <span>Role</span><span>Livello</span><span>Family</span><span>Skills</span><span>Resp.</span><span>Effort</span><span>Cond.</span><span>Total</span><span>Median Comp.</span><span>Band Dev.</span><span>N</span>
               </div>
               <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
-                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandAvgPct) > 25 }">
+                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandMedianPct) > 25 }">
                   <span>
                     <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
                     {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
                   </span>
                   <span>{{ formatNum(r.levelScore) }}</span>
+                  <span class="job-family-cell">{{ r.jobFamily }}<small v-if="r.jobFamilyMultiplier > 1" class="multiplier-badge">×{{ r.jobFamilyMultiplier }}</small></span>
                   <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
-                  <span>{{ formatNum(r.avgTotalSalary) }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">
-                    {{ formatPct(r.deviationFromBandAvgPct) }}
+                  <span>{{ formatNum(r.medianTotalSalary) }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandMedianPct) }">
+                    {{ formatPct(r.deviationFromBandMedianPct) }}
                     <button
-                      v-if="isGapAlert(r.deviationFromBandAvgPct)"
+                      v-if="isGapAlert(r.deviationFromBandMedianPct)"
                       class="btn-justify"
                       :class="{ 'has-note': justifications[r.role] }"
                       title="Add justification"
@@ -2531,7 +2546,7 @@ function exportJobGradingPdf() {
 
 .job-row {
   display: grid;
-  grid-template-columns: 2fr repeat(6, 1fr) 1fr 1fr 0.5fr;
+  grid-template-columns: 2fr 0.6fr 1fr repeat(4, 0.7fr) 0.8fr 1.1fr 0.9fr 0.5fr;
   gap: 0.5rem;
   padding: 0.6rem 0.85rem;
   border-bottom: 1px solid var(--border-light);
@@ -3050,5 +3065,20 @@ function exportJobGradingPdf() {
 .row-warning {
   background: rgba(245, 158, 11, 0.08) !important;
   border-left: 3px solid #f59e0b;
+}
+.job-family-cell {
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.multiplier-badge {
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 8px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 </style>
