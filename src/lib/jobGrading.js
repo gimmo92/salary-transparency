@@ -1,28 +1,51 @@
 // --- 1. Level Hierarchy ---
 
-const LEVEL_MAP = {
+const LEVEL_EXACT = {
   'd1': 20, 'd2': 25, 'd': 20,
   'c3': 40, 'c2': 45, 'c1': 50, 'c': 45,
-  'b2': 65, 'b1': 70, 'b3': 60, 'b': 65,
+  'b3': 60, 'b2': 65, 'b1': 70, 'b': 65,
   'as': 80,
-  'a': 85, 'a1': 90, 'a2': 85,
-  'q': 100, 'quadro': 100, 'quadri': 100, 'quadri/manager': 100,
+  'a': 85, 'a2': 85, 'a1': 90,
+  'q': 100, 'quadro': 100, 'quadri': 100,
   'dirigente': 100, 'dir': 100, 'manager': 100,
-  '1': 100, '2': 85, '3': 65, '4': 45, '5': 30, '6': 20, '7': 20, '8': 20,
 }
+
+const LEVEL_NUMERIC = { 1: 100, 2: 85, 3: 65, 4: 45, 5: 30, 6: 20, 7: 20, 8: 20 }
+
+const LEVEL_FUZZY = [
+  [/\bq\b|quadr|dirig|manager/i, 100],
+  [/\ba1\b/i, 90],
+  [/\ba2?\b/i, 85],
+  [/\bas\b/i, 80],
+  [/\bb1\b/i, 70],
+  [/\bb2?\b/i, 65],
+  [/\bb3\b/i, 60],
+  [/\bc1\b/i, 50],
+  [/\bc2?\b/i, 45],
+  [/\bc3\b/i, 40],
+  [/\bd2\b/i, 25],
+  [/\bd1?\b/i, 20],
+]
 
 export function normalizeLevelScore(levelRaw) {
   if (levelRaw == null || levelRaw === '') return 40
-  const cleaned = String(levelRaw).trim().toLowerCase()
+  const raw = String(levelRaw).trim()
+  const cleaned = raw.toLowerCase()
     .replace(/\s+/g, '')
-    .replace(/^livello\s*/i, '')
-    .replace(/^liv\.?\s*/i, '')
-  if (LEVEL_MAP[cleaned] != null) return LEVEL_MAP[cleaned]
-  for (const [key, val] of Object.entries(LEVEL_MAP)) {
-    if (cleaned.includes(key)) return val
+    .replace(/^livello/i, '')
+    .replace(/^liv\.?/i, '')
+    .trim()
+
+  if (LEVEL_EXACT[cleaned] != null) return LEVEL_EXACT[cleaned]
+
+  const asNum = Number(cleaned)
+  if (Number.isInteger(asNum) && LEVEL_NUMERIC[asNum] != null) return LEVEL_NUMERIC[asNum]
+
+  for (const [regex, score] of LEVEL_FUZZY) {
+    if (regex.test(raw)) return score
   }
-  const num = Number(cleaned)
-  if (Number.isFinite(num) && num >= 0 && num <= 100) return num
+
+  if (Number.isFinite(asNum) && asNum >= 0 && asNum <= 100) return asNum
   return 40
 }
 
