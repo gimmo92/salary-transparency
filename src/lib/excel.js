@@ -21,7 +21,7 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.totalSalary]: 'Retribuzione totale annua',
     [COLUMN_ROLES.category]: 'Categoria / inquadramento',
     [COLUMN_ROLES.role]: 'Ruolo',
-    [COLUMN_ROLES.level]: 'Livello / seniority',
+    [COLUMN_ROLES.level]: 'Livello contrattuale (es. Q, B1, C3)',
     [COLUMN_ROLES.description]: 'Descrizione ruolo',
   }
   return labels[role] ?? role

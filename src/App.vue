@@ -19,6 +19,7 @@ import {
   aggregateRolesForGrading,
   enrichWithBandsAndDeviation,
   computeWeightedScore,
+  normalizeLevelScore,
 } from './lib/jobGrading.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
@@ -56,14 +57,14 @@ const geminiEnabled = ref(false)
 
 // Analysis settings
 const analysisSettings = ref({
-  weights: { skills: 30, responsibility: 40, mentalEffort: 20, conditions: 10 },
+  weights: { level: 45, skills: 15, responsibility: 20, mentalEffort: 10, conditions: 10 },
   filterOutliers: true,
   bandWidth: 50,
 })
 
 const weightsTotal = computed(() => {
   const w = analysisSettings.value.weights
-  return w.skills + w.responsibility + w.mentalEffort + w.conditions
+  return w.level + w.skills + w.responsibility + w.mentalEffort + w.conditions
 })
 
 const weightsValid = computed(() => weightsTotal.value === 100)
@@ -203,8 +204,9 @@ function fallbackLocalJobScores(roles) {
     const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
     const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
     const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
-    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni }
-    return { role: r.role, ...scores, totalScore: computeWeightedScore(scores, weights) }
+    const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
+    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, levelScore }
+    return { role: r.role, levelScore, ...scores, totalScore: computeWeightedScore(scores, weights) }
   })
 }
 
@@ -317,8 +319,9 @@ async function confirmMapping() {
             if (!ai) return { ...fallbackLocalJobScores([r])[0], role: r.role }
             const c = Number(ai.competenze_richieste ?? 0), resp = Number(ai.responsabilita ?? 0)
             const s = Number(ai.sforzo_mentale ?? 0), cond = Number(ai.condizioni_lavorative ?? 0)
-            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond }
-            return { role: r.role, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
+            const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
+            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, levelScore }
+            return { role: r.role, levelScore, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
           })
           jobSource.value = 'ai'
         } catch (err) {
@@ -822,6 +825,13 @@ function exportJobGradingPdf() {
             <p class="settings-hint">I pesi determinano l'importanza relativa di ogni fattore. La somma deve essere 100%.</p>
             <div class="weights-grid">
               <div class="weight-field">
+                <label>Inquadramento Contrattuale</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.level" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('level')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
                 <label>Competenze</label>
                 <div class="weight-input-wrap">
                   <input type="number" v-model.number="analysisSettings.weights.skills" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('skills')" :disabled="analysisLoading" />
@@ -972,7 +982,7 @@ function exportJobGradingPdf() {
             <h3 class="band-title" :class="scoreBadgeClass(band)">Band {{ band }}</h3>
             <div class="job-table">
               <div class="job-row header">
-                <span>Role</span><span>Skills</span><span>Responsibility</span><span>Mental Effort</span><span>Conditions</span><span>Total</span><span>Avg. Comp.</span><span>Band Dev.</span><span>N</span>
+                <span>Role</span><span>Livello</span><span>Skills</span><span>Responsibility</span><span>Mental Effort</span><span>Conditions</span><span>Total</span><span>Avg. Comp.</span><span>Band Dev.</span><span>N</span>
               </div>
               <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
                 <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandAvgPct) > 25 }">
@@ -980,6 +990,7 @@ function exportJobGradingPdf() {
                     <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
                     {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
                   </span>
+                  <span>{{ formatNum(r.levelScore) }}</span>
                   <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
@@ -2520,7 +2531,7 @@ function exportJobGradingPdf() {
 
 .job-row {
   display: grid;
-  grid-template-columns: 2fr repeat(5, 1fr) 1fr 1fr 0.5fr;
+  grid-template-columns: 2fr repeat(6, 1fr) 1fr 1fr 0.5fr;
   gap: 0.5rem;
   padding: 0.6rem 0.85rem;
   border-bottom: 1px solid var(--border-light);
