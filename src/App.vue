@@ -190,7 +190,8 @@ function onScoreEdit(r) {
 
 function recalcBandsAndDeviation() {
   const settings = analysisSettings.value
-  jobResults.value = enrichWithBandsAndDeviation(jobResults.value, {
+  const current = jobResults.value.map((r) => ({ ...r }))
+  jobResults.value = enrichWithBandsAndDeviation(current, {
     bandCount: settings.bandCount,
     filterOutliers: settings.filterOutliers,
     strictOutliers: settings.strictOutliers,
@@ -1002,7 +1003,7 @@ function exportJobGradingPdf() {
             <label class="wb-field">Sforzo <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="wb-input" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" />%</label>
             <label class="wb-field">Cond. <input type="number" v-model.number="analysisSettings.weights.conditions" class="wb-input" min="0" max="100" step="5" @change="clampWeight('conditions')" />%</label>
             <span class="wb-total" :class="{ 'weights-error': !weightsValid }">= {{ weightsTotal }}%</span>
-            <button class="btn-sm btn-primary" :disabled="!weightsValid" @click="recalcBandsAndDeviation">Ricalcola</button>
+            <button type="button" class="btn-sm btn-primary" :disabled="!weightsValid" @click.stop.prevent="recalcBandsAndDeviation">Ricalcola</button>
           </div>
 
           <div v-for="band in [...new Set(jobResults.map(r => r.band))].sort((a,b) => a-b)" :key="band" class="band-section">
