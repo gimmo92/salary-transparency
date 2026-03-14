@@ -18,6 +18,7 @@ import {
   buildNormalizedJobGradingData,
   aggregateRolesForGrading,
   enrichWithBandsAndDeviation,
+  computeWeightedScore,
 } from './lib/jobGrading.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
@@ -52,6 +53,26 @@ const jobSource = ref('locale')
 const resultsTab = ref('genere') // 'genere' | 'pari_valore'
 
 const geminiEnabled = ref(false)
+
+// Analysis settings
+const analysisSettings = ref({
+  weights: { skills: 30, responsibility: 40, mentalEffort: 20, conditions: 10 },
+  filterOutliers: true,
+  bandWidth: 50,
+})
+
+const weightsTotal = computed(() => {
+  const w = analysisSettings.value.weights
+  return w.skills + w.responsibility + w.mentalEffort + w.conditions
+})
+
+const weightsValid = computed(() => weightsTotal.value === 100)
+
+function clampWeight(key) {
+  const w = analysisSettings.value.weights
+  if (w[key] < 0) w[key] = 0
+  if (w[key] > 100) w[key] = 100
+}
 
 const allRoleKeys = [
   COLUMN_ROLES.gender,
@@ -159,29 +180,21 @@ function toggleRoleExpand(role) {
 }
 
 function onScoreEdit(r) {
-  r.totalScore = (Number(r.competenze_richieste) || 0)
-    + (Number(r.responsabilita) || 0)
-    + (Number(r.sforzo_mentale) || 0)
-    + (Number(r.condizioni_lavorative) || 0)
+  r.totalScore = computeWeightedScore(r, analysisSettings.value.weights)
   recalcBandsAndDeviation()
 }
 
 function recalcBandsAndDeviation() {
-  const sorted = [...jobResults.value].sort((a, b) => b.totalScore - a.totalScore)
-  const n = sorted.length
-  const bandSize = Math.ceil(n / 5)
-  sorted.forEach((r, i) => { r.band = Math.min(5, Math.floor(i / bandSize) + 1) })
-  for (let b = 1; b <= 5; b++) {
-    const inBand = sorted.filter((x) => x.band === b)
-    const avg = inBand.length ? inBand.reduce((s, x) => s + (Number(x.avgTotalSalary) || 0), 0) / inBand.length : 0
-    inBand.forEach((r) => {
-      r.deviationFromBandAvgPct = avg ? (((Number(r.avgTotalSalary) || 0) - avg) / avg) * 100 : 0
-    })
-  }
-  jobResults.value = sorted
+  const settings = analysisSettings.value
+  jobResults.value = enrichWithBandsAndDeviation(jobResults.value, {
+    bandWidth: settings.bandWidth,
+    filterOutliers: settings.filterOutliers,
+    weights: settings.weights,
+  })
 }
 
 function fallbackLocalJobScores(roles) {
+  const weights = analysisSettings.value.weights
   return roles.map((r) => {
     const text = `${r.role || ''} ${r.level || ''} ${r.description || ''}`.toLowerCase()
     const clamp = (x) => Math.max(0, Math.min(100, Math.round(x)))
@@ -190,8 +203,8 @@ function fallbackLocalJobScores(roles) {
     const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
     const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
     const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
-    const totalScore = competenze + responsabilita + sforzo + condizioni
-    return { role: r.role, competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, totalScore }
+    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni }
+    return { role: r.role, ...scores, totalScore: computeWeightedScore(scores, weights) }
   })
 }
 
@@ -286,9 +299,10 @@ async function confirmMapping() {
     }
 
     // --- Job grading (lavori di pari valore) ---
+    const settings = analysisSettings.value
     const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedJob.length > 0) {
-      const aggregated = aggregateRolesForGrading(normalizedJob)
+      const aggregated = aggregateRolesForGrading(normalizedJob, { filterOutliers: settings.filterOutliers })
       let scored = fallbackLocalJobScores(aggregated)
       jobSource.value = 'locale'
 
@@ -303,7 +317,8 @@ async function confirmMapping() {
             if (!ai) return { ...fallbackLocalJobScores([r])[0], role: r.role }
             const c = Number(ai.competenze_richieste ?? 0), resp = Number(ai.responsabilita ?? 0)
             const s = Number(ai.sforzo_mentale ?? 0), cond = Number(ai.condizioni_lavorative ?? 0)
-            return { role: r.role, competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, totalScore: Number(ai.totalScore ?? (c + resp + s + cond)) }
+            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond }
+            return { role: r.role, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
           })
           jobSource.value = 'ai'
         } catch (err) {
@@ -312,7 +327,11 @@ async function confirmMapping() {
       }
 
       const merged = aggregated.map((r) => ({ ...r, ...(scored.find((x) => x.role === r.role) || {}) }))
-      jobResults.value = enrichWithBandsAndDeviation(merged)
+      jobResults.value = enrichWithBandsAndDeviation(merged, {
+        bandWidth: settings.bandWidth,
+        filterOutliers: settings.filterOutliers,
+        weights: settings.weights,
+      })
     } else {
       jobResults.value = []
     }
@@ -794,10 +813,66 @@ function exportJobGradingPdf() {
             </select>
           </div>
         </div>
+        <!-- Analysis Settings Panel -->
+        <div class="settings-panel">
+          <h3 class="settings-title">Impostazioni Analisi</h3>
+
+          <div class="settings-row">
+            <label class="sr-label">Pesi fattori Job Grading</label>
+            <p class="settings-hint">I pesi determinano l'importanza relativa di ogni fattore. La somma deve essere 100%.</p>
+            <div class="weights-grid">
+              <div class="weight-field">
+                <label>Competenze</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.skills" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('skills')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Responsabilità</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.responsibility" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('responsibility')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Sforzo mentale</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Condizioni</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.conditions" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('conditions')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+            </div>
+            <p class="weights-total" :class="{ 'weights-error': !weightsValid }">
+              Totale: {{ weightsTotal }}% <span v-if="!weightsValid">(deve essere 100%)</span>
+            </p>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-checkbox-row">
+              <input type="checkbox" v-model="analysisSettings.filterOutliers" :disabled="analysisLoading" />
+              <span>Filtro Outliers (escludi record con RAL/Totale = 0, null o N/D)</span>
+            </label>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-label">Ampiezza banda (punti)</label>
+            <p class="settings-hint">Range fisso di punteggio per ogni banda (es. 50 → bande 0-50, 51-100, ecc.)</p>
+            <input type="number" v-model.number="analysisSettings.bandWidth" class="sr-input sr-input-sm" min="10" max="200" step="10" :disabled="analysisLoading" />
+          </div>
+        </div>
+
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         <div class="mapping-actions">
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
-          <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
+          <button class="btn-primary" :disabled="analysisLoading || !weightsValid" @click="confirmMapping">
             <span v-if="analysisLoading">Generazione analisi...</span>
             <span v-else>Esegui analisi completa</span>
           </button>
@@ -893,14 +968,14 @@ function exportJobGradingPdf() {
         <!-- Sub-tab: Lavori di pari valore -->
         <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
           <p class="result-source">Evaluation: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Local fallback' }}</strong></p>
-          <div v-for="band in [1,2,3,4,5]" :key="band" class="band-section" v-show="jobResults.some(r => r.band === band)">
+          <div v-for="band in [...new Set(jobResults.map(r => r.band))].sort((a,b) => a-b)" :key="band" class="band-section">
             <h3 class="band-title" :class="scoreBadgeClass(band)">Band {{ band }}</h3>
             <div class="job-table">
               <div class="job-row header">
                 <span>Role</span><span>Skills</span><span>Responsibility</span><span>Mental Effort</span><span>Conditions</span><span>Total</span><span>Avg. Comp.</span><span>Band Dev.</span><span>N</span>
               </div>
               <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
-                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role) }">
+                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandAvgPct) > 25 }">
                   <span>
                     <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
                     {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
@@ -2889,5 +2964,80 @@ function exportJobGradingPdf() {
   justify-content: flex-end;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+
+/* Analysis Settings Panel */
+.settings-panel {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  box-shadow: var(--shadow-soft);
+  margin: 1.5rem 0;
+  border: 1px solid var(--border-light);
+}
+
+.settings-title {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.settings-row {
+  margin-bottom: 1.25rem;
+}
+
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+
+.settings-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.weights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.weight-field label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+  font-weight: 500;
+}
+
+.weight-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.weight-pct {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.weights-total {
+  margin: 0.6rem 0 0;
+  font-size: 0.825rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.weights-error {
+  color: #dc2626;
+}
+
+/* Warning row for >25% deviation */
+.row-warning {
+  background: rgba(245, 158, 11, 0.08) !important;
+  border-left: 3px solid #f59e0b;
 }
 </style>
