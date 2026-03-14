@@ -992,6 +992,19 @@ function exportJobGradingPdf() {
         <!-- Sub-tab: Lavori di pari valore -->
         <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
           <p class="result-source">Evaluation: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Local fallback' }}</strong></p>
+
+          <!-- Inline weights editor -->
+          <div class="weights-bar">
+            <span class="weights-bar-label">Pesi:</span>
+            <label class="wb-field">Livello <input type="number" v-model.number="analysisSettings.weights.level" class="wb-input" min="0" max="100" step="5" @change="clampWeight('level')" />%</label>
+            <label class="wb-field">Skills <input type="number" v-model.number="analysisSettings.weights.skills" class="wb-input" min="0" max="100" step="5" @change="clampWeight('skills')" />%</label>
+            <label class="wb-field">Resp. <input type="number" v-model.number="analysisSettings.weights.responsibility" class="wb-input" min="0" max="100" step="5" @change="clampWeight('responsibility')" />%</label>
+            <label class="wb-field">Sforzo <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="wb-input" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" />%</label>
+            <label class="wb-field">Cond. <input type="number" v-model.number="analysisSettings.weights.conditions" class="wb-input" min="0" max="100" step="5" @change="clampWeight('conditions')" />%</label>
+            <span class="wb-total" :class="{ 'weights-error': !weightsValid }">= {{ weightsTotal }}%</span>
+            <button class="btn-sm btn-primary" :disabled="!weightsValid" @click="recalcBandsAndDeviation">Ricalcola</button>
+          </div>
+
           <div v-for="band in [...new Set(jobResults.map(r => r.band))].sort((a,b) => a-b)" :key="band" class="band-section">
             <h3 class="band-title" :class="scoreBadgeClass(band)">Band {{ band }}</h3>
             <div class="job-table">
@@ -1004,7 +1017,7 @@ function exportJobGradingPdf() {
                     <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
                     {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
                   </span>
-                  <span>{{ formatNum(r.levelScore) }}</span>
+                  <span>{{ formatNum(r.levelScore) }} <small v-if="r.level" class="level-tag">{{ r.level }}</small></span>
                   <span class="job-family-cell">{{ r.jobFamily }}<small v-if="r.jobFamilyMultiplier > 1" class="multiplier-badge">×{{ r.jobFamilyMultiplier }}</small></span>
                   <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
@@ -3080,5 +3093,64 @@ function exportJobGradingPdf() {
   border-radius: 8px;
   font-weight: 600;
   white-space: nowrap;
+}
+.level-tag {
+  background: var(--bg-page);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 6px;
+  font-weight: 600;
+  margin-left: 0.2rem;
+}
+.weights-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 0.6rem 1rem;
+  margin-bottom: 1.2rem;
+  box-shadow: var(--shadow-soft);
+}
+.weights-bar-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+.wb-field {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+.wb-input {
+  width: 48px;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.8rem;
+  background: var(--bg-page);
+}
+.wb-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.12);
+}
+.wb-total {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+.btn-sm {
+  padding: 0.3rem 0.85rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
 }
 </style>
