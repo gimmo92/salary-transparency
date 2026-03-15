@@ -31,7 +31,7 @@ import 'jspdf-autotable'
 const activeSection = ref('salaryReview')
 
 const sections = [
-  { id: 'salaryReview', label: 'Salary Review', icon: 'salary' },
+  { id: 'salaryReview', label: 'Revisione Salariale', icon: 'salary' },
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
 ]
@@ -910,7 +910,7 @@ function exportJobGradingPdf() {
           <div class="settings-row">
             <label class="sr-checkbox-row">
               <input type="checkbox" v-model="analysisSettings.strictOutliers" :disabled="analysisLoading" />
-              <span>Strict Outlier Removal (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
+              <span>Rimozione outlier strict (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
             </label>
           </div>
 
@@ -1023,13 +1023,13 @@ function exportJobGradingPdf() {
 
         <!-- Sub-tab: Lavori di pari valore -->
         <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
-          <p class="result-source">Evaluation: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Local fallback' }}</strong></p>
+          <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Motore locale' }}</strong></p>
 
           <!-- Inline weights editor -->
           <div class="weights-bar">
             <span class="weights-bar-label">Pesi:</span>
             <label class="wb-field">Livello <input type="number" v-model.number="analysisSettings.weights.level" class="wb-input" min="0" max="100" step="5" @change="clampWeight('level')" />%</label>
-            <label class="wb-field">Skills <input type="number" v-model.number="analysisSettings.weights.skills" class="wb-input" min="0" max="100" step="5" @change="clampWeight('skills')" />%</label>
+            <label class="wb-field">Competenze <input type="number" v-model.number="analysisSettings.weights.skills" class="wb-input" min="0" max="100" step="5" @change="clampWeight('skills')" />%</label>
             <label class="wb-field">Resp. <input type="number" v-model.number="analysisSettings.weights.responsibility" class="wb-input" min="0" max="100" step="5" @change="clampWeight('responsibility')" />%</label>
             <label class="wb-field">Sforzo <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="wb-input" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" />%</label>
             <label class="wb-field">Cond. <input type="number" v-model.number="analysisSettings.weights.conditions" class="wb-input" min="0" max="100" step="5" @change="clampWeight('conditions')" />%</label>
@@ -1038,10 +1038,10 @@ function exportJobGradingPdf() {
           </div>
 
           <div v-for="band in [...new Set(jobResults.map(r => r.band))].sort((a,b) => a-b)" :key="band" class="band-section">
-            <h3 class="band-title" :class="scoreBadgeClass(band)">Band {{ band }}</h3>
+            <h3 class="band-title" :class="scoreBadgeClass(band)">Banda {{ band }}</h3>
             <div class="job-table">
               <div class="job-row header">
-                <span>Role</span><span>Livello</span><span>Family</span><span>Skills</span><span>Resp.</span><span>Effort</span><span>Cond.</span><span>Total</span><span>Median Comp.</span><span>Band Dev.</span><span>N</span>
+                <span>Ruolo</span><span>Livello</span><span>Famiglia</span><span>Competenze</span><span>Resp.</span><span>Sforzo</span><span>Cond.</span><span>Totale</span><span>Mediana Retrib.</span><span>Dev. Banda</span><span>N</span>
               </div>
               <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
                 <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandMedianPct) > 25 }">
@@ -1063,7 +1063,7 @@ function exportJobGradingPdf() {
                       v-if="isGapAlert(r.deviationFromBandMedianPct)"
                       class="btn-justify"
                       :class="{ 'has-note': justifications[r.role] }"
-                      title="Add justification"
+                      title="Aggiungi giustificativo"
                       @click.stop="openJustify(r.role)"
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
@@ -1072,7 +1072,7 @@ function exportJobGradingPdf() {
                   <span>{{ r.n }}</span>
                 </div>
                 <div v-if="expandedRoles.has(r.role) && r.people && r.people.length > 1" class="people-detail">
-                  <div class="people-header"><span>#</span><span>Employee</span><span>Base Salary</span><span>Variable Comp.</span><span>Total Comp.</span><span>Dev. from Role Avg.</span></div>
+                  <div class="people-header"><span>#</span><span>Dipendente</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da Media Ruolo</span></div>
                   <div v-for="p in r.people" :key="p.index" class="people-row">
                     <span>{{ p.index }}</span><span>{{ p.name || '–' }}</span><span>{{ formatNum(p.baseSalary) }}</span><span>{{ formatNum(p.variableComponents) }}</span><span>{{ formatNum(p.totalSalary) }}</span>
                     <span :class="{ 'gap-alert': isGapAlert(p.deviationFromRoleAvgPct) }">{{ formatPct(p.deviationFromRoleAvgPct) }}</span>
@@ -1084,17 +1084,17 @@ function exportJobGradingPdf() {
           <div class="mapping-actions" style="margin-top: 1.5rem;">
             <button class="btn-primary" @click="exportJobGradingPdf">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="vertical-align: -3px; margin-right: 0.35rem;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-              Export PDF
+              Esporta PDF
             </button>
           </div>
         </div>
         <div v-else-if="resultsTab === 'pari_valore' && jobResults.length === 0" class="no-data-msg">
-          Job grading data not available. Check that the Role, Level and Job Description columns are mapped.
+          Dati job grading non disponibili. Verifica che le colonne Ruolo, Livello e Descrizione siano mappate correttamente.
         </div>
 
         <div class="mapping-actions">
-          <button class="btn-secondary" @click="analisiStep = 'mapping'">Edit mapping</button>
-          <button class="btn-primary" @click="startNuovaAnalisi">New analysis</button>
+          <button class="btn-secondary" @click="analisiStep = 'mapping'">Modifica mapping</button>
+          <button class="btn-primary" @click="startNuovaAnalisi">Nuova analisi</button>
         </div>
 
         <!-- Modal giustificativo -->
@@ -1123,20 +1123,20 @@ function exportJobGradingPdf() {
     <!-- Storico analisi -->
     <template v-else-if="showStorico">
       <div class="analisi-content">
-        <h2 class="analisi-title">Analysis History</h2>
-        <p v-if="storicoLoading" class="storico-status">Loading history…</p>
+        <h2 class="analisi-title">Storico Analisi</h2>
+        <p v-if="storicoLoading" class="storico-status">Caricamento storico…</p>
         <p v-if="storicoError" class="upload-error">{{ storicoError }}</p>
         <div v-if="!storicoLoading && storicoList.length === 0 && !storicoError" class="storico-empty">
-          No saved analyses.
+          Nessuna analisi salvata.
         </div>
         <div v-if="storicoList.length > 0" class="storico-table-wrap">
           <table class="storico-table">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Source</th>
-                <th>Calculation</th>
+                <th>Data</th>
+                <th>Tipo</th>
+                <th>Fonte</th>
+                <th>Calcolo</th>
                 <th>ID</th>
                 <th></th>
               </tr>
@@ -1154,14 +1154,14 @@ function exportJobGradingPdf() {
                     :disabled="storicoViewing === a.id"
                     @click="viewAnalysis(a.id)"
                   >
-                    {{ storicoViewing === a.id ? '…' : 'View' }}
+                    {{ storicoViewing === a.id ? '…' : 'Apri' }}
                   </button>
                   <button
                     class="btn-delete"
                     :disabled="storicoDeleting === a.id"
                     @click="removeAnalysis(a.id)"
                   >
-                    {{ storicoDeleting === a.id ? '…' : 'Delete' }}
+                    {{ storicoDeleting === a.id ? '…' : 'Elimina' }}
                   </button>
                 </td>
               </tr>
@@ -1169,7 +1169,7 @@ function exportJobGradingPdf() {
           </table>
         </div>
         <div class="mapping-actions">
-          <button class="btn-secondary" @click="loadStorico">Refresh</button>
+          <button class="btn-secondary" @click="loadStorico">Aggiorna</button>
         </div>
       </div>
     </template>
@@ -1180,15 +1180,15 @@ function exportJobGradingPdf() {
       <!-- CTA buttons + Sub-tab bar -->
       <div v-if="srView === 'list'" class="sr-top-bar">
         <div class="sr-cta-bar">
-          <button class="btn-primary" @click="startCreateRule">+ Create Rule</button>
-          <button class="btn-outline" @click="startCreateIncrease">+ Create Increase</button>
+          <button class="btn-primary" @click="startCreateRule">+ Nuova Regola</button>
+          <button class="btn-outline" @click="startCreateIncrease">+ Nuovo Aumento</button>
         </div>
         <div class="results-subtabs">
           <button class="subtab" :class="{ active: srSubTab === 'reviews' }" @click="srSubTab = 'reviews'">
-            Salary Reviews
+            Revisioni Salariali
             <span v-if="eligibleReviews.filter(r => reviewStatus(r.name) === 'pending').length" class="sr-badge">{{ eligibleReviews.filter(r => reviewStatus(r.name) === 'pending').length }}</span>
           </button>
-          <button class="subtab" :class="{ active: srSubTab === 'rules' }" @click="srSubTab = 'rules'">Rules</button>
+          <button class="subtab" :class="{ active: srSubTab === 'rules' }" @click="srSubTab = 'rules'">Regole</button>
         </div>
       </div>
 
@@ -1200,37 +1200,37 @@ function exportJobGradingPdf() {
           <p v-if="srRulesError" class="upload-error">{{ srRulesError }}</p>
 
           <div class="sr-section">
-            <p v-if="srRulesLoading" class="storico-status">Loading rules…</p>
-            <div v-if="!srRulesLoading && srRules.length === 0 && !srRulesError" class="no-data-msg">No rules created.</div>
+            <p v-if="srRulesLoading" class="storico-status">Caricamento regole…</p>
+            <div v-if="!srRulesLoading && srRules.length === 0 && !srRulesError" class="no-data-msg">Nessuna regola creata.</div>
             <div class="sr-rules-grid">
               <article v-for="rule in srRules" :key="rule.id" class="sr-rule-card">
                 <div class="sr-rule-header">
-                  <h3>{{ rule.name || 'Unnamed rule' }}</h3>
+                  <h3>{{ rule.name || 'Regola senza nome' }}</h3>
                   <span class="sr-rule-year">{{ rule.year }}</span>
                 </div>
                 <div class="sr-rule-meta">
-                  <span v-if="rule.applyToAll">All employees</span>
-                  <span v-else>{{ (rule.eligibleUsers || []).length }} employee{{ (rule.eligibleUsers || []).length !== 1 ? 's' : '' }}</span>
-                  <span>Trigger: {{ rule.triggerType === 'performance' ? 'Performance \u2265 ' + rule.performanceScore : (rule.objectives || []).length + ' objectives' }}</span>
+                  <span v-if="rule.applyToAll">Tutti i dipendenti</span>
+                  <span v-else>{{ (rule.eligibleUsers || []).length }} dipendent{{ (rule.eligibleUsers || []).length !== 1 ? 'i' : 'e' }}</span>
+                  <span>Trigger: {{ rule.triggerType === 'performance' ? 'Performance \u2265 ' + rule.performanceScore : (rule.objectives || []).length + ' obiettivi' }}</span>
                   <span>RAL +{{ rule.defaultRalPct }}% / Var +{{ rule.defaultVariablePct }}%</span>
                 </div>
                 <div class="sr-rule-meta">
-                  <span>{{ (rule.approvalSteps || []).length }} approval step{{ (rule.approvalSteps || []).length !== 1 ? 's' : '' }}</span>
+                  <span>{{ (rule.approvalSteps || []).length }} step di approvazione</span>
                 </div>
                 <div class="sr-rule-actions">
-                  <button class="btn-secondary" @click="editRule(rule)">Edit</button>
-                  <button class="btn-outline" @click="duplicateRule(rule)">Duplicate</button>
-                  <button class="btn-delete" @click="removeRule(rule.id)">Delete</button>
+                  <button class="btn-secondary" @click="editRule(rule)">Modifica</button>
+                  <button class="btn-outline" @click="duplicateRule(rule)">Duplica</button>
+                  <button class="btn-delete" @click="removeRule(rule.id)">Elimina</button>
                 </div>
               </article>
             </div>
           </div>
 
           <div v-if="srIncreases.length > 0" class="sr-section">
-            <h2 class="analisi-title">Increases</h2>
+            <h2 class="analisi-title">Aumenti</h2>
             <table class="storico-table">
               <thead>
-                <tr><th>Employee</th><th>Base %</th><th>Variable %</th><th>Notes</th></tr>
+                <tr><th>Dipendente</th><th>Base %</th><th>Variabile %</th><th>Note</th></tr>
               </thead>
               <tbody>
                 <tr v-for="inc in srIncreases" :key="inc.id">
@@ -1247,17 +1247,17 @@ function exportJobGradingPdf() {
         <!-- Sub-tab: Salary Reviews -->
         <template v-if="srSubTab === 'reviews'">
           <div v-if="eligibleReviews.length === 0" class="no-data-msg">
-            No eligible employees. Create a rule in the Rules tab to generate salary reviews.
+            Nessun dipendente idoneo. Crea una regola nella tab Regole per generare le revisioni salariali.
           </div>
           <div v-else class="rv-list">
             <div class="rv-header">
-              <span class="rv-col rv-col-name">NAME</span>
-              <span class="rv-col rv-col-role">ROLE</span>
+              <span class="rv-col rv-col-name">NOME</span>
+              <span class="rv-col rv-col-role">RUOLO</span>
               <span class="rv-col rv-col-perf">PERFORMANCE</span>
-              <span class="rv-col rv-col-increase">PROPOSED INCREASE</span>
-              <span class="rv-col rv-col-rule">RULE</span>
-              <span class="rv-col rv-col-status">STATUS</span>
-              <span class="rv-col rv-col-actions">ACTIONS</span>
+              <span class="rv-col rv-col-increase">AUMENTO PROPOSTO</span>
+              <span class="rv-col rv-col-rule">REGOLA</span>
+              <span class="rv-col rv-col-status">STATO</span>
+              <span class="rv-col rv-col-actions">AZIONI</span>
             </div>
             <div
               v-for="rv in eligibleReviews"
@@ -1287,14 +1287,14 @@ function exportJobGradingPdf() {
               <span class="rv-col rv-col-rule">{{ rv.ruleName }}</span>
               <span class="rv-col rv-col-status">
                 <span class="sr-status" :class="'sr-status-' + reviewStatus(rv.name)">
-                  {{ reviewStatus(rv.name) === 'approved' ? 'Approved' : reviewStatus(rv.name) === 'rejected' ? 'Rejected' : reviewStatus(rv.name) === 'removed' ? 'Removed' : 'Pending' }}
+                  {{ reviewStatus(rv.name) === 'approved' ? 'Approvato' : reviewStatus(rv.name) === 'rejected' ? 'Rifiutato' : reviewStatus(rv.name) === 'removed' ? 'Rimosso' : 'In attesa' }}
                 </span>
               </span>
               <span class="rv-col rv-col-actions" v-if="reviewStatus(rv.name) !== 'removed'">
-                <button class="rv-action-btn rv-action-view" title="View" @click="viewReview(rv)">
+                <button class="rv-action-btn rv-action-view" title="Visualizza" @click="viewReview(rv)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
-                <button class="rv-action-btn rv-action-delete" title="Delete" @click="removeReview(rv.name)">
+                <button class="rv-action-btn rv-action-delete" title="Elimina" @click="removeReview(rv.name)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
                 </button>
               </span>
@@ -1307,9 +1307,9 @@ function exportJobGradingPdf() {
       <!-- Dettaglio review -->
       <template v-if="srView === 'viewReview' && srViewingReview">
         <div class="sr-form">
-          <button class="btn-secondary" style="margin-bottom: 1rem;" @click="backToReviewsList">&larr; Back to list</button>
+          <button class="btn-secondary" style="margin-bottom: 1rem;" @click="backToReviewsList">&larr; Torna alla lista</button>
           <h2 class="analisi-title">{{ srViewingReview.name }}</h2>
-          <p class="sr-rule-meta" style="margin-bottom: 1.25rem;">{{ srViewingReview.role }} &middot; Rule: {{ srViewingReview.ruleName }}</p>
+          <p class="sr-rule-meta" style="margin-bottom: 1.25rem;">{{ srViewingReview.role }} &middot; Regola: {{ srViewingReview.ruleName }}</p>
 
           <div class="sr-review-grid">
             <div class="sr-review-card">
@@ -1317,17 +1317,17 @@ function exportJobGradingPdf() {
               <div class="sr-review-card-value" :class="{ 'gap-alert': srViewingReview.performanceScore < 60 }">{{ srViewingReview.performanceScore }} <span class="sr-hint">/ 100</span></div>
             </div>
             <div class="sr-review-card">
-              <div class="sr-review-card-label">Proposed Base Increase</div>
+              <div class="sr-review-card-label">Aumento Base Proposto</div>
               <div class="sr-review-card-value">+{{ srViewingReview.proposedRalPct }}%</div>
             </div>
             <div class="sr-review-card">
-              <div class="sr-review-card-label">Proposed Variable Increase</div>
+              <div class="sr-review-card-label">Aumento Variabile Proposto</div>
               <div class="sr-review-card-value">+{{ srViewingReview.proposedVariablePct }}%</div>
             </div>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Objectives</label>
+            <label class="sr-label">Obiettivi</label>
             <div class="sr-obj-list">
               <div v-for="obj in srViewingReview.objectives" :key="obj" class="sr-obj-item">
                 <span class="sr-obj-check" :class="{ reached: (srViewingReview.objectivesReached || []).includes(obj) }">
@@ -1335,17 +1335,17 @@ function exportJobGradingPdf() {
                 </span>
                 <span>{{ obj }}</span>
               </div>
-              <div v-if="!srViewingReview.objectives || srViewingReview.objectives.length === 0" class="sr-hint">No objectives defined</div>
+              <div v-if="!srViewingReview.objectives || srViewingReview.objectives.length === 0" class="sr-hint">Nessun obiettivo definito</div>
             </div>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Current status: <span class="sr-status" :class="'sr-status-' + reviewStatus(srViewingReview.name)">{{ reviewStatus(srViewingReview.name) === 'approved' ? 'Approved' : reviewStatus(srViewingReview.name) === 'rejected' ? 'Rejected' : 'Pending' }}</span></label>
+            <label class="sr-label">Stato attuale: <span class="sr-status" :class="'sr-status-' + reviewStatus(srViewingReview.name)">{{ reviewStatus(srViewingReview.name) === 'approved' ? 'Approvato' : reviewStatus(srViewingReview.name) === 'rejected' ? 'Rifiutato' : 'In attesa' }}</span></label>
           </div>
 
           <div class="mapping-actions">
-            <button class="btn-delete" style="padding: 0.65rem 1.25rem; font-size: 0.85rem;" @click="rejectReview(srViewingReview.name)">Reject</button>
-            <button class="btn-primary" @click="approveReview(srViewingReview.name)">Approve</button>
+            <button class="btn-delete" style="padding: 0.65rem 1.25rem; font-size: 0.85rem;" @click="rejectReview(srViewingReview.name)">Rifiuta</button>
+            <button class="btn-primary" @click="approveReview(srViewingReview.name)">Approva</button>
           </div>
         </div>
       </template>
@@ -1353,18 +1353,18 @@ function exportJobGradingPdf() {
       <!-- Pannello crea/modifica regola -->
       <template v-if="srView === 'editRule' && srCurrentRule">
         <div class="sr-form">
-          <h2 class="analisi-title">{{ srRules.some(r => r.id === srCurrentRule.id) ? 'Edit Rule' : 'New Rule' }}</h2>
+          <h2 class="analisi-title">{{ srRules.some(r => r.id === srCurrentRule.id) ? 'Modifica Regola' : 'Nuova Regola' }}</h2>
 
           <div class="sr-form-section">
-            <label class="sr-label">Rule Name</label>
-            <input v-model="srCurrentRule.name" type="text" class="sr-input" placeholder="E.g. Annual Review 2026" />
+            <label class="sr-label">Nome Regola</label>
+            <input v-model="srCurrentRule.name" type="text" class="sr-input" placeholder="Es. Revisione Annuale 2026" />
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Eligibility</label>
+            <label class="sr-label">Idoneità</label>
             <label class="sr-checkbox-row">
               <input type="checkbox" v-model="srCurrentRule.applyToAll" />
-              <span>Apply to all employees</span>
+              <span>Applica a tutti i dipendenti</span>
             </label>
             <div v-if="!srCurrentRule.applyToAll" class="multi-select-wrap">
               <div class="multi-select-box" @click="srEligibilityDropdownOpen = !srEligibilityDropdownOpen">
@@ -1373,7 +1373,7 @@ function exportJobGradingPdf() {
                     {{ u }}
                     <button type="button" class="pill-x" @click.stop="removePill(srCurrentRule.eligibleUsers, i)">&times;</button>
                   </span>
-                  <span v-if="srCurrentRule.eligibleUsers.length === 0" class="multi-select-placeholder">Select employees...</span>
+                  <span v-if="srCurrentRule.eligibleUsers.length === 0" class="multi-select-placeholder">Seleziona dipendenti...</span>
                 </div>
                 <span class="multi-select-arrow">&#9662;</span>
               </div>
@@ -1392,16 +1392,16 @@ function exportJobGradingPdf() {
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Reference Year</label>
+            <label class="sr-label">Anno di Riferimento</label>
             <input v-model.number="srCurrentRule.year" type="number" class="sr-input sr-input-sm" min="2020" max="2040" />
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Trigger</label>
+            <label class="sr-label">Condizione di attivazione</label>
             <div class="sr-radio-group">
               <label class="sr-radio-row">
                 <input type="radio" v-model="srCurrentRule.triggerType" value="performance" />
-                <span>Minimum performance score</span>
+                <span>Punteggio performance minimo</span>
               </label>
               <div v-if="srCurrentRule.triggerType === 'performance'" class="sr-indent">
                 <input v-model.number="srCurrentRule.performanceScore" type="number" class="sr-input sr-input-sm" min="0" max="100" />
@@ -1409,7 +1409,7 @@ function exportJobGradingPdf() {
               </div>
               <label class="sr-radio-row">
                 <input type="radio" v-model="srCurrentRule.triggerType" value="objectives" />
-                <span>Specific objectives achieved</span>
+                <span>Obiettivi specifici raggiunti</span>
               </label>
               <div v-if="srCurrentRule.triggerType === 'objectives'" class="sr-indent">
                 <div class="pills-wrap">
@@ -1421,7 +1421,7 @@ function exportJobGradingPdf() {
                     v-model="srObjInput"
                     type="text"
                     class="pill-input"
-                    placeholder="Add objective and press Enter"
+                    placeholder="Aggiungi obiettivo e premi Invio"
                     @keydown.enter.prevent="addPill(srCurrentRule.objectives, srObjInput); srObjInput = '';"
                   />
                 </div>
@@ -1430,14 +1430,14 @@ function exportJobGradingPdf() {
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Approval Workflow</label>
+            <label class="sr-label">Workflow di Approvazione</label>
             <div class="wf-steps">
               <div v-for="(step, si) in srCurrentRule.approvalSteps" :key="si" class="wf-step">
                 <div class="wf-step-header">
                   <span class="wf-step-num">{{ si + 1 }}</span>
                   <select v-model="step.type" class="sr-select">
-                    <option value="manager">Direct Manager</option>
-                    <option value="users">Specific Users</option>
+                    <option value="manager">Manager Diretto</option>
+                    <option value="users">Utenti Specifici</option>
                   </select>
                   <button v-if="srCurrentRule.approvalSteps.length > 1" type="button" class="wf-step-remove" @click="removeApprovalStep(si)">&times;</button>
                 </div>
@@ -1448,7 +1448,7 @@ function exportJobGradingPdf() {
                         {{ u }}
                         <button type="button" class="pill-x" @click.stop="removePill(step.users, ui)">&times;</button>
                       </span>
-                      <span v-if="step.users.length === 0" class="multi-select-placeholder">Select approvers...</span>
+                      <span v-if="step.users.length === 0" class="multi-select-placeholder">Seleziona approvatori...</span>
                     </div>
                     <span class="multi-select-arrow">&#9662;</span>
                   </div>
@@ -1466,18 +1466,18 @@ function exportJobGradingPdf() {
                 </div>
               </div>
             </div>
-            <button type="button" class="btn-outline sr-add-step" @click="addApprovalStep">+ Add step</button>
+            <button type="button" class="btn-outline sr-add-step" @click="addApprovalStep">+ Aggiungi step</button>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Default Increase</label>
+            <label class="sr-label">Aumento Predefinito</label>
             <div class="sr-pct-row">
               <div class="sr-pct-field">
                 <label>% Base</label>
                 <input v-model.number="srCurrentRule.defaultRalPct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
               <div class="sr-pct-field">
-                <label>% Variable</label>
+                <label>% Variabile</label>
                 <input v-model.number="srCurrentRule.defaultVariablePct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
             </div>
@@ -1485,9 +1485,9 @@ function exportJobGradingPdf() {
 
           <p v-if="srRulesError" class="upload-error">{{ srRulesError }}</p>
           <div class="mapping-actions">
-            <button class="btn-secondary" :disabled="srSaving" @click="cancelRuleEdit">Cancel</button>
+            <button class="btn-secondary" :disabled="srSaving" @click="cancelRuleEdit">Annulla</button>
             <button class="btn-primary" :disabled="srSaving" @click="saveCurrentRule">
-              {{ srSaving ? 'Saving…' : 'Save Rule' }}
+              {{ srSaving ? 'Salvataggio…' : 'Salva Regola' }}
             </button>
           </div>
         </div>
@@ -1496,12 +1496,12 @@ function exportJobGradingPdf() {
       <!-- Form crea aumento -->
       <template v-if="srView === 'newIncrease' && srCurrentIncrease">
         <div class="sr-form">
-          <h2 class="analisi-title">New Increase</h2>
+          <h2 class="analisi-title">Nuovo Aumento</h2>
 
           <div class="sr-form-section">
-            <label class="sr-label">Employee</label>
+            <label class="sr-label">Dipendente</label>
             <select v-model="srCurrentIncrease.employee" class="sr-select">
-              <option value="" disabled>Select employee...</option>
+              <option value="" disabled>Seleziona dipendente...</option>
               <option v-for="u in sampleUsers" :key="u" :value="u">{{ u }}</option>
             </select>
           </div>
@@ -1509,24 +1509,24 @@ function exportJobGradingPdf() {
           <div class="sr-form-section">
             <div class="sr-pct-row">
               <div class="sr-pct-field">
-                <label>Base Increase %</label>
+                <label>Aumento Base %</label>
                 <input v-model.number="srCurrentIncrease.ralPct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
               <div class="sr-pct-field">
-                <label>Variable Increase %</label>
+                <label>Aumento Variabile %</label>
                 <input v-model.number="srCurrentIncrease.variablePct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
             </div>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Notes</label>
-            <textarea v-model="srCurrentIncrease.notes" class="justify-textarea" rows="3" placeholder="Reason or details..."></textarea>
+            <label class="sr-label">Note</label>
+            <textarea v-model="srCurrentIncrease.notes" class="justify-textarea" rows="3" placeholder="Motivazione o dettagli..."></textarea>
           </div>
 
           <div class="mapping-actions">
-            <button class="btn-secondary" @click="cancelIncreaseEdit">Cancel</button>
-            <button class="btn-primary" @click="saveCurrentIncrease">Save Increase</button>
+            <button class="btn-secondary" @click="cancelIncreaseEdit">Annulla</button>
+            <button class="btn-primary" @click="saveCurrentIncrease">Salva Aumento</button>
           </div>
         </div>
       </template>
