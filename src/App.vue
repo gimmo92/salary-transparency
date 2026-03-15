@@ -873,19 +873,6 @@ function exportJobGradingPdf() {
             </p>
           </div>
 
-          <div class="settings-row">
-            <label class="sr-checkbox-row">
-              <input type="checkbox" v-model="analysisSettings.filterOutliers" :disabled="analysisLoading" />
-              <span>Filtro base (escludi record con RAL/Totale = 0, null o N/D)</span>
-            </label>
-          </div>
-
-          <div class="settings-row">
-            <label class="sr-checkbox-row">
-              <input type="checkbox" v-model="analysisSettings.strictOutliers" :disabled="analysisLoading" />
-              <span>Strict Outlier Removal (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
-            </label>
-          </div>
 
           <div class="settings-row">
             <label class="sr-label">Numero di bande</label>
