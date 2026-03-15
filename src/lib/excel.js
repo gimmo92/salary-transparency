@@ -133,11 +133,11 @@ export function buildNormalizedData(rows, headers, mapping) {
   function normalizeGender(raw) {
     if (raw == null || raw === '') return null
     const s = String(raw).trim().toLowerCase()
-    if (s === 'm' || s === 'maschio' || s === 'male' || s === 'uomo' || s === 'h' || s === 'homme') return 'M'
-    if (s === 'f' || s === 'femmina' || s === 'female' || s === 'donna' || s === 'femme') return 'F'
+    if (s === 'm' || s === 'maschio' || s === 'male' || s === 'uomo' || s === 'u' || s === 'h' || s === 'homme') return 'M'
+    if (s === 'f' || s === 'femmina' || s === 'female' || s === 'donna' || s === 'd' || s === 'femme') return 'F'
     const first = s.charAt(0)
-    if (first === 'm') return 'M'
-    if (first === 'f') return 'F'
+    if (first === 'm' || first === 'u' || first === 'h') return 'M'
+    if (first === 'f' || first === 'd') return 'F'
     return null
   }
 
