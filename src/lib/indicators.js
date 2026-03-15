@@ -16,6 +16,55 @@ function pctGap(male, female) {
   return ((male - female) / male) * 100
 }
 
+export function computeBandGenderGaps(normalizedGender, jobResults) {
+  if (!normalizedGender?.length || !jobResults?.length) return []
+
+  const personBand = new Map()
+  for (const jr of jobResults) {
+    if (!jr.people) continue
+    for (const p of jr.people) {
+      personBand.set(p.index, jr.band)
+    }
+  }
+
+  const bands = new Map()
+  for (const r of normalizedGender) {
+    const band = personBand.get(r.index) ?? null
+    if (band == null) continue
+    if (!bands.has(band)) bands.set(band, { mTot: [], fTot: [], mBase: [], fBase: [] })
+    const b = bands.get(band)
+    if (r.gender === 'M') { b.mTot.push(r.totalSalary); b.mBase.push(r.baseSalary) }
+    else if (r.gender === 'F') { b.fTot.push(r.totalSalary); b.fBase.push(r.baseSalary) }
+  }
+
+  return Array.from(bands.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([band, d]) => ({
+      band,
+      nM: d.mTot.length,
+      nF: d.fTot.length,
+      gapMedia: pctGap(mean(d.mTot), mean(d.fTot)),
+      gapMediana: pctGap(median(d.mTot), median(d.fTot)),
+      gapBaseMedia: pctGap(mean(d.mBase), mean(d.fBase)),
+      gapBaseMediana: pctGap(median(d.mBase), median(d.fBase)),
+    }))
+}
+
+export function computeAdjustedGap(normalized, topPct = 5) {
+  if (!normalized?.length) return { gapMedia: 0, gapMediana: 0, excluded: 0, total: normalized?.length || 0 }
+  const sorted = [...normalized].sort((a, b) => b.totalSalary - a.totalSalary)
+  const cutoff = Math.max(1, Math.ceil(sorted.length * topPct / 100))
+  const filtered = sorted.slice(cutoff)
+  const males = filtered.filter((r) => r.gender === 'M')
+  const females = filtered.filter((r) => r.gender === 'F')
+  return {
+    gapMedia: pctGap(mean(males.map((r) => r.totalSalary)), mean(females.map((r) => r.totalSalary))),
+    gapMediana: pctGap(median(males.map((r) => r.totalSalary)), median(females.map((r) => r.totalSalary))),
+    excluded: cutoff,
+    total: normalized.length,
+  }
+}
+
 export function computeIndicators(normalized) {
   const males = normalized.filter((r) => r.gender === 'M')
   const females = normalized.filter((r) => r.gender === 'F')

@@ -142,11 +142,12 @@ export function buildNormalizedData(rows, headers, mapping) {
   }
 
   return rows
-    .map((row) => {
+    .map((row, idx) => {
       const genderRaw = genderIdx != null ? row[genderIdx] : null
       const gender = normalizeGender(genderRaw)
 
       return {
+        index: idx + 1,
         gender,
         name: nameIdx != null ? row[nameIdx] : null,
         baseSalary: baseIdx != null ? parseNumber(row[baseIdx]) : 0,

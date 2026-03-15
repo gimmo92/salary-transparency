@@ -7,7 +7,7 @@ import {
   COLUMN_ROLES,
   getRoleLabel,
 } from './lib/excel.js'
-import { computeIndicators } from './lib/indicators.js'
+import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './lib/indicators.js'
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
@@ -148,6 +148,12 @@ async function viewAnalysis(id) {
     excelRows.value = record.rows_json || []
     saveStatus.value = `Analisi caricata dallo storico (ID: ${record.id})`
 
+    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+    genderNormalizedCache.value = normalizedGender
+    bandGenderJustifications.value = {}
+    recomputeBandGenderGaps()
+    recomputeAdjustedGap()
+
     resultsTab.value = indicatorsResult.value ? 'genere' : 'pari_valore'
     analisiStep.value = 'results'
     activeSection.value = 'analisi'
@@ -198,6 +204,9 @@ function recalcBandsAndDeviation() {
     strictOutliers: settings.strictOutliers,
     weights: settings.weights,
   })
+  if (genderNormalizedCache.value.length) {
+    recomputeBandGenderGaps()
+  }
 }
 
 function fallbackLocalJobScores(roles) {
@@ -229,6 +238,11 @@ function startNuovaAnalisi() {
   resultsTab.value = 'genere'
   justifications.value = {}
   justifyingRole.value = null
+  genderViewMode.value = 'media'
+  bandGenderGaps.value = []
+  adjustedGapResult.value = null
+  genderNormalizedCache.value = []
+  bandGenderJustifications.value = {}
 }
 
 function goToUpload() {
@@ -355,6 +369,12 @@ async function confirmMapping() {
       return
     }
 
+    // Gender gap per band & gap rettificato
+    genderNormalizedCache.value = normalizedGender
+    bandGenderJustifications.value = {}
+    recomputeBandGenderGaps()
+    recomputeAdjustedGap()
+
     // Salvataggio DB
     try {
       const saved = await saveAnalysis({
@@ -427,6 +447,32 @@ function saveJustify() {
 function cancelJustify() {
   justifyingRole.value = null
   justifyText.value = ''
+}
+
+// Gender gap dashboard
+const genderViewMode = ref('media') // 'media' | 'mediana'
+const bandGenderGaps = ref([])
+const adjustedGapResult = ref(null)
+const genderNormalizedCache = ref([])
+const bandGenderJustifications = ref({})
+
+const BAND_JUSTIFY_REASONS = [
+  'Differenza di Anzianità media',
+  'Possesso di Certificazioni Tecniche specifiche',
+  'Maggiori turni notturni/festivi (Condizioni)',
+  'Market Premium per ruolo specifico',
+]
+
+function recomputeBandGenderGaps() {
+  bandGenderGaps.value = computeBandGenderGaps(genderNormalizedCache.value, jobResults.value)
+}
+
+function recomputeAdjustedGap() {
+  adjustedGapResult.value = computeAdjustedGap(genderNormalizedCache.value, 5)
+}
+
+function setBandJustification(band, reason) {
+  bandGenderJustifications.value = { ...bandGenderJustifications.value, [band]: reason }
 }
 
 // Salary Review
@@ -1012,6 +1058,92 @@ function exportJobGradingPdf() {
               </div>
             </section>
           </div>
+
+          <!-- Toggle Media / Mediana -->
+          <div class="gender-dashboard-toggle">
+            <span class="toggle-label">Visualizzazione divario:</span>
+            <button :class="['toggle-btn', { active: genderViewMode === 'media' }]" @click="genderViewMode = 'media'">Media</button>
+            <button :class="['toggle-btn', { active: genderViewMode === 'mediana' }]" @click="genderViewMode = 'mediana'">Mediana</button>
+            <span v-if="genderViewMode === 'mediana' && indicatorsResult && Math.abs(indicatorsResult.c_divarioMedianoGenere.percentuale) < 5" class="eu-compliant-msg">
+              Il divario mediano è conforme ai limiti della Direttiva UE (&lt; 5%)
+            </span>
+          </div>
+
+          <!-- Divario di genere per Band (Equal Value Gap) -->
+          <section v-if="bandGenderGaps.length > 0" class="indicator-card wide band-gender-section">
+            <h3>Divario di genere per Band (Equal Value Gap)</h3>
+            <p class="indicator-desc">Gender Pay Gap calcolato per ogni Band di Job Grading.</p>
+            <div class="band-gender-table">
+              <div class="band-gender-row header">
+                <span>Band</span>
+                <span>N Uomini</span>
+                <span>N Donne</span>
+                <span>Gap {{ genderViewMode === 'media' ? 'Media' : 'Mediana' }}</span>
+                <span>Stato</span>
+                <span>Giustificazione</span>
+              </div>
+              <div v-for="bg in bandGenderGaps" :key="bg.band" class="band-gender-row" :class="{ 'gap-over': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5, 'gap-ok': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5 }">
+                <span>{{ bg.band }}</span>
+                <span>{{ bg.nM }}</span>
+                <span>{{ bg.nF }}</span>
+                <span class="gap-value" :class="{ 'gap-alert': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5 }">
+                  {{ formatPct(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) }}
+                </span>
+                <span>
+                  <span v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5" class="status-badge compliant">Conforme</span>
+                  <span v-else class="status-badge non-compliant">Gap &gt; 5%</span>
+                </span>
+                <span>
+                  <template v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5">
+                    <select v-if="!bandGenderJustifications[bg.band]" class="band-justify-select" @change="setBandJustification(bg.band, $event.target.value)">
+                      <option value="">Inserisci Giustificazione...</option>
+                      <option v-for="reason in BAND_JUSTIFY_REASONS" :key="reason" :value="reason">{{ reason }}</option>
+                    </select>
+                    <span v-else class="band-justify-text">
+                      {{ bandGenderJustifications[bg.band] }}
+                      <button class="btn-link-sm" @click="setBandJustification(bg.band, '')">✕</button>
+                    </span>
+                  </template>
+                  <span v-else class="muted">—</span>
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Gap Rettificato (escludendo Top Earners) -->
+          <section v-if="adjustedGapResult" class="indicator-card wide adjusted-gap-section">
+            <h3>Divario Rettificato (escl. Top 5% stipendi)</h3>
+            <p class="indicator-desc">Ricalcolo del divario globale escludendo i "Top Earners" (top 5% degli stipendi) per mostrare quanto i ruoli apicali pesano sul risultato.</p>
+            <div class="adjusted-gap-grid">
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Gap Rettificato (Media)</div>
+                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(adjustedGapResult.gapMedia) }">{{ formatPct(adjustedGapResult.gapMedia) }}</div>
+              </div>
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Gap Rettificato (Mediana)</div>
+                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(adjustedGapResult.gapMediana) }">{{ formatPct(adjustedGapResult.gapMediana) }}</div>
+              </div>
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Gap Originale ({{ genderViewMode === 'media' ? 'Media' : 'Mediana' }})</div>
+                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(genderViewMode === 'media' ? indicatorsResult.a_divarioRetributivoGenere.percentuale : indicatorsResult.c_divarioMedianoGenere.percentuale) }">
+                  {{ formatPct(genderViewMode === 'media' ? indicatorsResult.a_divarioRetributivoGenere.percentuale : indicatorsResult.c_divarioMedianoGenere.percentuale) }}
+                </div>
+              </div>
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Esclusi</div>
+                <div class="indicator-value plain">{{ adjustedGapResult.excluded }} / {{ adjustedGapResult.total }}</div>
+              </div>
+            </div>
+            <p v-if="adjustedGapResult && indicatorsResult" class="adjusted-gap-note">
+              <template v-if="Math.abs(adjustedGapResult.gapMedia) < Math.abs(indicatorsResult.a_divarioRetributivoGenere.percentuale)">
+                Escludendo i top earners il divario si riduce di {{ formatPct(Math.abs(indicatorsResult.a_divarioRetributivoGenere.percentuale) - Math.abs(adjustedGapResult.gapMedia)) }}, indicando un impatto significativo dei ruoli apicali sul gap complessivo.
+              </template>
+              <template v-else>
+                Il gap rettificato è pari o superiore a quello originale: i ruoli apicali non incidono significativamente sul divario.
+              </template>
+            </p>
+          </section>
+
         </div>
         <div v-else-if="resultsTab === 'genere' && !indicatorsResult" class="no-data-msg">
           <strong>Analisi di genere non disponibile.</strong><br/>
@@ -3222,5 +3354,159 @@ function exportJobGradingPdf() {
   padding: 0.3rem 0.85rem;
   font-size: 0.8rem;
   border-radius: 6px;
+}
+
+/* Gender dashboard toggle */
+.gender-dashboard-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.5rem 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+  flex-wrap: wrap;
+}
+.toggle-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  margin-right: 0.25rem;
+}
+.toggle-btn {
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-page);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s;
+}
+.toggle-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  font-weight: 600;
+}
+.eu-compliant-msg {
+  color: #16a34a;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-left: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: rgba(22, 163, 74, 0.08);
+  border-radius: 6px;
+}
+
+/* Band gender gap table */
+.band-gender-section {
+  margin-top: 1rem;
+}
+.band-gender-table {
+  display: grid;
+  gap: 0;
+  font-size: 0.85rem;
+}
+.band-gender-row {
+  display: grid;
+  grid-template-columns: 60px 80px 80px 120px 110px 1fr;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  align-items: center;
+  border-bottom: 1px solid var(--border-light);
+}
+.band-gender-row.header {
+  font-weight: 700;
+  background: var(--bg-page);
+  border-radius: 6px 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.band-gender-row.gap-over {
+  background: rgba(239, 68, 68, 0.05);
+}
+.band-gender-row.gap-ok {
+  background: rgba(22, 163, 74, 0.04);
+}
+.gap-value {
+  font-weight: 600;
+}
+.status-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status-badge.compliant {
+  background: rgba(22, 163, 74, 0.12);
+  color: #16a34a;
+}
+.status-badge.non-compliant {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+.band-justify-select {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-page);
+  max-width: 100%;
+}
+.band-justify-text {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+.btn-link-sm {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding: 0;
+}
+.btn-link-sm:hover { color: #ef4444; }
+
+/* Adjusted gap section */
+.adjusted-gap-section {
+  margin-top: 1rem;
+}
+.adjusted-gap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+.adjusted-gap-box {
+  text-align: center;
+  padding: 0.75rem;
+  background: var(--bg-page);
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+}
+.adjusted-gap-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.25rem;
+}
+.indicator-value.plain {
+  color: var(--text-primary);
+  font-size: 1.5rem;
+}
+.adjusted-gap-note {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 </style>
