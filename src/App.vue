@@ -13,6 +13,7 @@ import {
   computeIndicatorsWithGemini,
   scoreJobRolesWithGemini,
   checkGeminiAvailable,
+  suggestJustificationWithGemini,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
@@ -383,10 +384,36 @@ function scoreBadgeClass(band) { return `band-${band}` }
 const justifications = ref({})
 const justifyingRole = ref(null)
 const justifyText = ref('')
+const justifyAiLoading = ref(false)
 
 function openJustify(roleName) {
   justifyingRole.value = roleName
   justifyText.value = justifications.value[roleName] || ''
+}
+
+async function suggestJustify() {
+  const roleName = justifyingRole.value
+  if (!roleName) return
+  const r = jobResults.value.find((x) => x.role === roleName)
+  if (!r) return
+  justifyAiLoading.value = true
+  try {
+    const suggestion = await suggestJustificationWithGemini({
+      role: r.role,
+      level: r.level || '',
+      band: r.band,
+      totalScore: Math.round(r.totalScore),
+      medianSalary: Math.round(r.medianTotalSalary || 0),
+      deviation: Math.round((r.deviationFromBandMedianPct || 0) * 10) / 10,
+      jobFamily: r.jobFamily || 'General',
+      nEmployees: r.n || 1,
+    })
+    justifyText.value = suggestion
+  } catch (err) {
+    justifyText.value = `[Errore AI: ${err.message}]`
+  } finally {
+    justifyAiLoading.value = false
+  }
 }
 
 function saveJustify() {
@@ -873,6 +900,19 @@ function exportJobGradingPdf() {
             </p>
           </div>
 
+          <div class="settings-row">
+            <label class="sr-checkbox-row">
+              <input type="checkbox" v-model="analysisSettings.filterOutliers" :disabled="analysisLoading" />
+              <span>Filtro base (escludi record con RAL/Totale = 0, null o N/D)</span>
+            </label>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-checkbox-row">
+              <input type="checkbox" v-model="analysisSettings.strictOutliers" :disabled="analysisLoading" />
+              <span>Strict Outlier Removal (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
+            </label>
+          </div>
 
           <div class="settings-row">
             <label class="sr-label">Numero di bande</label>
@@ -1056,12 +1096,20 @@ function exportJobGradingPdf() {
         <!-- Modal giustificativo -->
         <div v-if="justifyingRole != null" class="justify-overlay" @click.self="cancelJustify">
           <div class="justify-modal">
-            <h3>Justification – {{ justifyingRole }}</h3>
-            <p class="justify-hint">Enter a justification for the pay deviation exceeding ±5% from the band average.</p>
-            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Reason..."></textarea>
+            <h3>Giustificativo – {{ justifyingRole }}</h3>
+            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla mediana di banda.</p>
+            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..." :disabled="justifyAiLoading"></textarea>
             <div class="justify-actions">
-              <button class="btn-secondary" @click="cancelJustify">Cancel</button>
-              <button class="btn-primary" @click="saveJustify">Save</button>
+              <button v-if="geminiEnabled" type="button" class="btn-ai" :disabled="justifyAiLoading" @click="suggestJustify">
+                <span v-if="justifyAiLoading" class="spinner-sm"></span>
+                <span v-else>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:4px"><path d="M12 2l2.09 6.26L20.18 9l-5.09 4.09L16.82 20 12 16.18 7.18 20l1.73-6.91L3.82 9l6.09-.74z"/></svg>
+                  Suggerisci con AI
+                </span>
+              </button>
+              <span style="flex:1"></span>
+              <button class="btn-secondary" @click="cancelJustify">Annulla</button>
+              <button class="btn-primary" @click="saveJustify" :disabled="justifyAiLoading">Salva</button>
             </div>
           </div>
         </div>
@@ -2988,9 +3036,39 @@ function exportJobGradingPdf() {
 
 .justify-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+.btn-ai {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--primary, #0a6cd2);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 108, 210, 0.06);
+  color: var(--primary, #0a6cd2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  display: inline-flex;
+  align-items: center;
+}
+.btn-ai:hover:not(:disabled) {
+  background: rgba(10, 108, 210, 0.14);
+  box-shadow: 0 2px 8px rgba(10, 108, 210, 0.15);
+}
+.btn-ai:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.spinner-sm {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(10, 108, 210, 0.2);
+  border-top-color: var(--primary, #0a6cd2);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
 }
 
 /* Analysis Settings Panel */

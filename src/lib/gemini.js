@@ -33,3 +33,8 @@ export async function computeIndicatorsWithGemini(normalizedData) {
 export async function scoreJobRolesWithGemini(roles) {
   return postJson('/api/gemini/job-scoring', { roles })
 }
+
+export async function suggestJustificationWithGemini(roleData) {
+  const data = await postJson('/api/gemini/justify', roleData)
+  return data.suggestion || ''
+}
