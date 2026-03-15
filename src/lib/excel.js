@@ -73,7 +73,7 @@ export function detectColumnRoles(headers, rows) {
   const find = (...candidates) =>
     lower.findIndex((h) => candidates.some((c) => h.includes(c))) ?? -1
 
-  const genderIdx = find('genere', 'gender', 'sesso')
+  const genderIdx = find('genere', 'gender', 'sesso', 'sex', 'm/f', 'f/m')
   if (genderIdx >= 0) result[COLUMN_ROLES.gender] = genderIdx
 
   const nameIdx = find('nome', 'cognome', 'employee')
@@ -130,14 +130,21 @@ export function buildNormalizedData(rows, headers, mapping) {
     return Number.isFinite(n) ? n : 0
   }
 
+  function normalizeGender(raw) {
+    if (raw == null || raw === '') return null
+    const s = String(raw).trim().toLowerCase()
+    if (s === 'm' || s === 'maschio' || s === 'male' || s === 'uomo' || s === 'h' || s === 'homme') return 'M'
+    if (s === 'f' || s === 'femmina' || s === 'female' || s === 'donna' || s === 'femme') return 'F'
+    const first = s.charAt(0)
+    if (first === 'm') return 'M'
+    if (first === 'f') return 'F'
+    return null
+  }
+
   return rows
     .map((row) => {
       const genderRaw = genderIdx != null ? row[genderIdx] : null
-      const gender =
-        String(genderRaw || '')
-          .trim()
-          .toUpperCase()
-          .charAt(0) || null
+      const gender = normalizeGender(genderRaw)
 
       return {
         gender,

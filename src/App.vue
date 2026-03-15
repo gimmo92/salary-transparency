@@ -942,7 +942,7 @@ function exportJobGradingPdf() {
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
 
         <div class="results-subtabs">
-          <button class="subtab" :class="{ active: resultsTab === 'genere' }" :disabled="!indicatorsResult" @click="resultsTab = 'genere'">Analisi di genere</button>
+          <button class="subtab" :class="{ active: resultsTab === 'genere' }" @click="resultsTab = 'genere'">Analisi di genere</button>
           <button class="subtab" :class="{ active: resultsTab === 'pari_valore' }" :disabled="jobResults.length === 0" @click="resultsTab = 'pari_valore'">Lavori di pari valore</button>
         </div>
 
@@ -1014,7 +1014,11 @@ function exportJobGradingPdf() {
           </div>
         </div>
         <div v-else-if="resultsTab === 'genere' && !indicatorsResult" class="no-data-msg">
-          Gender data not available. Check that the Gender (M/F) column is mapped correctly.
+          <strong>Analisi di genere non disponibile.</strong><br/>
+          Per attivarla, verifica che nel file Excel sia presente una colonna <strong>Genere</strong> (con valori M/F, Maschio/Femmina, Uomo/Donna)
+          e che sia mappata correttamente nel passo "Verifica assegnazione colonne".
+          <br/><br/>
+          <button class="btn-secondary" @click="analisiStep = 'mapping'">Torna al mapping colonne</button>
         </div>
 
         <!-- Sub-tab: Lavori di pari valore -->
