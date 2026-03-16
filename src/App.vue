@@ -298,10 +298,10 @@ async function confirmMapping() {
           const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
           const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
           const delta = comparable ? Math.abs(aiGap - localGap) : 0
-          if (comparable && delta > 10) {
+          if (comparable && delta > 15) {
             indicatorsResult.value = localIndicators
             indicatorsSource.value = 'locale'
-            uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti). Uso motore locale.`
+            uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti, soglia 15). Uso motore locale.`
           } else {
             indicatorsResult.value = {
               ...aiIndicators,
