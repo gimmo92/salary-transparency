@@ -455,13 +455,94 @@ const bandGenderGaps = ref([])
 const adjustedGapResult = ref(null)
 const genderNormalizedCache = ref([])
 const bandGenderJustifications = ref({})
+const expandedJustifyBand = ref(null)
 
 const BAND_JUSTIFY_REASONS = [
-  'Differenza di Anzianità media',
-  'Possesso di Certificazioni Tecniche specifiche',
-  'Maggiori turni notturni/festivi (Condizioni)',
-  'Market Premium per ruolo specifico',
+  { id: 'seniority', label: 'Anzianità di servizio', icon: '⏳', desc: 'Differenza significativa nell\'anzianità media tra i generi nella band' },
+  { id: 'performance', label: 'Performance e Merito', icon: '🏆', desc: 'Differenze retributive legate a valutazioni di performance documentate' },
+  { id: 'market', label: 'Scarsità di Mercato', icon: '📈', desc: 'Market premium applicato per ruoli con alta domanda/bassa offerta' },
+  { id: 'training', label: 'Formazione d\'Eccellenza', icon: '🎓', desc: 'Possesso di certificazioni, master o percorsi formativi rilevanti' },
+  { id: 'flexibility', label: 'Flessibilità Oraria / Turnazione', icon: '🔄', desc: 'Indennità legate a turni notturni, festivi o condizioni speciali' },
 ]
+
+function getOrCreateJustification(band) {
+  if (!bandGenderJustifications.value[band]) {
+    bandGenderJustifications.value = {
+      ...bandGenderJustifications.value,
+      [band]: { reasons: [], note: '', files: [] },
+    }
+  }
+  return bandGenderJustifications.value[band]
+}
+
+function toggleJustifyBand(band) {
+  if (expandedJustifyBand.value === band) {
+    expandedJustifyBand.value = null
+  } else {
+    getOrCreateJustification(band)
+    expandedJustifyBand.value = band
+  }
+}
+
+function toggleBandReason(band, reasonId) {
+  const j = getOrCreateJustification(band)
+  const idx = j.reasons.indexOf(reasonId)
+  if (idx >= 0) j.reasons.splice(idx, 1)
+  else j.reasons.push(reasonId)
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+}
+
+function updateBandNote(band, text) {
+  const j = getOrCreateJustification(band)
+  j.note = text
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+}
+
+function onBandFileUpload(band, event) {
+  const files = event.target.files
+  if (!files?.length) return
+  const j = getOrCreateJustification(band)
+  for (const f of files) {
+    j.files.push({ name: f.name, size: f.size, file: f })
+  }
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+  event.target.value = ''
+}
+
+function removeBandFile(band, index) {
+  const j = getOrCreateJustification(band)
+  j.files.splice(index, 1)
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+}
+
+function clearBandJustification(band) {
+  const copy = { ...bandGenderJustifications.value }
+  delete copy[band]
+  bandGenderJustifications.value = copy
+  if (expandedJustifyBand.value === band) expandedJustifyBand.value = null
+}
+
+function hasBandJustification(band) {
+  const j = bandGenderJustifications.value[band]
+  return j && (j.reasons.length > 0 || j.note || j.files.length > 0)
+}
+
+function bandJustifySummary(band) {
+  const j = bandGenderJustifications.value[band]
+  if (!j) return ''
+  const labels = j.reasons.map((id) => BAND_JUSTIFY_REASONS.find((r) => r.id === id)?.label || id)
+  const parts = []
+  if (labels.length) parts.push(labels.join(', '))
+  if (j.note) parts.push('+ nota')
+  if (j.files.length) parts.push(`${j.files.length} doc`)
+  return parts.join(' · ')
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
 
 function recomputeBandGenderGaps() {
   bandGenderGaps.value = computeBandGenderGaps(genderNormalizedCache.value, jobResults.value)
@@ -469,10 +550,6 @@ function recomputeBandGenderGaps() {
 
 function recomputeAdjustedGap() {
   adjustedGapResult.value = computeAdjustedGap(genderNormalizedCache.value, 5)
-}
-
-function setBandJustification(band, reason) {
-  bandGenderJustifications.value = { ...bandGenderJustifications.value, [band]: reason }
 }
 
 // Salary Review
@@ -1082,31 +1159,80 @@ function exportJobGradingPdf() {
                 <span>Stato</span>
                 <span>Giustificazione</span>
               </div>
-              <div v-for="bg in bandGenderGaps" :key="bg.band" class="band-gender-row" :class="{ 'gap-over': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5, 'gap-ok': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5 }">
-                <span>{{ bg.band }}</span>
-                <span>{{ bg.nM }}</span>
-                <span>{{ bg.nF }}</span>
-                <span class="gap-value" :class="{ 'gap-alert': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5 }">
-                  {{ formatPct(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) }}
-                </span>
-                <span>
-                  <span v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5" class="status-badge compliant">Conforme</span>
-                  <span v-else class="status-badge non-compliant">Gap &gt; 5%</span>
-                </span>
-                <span>
-                  <template v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5">
-                    <select v-if="!bandGenderJustifications[bg.band]" class="band-justify-select" @change="setBandJustification(bg.band, $event.target.value)">
-                      <option value="">Inserisci Giustificazione...</option>
-                      <option v-for="reason in BAND_JUSTIFY_REASONS" :key="reason" :value="reason">{{ reason }}</option>
-                    </select>
-                    <span v-else class="band-justify-text">
-                      {{ bandGenderJustifications[bg.band] }}
-                      <button class="btn-link-sm" @click="setBandJustification(bg.band, '')">✕</button>
-                    </span>
-                  </template>
-                  <span v-else class="muted">—</span>
-                </span>
-              </div>
+              <template v-for="bg in bandGenderGaps" :key="bg.band">
+                <div class="band-gender-row" :class="{ 'gap-over': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5, 'gap-ok': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5 }">
+                  <span>{{ bg.band }}</span>
+                  <span>{{ bg.nM }}</span>
+                  <span>{{ bg.nF }}</span>
+                  <span class="gap-value" :class="{ 'gap-alert': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5 }">
+                    {{ formatPct(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) }}
+                  </span>
+                  <span>
+                    <span v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5" class="status-badge compliant">Conforme</span>
+                    <span v-else class="status-badge non-compliant">Gap &gt; 5%</span>
+                  </span>
+                  <span>
+                    <template v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5">
+                      <button v-if="!hasBandJustification(bg.band)" class="btn-justify-open" @click="toggleJustifyBand(bg.band)">
+                        {{ expandedJustifyBand === bg.band ? '▾ Chiudi' : '+ Inserisci Giustificazione' }}
+                      </button>
+                      <span v-else class="band-justify-summary" @click="toggleJustifyBand(bg.band)">
+                        {{ bandJustifySummary(bg.band) }}
+                        <button class="btn-link-sm" @click.stop="clearBandJustification(bg.band)">✕</button>
+                      </span>
+                    </template>
+                    <span v-else class="muted">—</span>
+                  </span>
+                </div>
+                <!-- Pannello giustificativi espanso -->
+                <div v-if="expandedJustifyBand === bg.band && Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5" class="band-justify-panel">
+                  <div class="bjp-header">
+                    <strong>Giustificativi per Band {{ bg.band }}</strong>
+                    <span class="muted">Seleziona uno o più motivi oggettivi</span>
+                  </div>
+                  <div class="bjp-reasons">
+                    <button
+                      v-for="reason in BAND_JUSTIFY_REASONS"
+                      :key="reason.id"
+                      :class="['bjp-reason-btn', { active: bandGenderJustifications[bg.band]?.reasons?.includes(reason.id) }]"
+                      @click="toggleBandReason(bg.band, reason.id)"
+                    >
+                      <span class="bjp-reason-icon">{{ reason.icon }}</span>
+                      <span class="bjp-reason-label">{{ reason.label }}</span>
+                      <span class="bjp-reason-desc">{{ reason.desc }}</span>
+                      <span class="bjp-reason-check">{{ bandGenderJustifications[bg.band]?.reasons?.includes(reason.id) ? '✓' : '' }}</span>
+                    </button>
+                  </div>
+                  <div class="bjp-note">
+                    <label class="bjp-note-label">Note aggiuntive</label>
+                    <textarea
+                      class="bjp-note-input"
+                      rows="2"
+                      placeholder="Aggiungi dettagli a supporto della giustificazione..."
+                      :value="bandGenderJustifications[bg.band]?.note || ''"
+                      @input="updateBandNote(bg.band, $event.target.value)"
+                    ></textarea>
+                  </div>
+                  <div class="bjp-files">
+                    <label class="bjp-note-label">Documenti allegati</label>
+                    <div class="bjp-file-list" v-if="bandGenderJustifications[bg.band]?.files?.length">
+                      <div v-for="(f, fi) in bandGenderJustifications[bg.band].files" :key="fi" class="bjp-file-item">
+                        <span class="bjp-file-icon">📄</span>
+                        <span class="bjp-file-name">{{ f.name }}</span>
+                        <span class="bjp-file-size">{{ formatFileSize(f.size) }}</span>
+                        <button class="btn-link-sm" @click="removeBandFile(bg.band, fi)">✕</button>
+                      </div>
+                    </div>
+                    <label class="bjp-upload-btn">
+                      📎 Carica documento
+                      <input type="file" multiple hidden @change="onBandFileUpload(bg.band, $event)" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" />
+                    </label>
+                  </div>
+                  <div class="bjp-actions">
+                    <button class="btn-primary btn-sm" @click="expandedJustifyBand = null">Conferma</button>
+                  </div>
+                </div>
+              </template>
             </div>
           </section>
 
@@ -3449,21 +3575,37 @@ function exportJobGradingPdf() {
   background: rgba(239, 68, 68, 0.12);
   color: #ef4444;
 }
-.band-justify-select {
-  font-size: 0.8rem;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border-light);
+.btn-justify-open {
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px dashed var(--border-light);
   border-radius: 6px;
   background: var(--bg-page);
-  max-width: 100%;
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 500;
+  transition: all 0.15s;
 }
-.band-justify-text {
-  display: flex;
+.btn-justify-open:hover {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.05);
+}
+.band-justify-summary {
+  display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--text-primary);
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  background: rgba(10, 108, 210, 0.06);
+  border-radius: 5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.band-justify-summary:hover { background: rgba(10, 108, 210, 0.1); }
 .btn-link-sm {
   background: none;
   border: none;
@@ -3473,6 +3615,153 @@ function exportJobGradingPdf() {
   padding: 0;
 }
 .btn-link-sm:hover { color: #ef4444; }
+
+/* Justification panel */
+.band-justify-panel {
+  grid-column: 1 / -1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 0.25rem 0 0.5rem;
+  box-shadow: var(--shadow-soft);
+}
+.bjp-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.bjp-header strong { font-size: 0.9rem; }
+.bjp-reasons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.bjp-reason-btn {
+  display: grid;
+  grid-template-columns: 28px 1fr 22px;
+  grid-template-rows: auto auto;
+  gap: 0 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1.5px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-page);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+.bjp-reason-btn:hover {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.03);
+}
+.bjp-reason-btn.active {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.08);
+  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.12);
+}
+.bjp-reason-icon {
+  grid-row: 1 / 3;
+  font-size: 1.2rem;
+  align-self: center;
+}
+.bjp-reason-label {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+.bjp-reason-desc {
+  grid-column: 2;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+.bjp-reason-check {
+  grid-row: 1 / 3;
+  align-self: center;
+  justify-self: center;
+  font-size: 0.9rem;
+  color: var(--primary);
+  font-weight: 700;
+}
+.bjp-note { margin-bottom: 0.75rem; }
+.bjp-note-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.bjp-note-input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: var(--bg-page);
+  resize: vertical;
+  font-family: inherit;
+}
+.bjp-note-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.12);
+}
+.bjp-files { margin-bottom: 0.75rem; }
+.bjp-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+.bjp-file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--bg-page);
+  border-radius: 5px;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-light);
+}
+.bjp-file-icon { font-size: 0.9rem; }
+.bjp-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.bjp-file-size {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+.bjp-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px dashed var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-page);
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--primary);
+  font-weight: 500;
+  transition: all 0.15s;
+}
+.bjp-upload-btn:hover {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.05);
+}
+.bjp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
 
 /* Adjusted gap section */
 .adjusted-gap-section {
