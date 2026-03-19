@@ -713,7 +713,7 @@ function exportJobGradingPdf() {
   const regText = [
     'I dipendenti sono raggruppati per livello di inquadramento CCNL.',
     'Ogni livello costituisce una fascia retributiva omogenea.',
-    'La deviazione e calcolata sulla mediana salariale complessiva per robustezza statistica.',
+    'La deviazione e calcolata sulla media salariale complessiva per livello.',
     'Scostamenti superiori al +/-5% richiedono un giustificativo documentato.',
   ]
   regText.forEach((line) => {
@@ -722,15 +722,15 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Livello CCNL', 'N Dipendenti', 'N Validi', 'Media RAL', 'Mediana Retrib.', 'Dev. da mediana globale', 'Ruoli', 'Giustificativo']]
+  const head = [['Fascia', 'Livello CCNL', 'N Dipendenti', 'N Validi', 'Media RAL', 'Media Retrib.', 'Dev. da media globale', 'Ruoli', 'Giustificativo']]
   const body = jobResults.value.map((b) => [
     b.band,
     b.level || '–',
     b.n,
     b.nValid,
     formatNum(b.avgBaseSalary),
-    formatNum(b.medianTotalSalary),
-    formatPct(b.deviationFromOverallMedianPct),
+    formatNum(b.avgTotalSalary),
+    formatPct(b.deviationFromOverallMeanPct),
     b.roles.join(', ') || '–',
     justifications.value[b.level] || '',
   ])
@@ -834,7 +834,7 @@ function exportJobGradingPdf() {
         </div>
         <div class="settings-panel">
           <h3 class="settings-title">Metodo di analisi</h3>
-          <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello forma una fascia e ne viene calcolata la retribuzione mediana e la deviazione.</p>
+          <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello forma una fascia e ne viene calcolata la retribuzione media e la deviazione.</p>
         </div>
 
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
@@ -1080,12 +1080,12 @@ function exportJobGradingPdf() {
             <h3 class="band-title">Fascia {{ band.band }} – {{ band.level }}</h3>
             <div class="band-summary">
               <span><strong>{{ band.n }}</strong> dipendenti ({{ band.nValid }} validi)</span>
-              <span>Mediana retrib.: <strong>{{ formatNum(band.medianTotalSalary) }}</strong></span>
+              <span>Media retrib.: <strong>{{ formatNum(band.avgTotalSalary) }}</strong></span>
               <span>Media RAL: <strong>{{ formatNum(band.avgBaseSalary) }}</strong></span>
-              <span :class="{ 'gap-alert': isGapAlert(band.deviationFromOverallMedianPct) }">
-                Dev. dalla mediana globale: <strong>{{ formatPct(band.deviationFromOverallMedianPct) }}</strong>
+              <span :class="{ 'gap-alert': isGapAlert(band.deviationFromOverallMeanPct) }">
+                Dev. dalla media globale: <strong>{{ formatPct(band.deviationFromOverallMeanPct) }}</strong>
                 <button
-                  v-if="isGapAlert(band.deviationFromOverallMedianPct)"
+                  v-if="isGapAlert(band.deviationFromOverallMeanPct)"
                   class="btn-justify"
                   :class="{ 'has-note': justifications[band.level] }"
                   title="Aggiungi giustificativo"
@@ -1102,7 +1102,7 @@ function exportJobGradingPdf() {
                 <span>Mostra {{ band.people.length }} dipendenti</span>
               </div>
               <template v-if="expandedLevels.has(band.level)">
-                <div class="people-header"><span>#</span><span>Dipendente</span><span>Ruolo</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da mediana livello</span></div>
+                <div class="people-header"><span>#</span><span>Dipendente</span><span>Ruolo</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da media livello</span></div>
                 <div v-for="p in band.people" :key="p.index" class="people-row">
                   <span>{{ p.index }}</span>
                   <span>{{ p.name || '–' }}</span>
@@ -1110,7 +1110,7 @@ function exportJobGradingPdf() {
                   <span>{{ formatNum(p.baseSalary) }}</span>
                   <span>{{ formatNum(p.variableComponents) }}</span>
                   <span>{{ formatNum(p.totalSalary) }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(p.deviationFromLevelMedianPct) }">{{ formatPct(p.deviationFromLevelMedianPct) }}</span>
+                    <span :class="{ 'gap-alert': isGapAlert(p.deviationFromLevelMeanPct) }">{{ formatPct(p.deviationFromLevelMeanPct) }}</span>
                 </div>
               </template>
             </div>
@@ -1135,7 +1135,7 @@ function exportJobGradingPdf() {
         <div v-if="justifyingLevel != null" class="justify-overlay" @click.self="cancelJustify">
           <div class="justify-modal">
             <h3>Giustificativo – {{ justifyingLevel }}</h3>
-            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla mediana complessiva.</p>
+            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla media complessiva.</p>
             <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
             <div class="justify-actions">
               <span style="flex:1"></span>

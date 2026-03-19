@@ -70,11 +70,9 @@ export function levelSortOrder(levelRaw) {
   return 0
 }
 
-function median(arr) {
+function mean(arr) {
   if (!arr.length) return 0
-  const sorted = [...arr].sort((a, b) => a - b)
-  const mid = Math.floor(sorted.length / 2)
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+  return arr.reduce((s, v) => s + v, 0) / arr.length
 }
 
 function isValidSalary(person) {
@@ -156,7 +154,7 @@ export function groupByLevel(normalizedData) {
     const totalBase = validPeople.reduce((s, p) => s + p.baseSalary, 0)
     const totalVar = validPeople.reduce((s, p) => s + p.variableComponents, 0)
     const totalSals = validPeople.map((p) => p.totalSalary)
-    const medianSalary = median(totalSals)
+    const avgSalary = mean(totalSals)
     const roles = [...new Set(g.people.map((p) => p.role).filter(Boolean))]
 
     return {
@@ -168,36 +166,35 @@ export function groupByLevel(normalizedData) {
       nValid: n,
       avgBaseSalary: n ? totalBase / n : 0,
       avgVariableComponents: n ? totalVar / n : 0,
-      avgTotalSalary: n ? totalSals.reduce((a, b) => a + b, 0) / n : 0,
-      medianTotalSalary: medianSalary,
+      avgTotalSalary: avgSalary,
       people: g.people,
     }
   })
 }
 
-// --- Compute deviation of each band from overall median ---
+// --- Compute deviation of each band from overall mean ---
 
 export function enrichWithDeviation(bands) {
   if (!bands.length) return []
 
-  const allMedians = bands.filter((b) => b.nValid > 0).map((b) => b.medianTotalSalary)
-  const overallMedian = median(allMedians)
+  const allMeans = bands.filter((b) => b.nValid > 0).map((b) => b.avgTotalSalary)
+  const overallMean = mean(allMeans)
 
   return bands.map((b) => {
-    const val = b.medianTotalSalary || 0
-    const deviationPct = overallMedian ? ((val - overallMedian) / overallMedian) * 100 : 0
+    const val = b.avgTotalSalary || 0
+    const deviationPct = overallMean ? ((val - overallMean) / overallMean) * 100 : 0
 
     const people = b.people.map((p) => ({
       ...p,
-      deviationFromLevelMedianPct: b.medianTotalSalary
-        ? ((p.totalSalary - b.medianTotalSalary) / b.medianTotalSalary) * 100
+      deviationFromLevelMeanPct: b.avgTotalSalary
+        ? ((p.totalSalary - b.avgTotalSalary) / b.avgTotalSalary) * 100
         : 0,
     }))
 
     return {
       ...b,
-      overallMedian,
-      deviationFromOverallMedianPct: deviationPct,
+      overallMean,
+      deviationFromOverallMeanPct: deviationPct,
       people,
     }
   })
