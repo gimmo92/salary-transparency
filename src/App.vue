@@ -7,16 +7,22 @@ import {
   COLUMN_ROLES,
   getRoleLabel,
 } from './lib/excel.js'
-import { computeIndicators } from './lib/indicators.js'
+import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './lib/indicators.js'
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
   scoreJobRolesWithGemini,
+  checkGeminiAvailable,
+  suggestJustificationWithGemini,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
   aggregateRolesForGrading,
   enrichWithBandsAndDeviation,
+  computeWeightedScore,
+  normalizeLevelScore,
+  getJobFamily,
+  getJobFamilyMultiplier,
 } from './lib/jobGrading.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
@@ -25,7 +31,7 @@ import 'jspdf-autotable'
 const activeSection = ref('salaryReview')
 
 const sections = [
-  { id: 'salaryReview', label: 'Salary Review', icon: 'salary' },
+  { id: 'salaryReview', label: 'Revisione Salariale', icon: 'salary' },
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
 ]
@@ -36,7 +42,6 @@ const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
 const excelUrl = ref('')
-const headerRowIndex = ref(1)
 const uploadError = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
@@ -51,7 +56,28 @@ const jobSource = ref('locale')
 
 const resultsTab = ref('genere') // 'genere' | 'pari_valore'
 
-const googleApiKey = (import.meta.env.VITE_GOOGLE_AI_API_KEY || '').trim()
+const geminiEnabled = ref(false)
+
+// Analysis settings
+const analysisSettings = ref({
+  weights: { level: 45, skills: 15, responsibility: 20, mentalEffort: 10, conditions: 10 },
+  filterOutliers: true,
+  strictOutliers: true,
+  bandCount: 10,
+})
+
+const weightsTotal = computed(() => {
+  const w = analysisSettings.value.weights
+  return w.level + w.skills + w.responsibility + w.mentalEffort + w.conditions
+})
+
+const weightsValid = computed(() => weightsTotal.value === 100)
+
+function clampWeight(key) {
+  const w = analysisSettings.value.weights
+  if (w[key] < 0) w[key] = 0
+  if (w[key] > 100) w[key] = 100
+}
 
 const allRoleKeys = [
   COLUMN_ROLES.gender,
@@ -122,6 +148,12 @@ async function viewAnalysis(id) {
     excelRows.value = record.rows_json || []
     saveStatus.value = `Analisi caricata dallo storico (ID: ${record.id})`
 
+    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+    genderNormalizedCache.value = normalizedGender
+    bandGenderJustifications.value = {}
+    recomputeBandGenderGaps()
+    recomputeAdjustedGap()
+
     resultsTab.value = indicatorsResult.value ? 'genere' : 'pari_valore'
     analisiStep.value = 'results'
     activeSection.value = 'analisi'
@@ -159,29 +191,26 @@ function toggleRoleExpand(role) {
 }
 
 function onScoreEdit(r) {
-  r.totalScore = (Number(r.competenze_richieste) || 0)
-    + (Number(r.responsabilita) || 0)
-    + (Number(r.sforzo_mentale) || 0)
-    + (Number(r.condizioni_lavorative) || 0)
+  r.totalScore = computeWeightedScore(r, analysisSettings.value.weights)
   recalcBandsAndDeviation()
 }
 
 function recalcBandsAndDeviation() {
-  const sorted = [...jobResults.value].sort((a, b) => b.totalScore - a.totalScore)
-  const n = sorted.length
-  const bandSize = Math.ceil(n / 5)
-  sorted.forEach((r, i) => { r.band = Math.min(5, Math.floor(i / bandSize) + 1) })
-  for (let b = 1; b <= 5; b++) {
-    const inBand = sorted.filter((x) => x.band === b)
-    const avg = inBand.length ? inBand.reduce((s, x) => s + (Number(x.avgTotalSalary) || 0), 0) / inBand.length : 0
-    inBand.forEach((r) => {
-      r.deviationFromBandAvgPct = avg ? (((Number(r.avgTotalSalary) || 0) - avg) / avg) * 100 : 0
-    })
+  const settings = analysisSettings.value
+  const current = jobResults.value.map((r) => ({ ...r }))
+  jobResults.value = enrichWithBandsAndDeviation(current, {
+    bandCount: settings.bandCount,
+    filterOutliers: settings.filterOutliers,
+    strictOutliers: settings.strictOutliers,
+    weights: settings.weights,
+  })
+  if (genderNormalizedCache.value.length) {
+    recomputeBandGenderGaps()
   }
-  jobResults.value = sorted
 }
 
 function fallbackLocalJobScores(roles) {
+  const weights = analysisSettings.value.weights
   return roles.map((r) => {
     const text = `${r.role || ''} ${r.level || ''} ${r.description || ''}`.toLowerCase()
     const clamp = (x) => Math.max(0, Math.min(100, Math.round(x)))
@@ -190,8 +219,11 @@ function fallbackLocalJobScores(roles) {
     const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
     const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
     const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
-    const totalScore = competenze + responsabilita + sforzo + condizioni
-    return { role: r.role, competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, totalScore }
+    const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
+    const family = r.jobFamily || getJobFamily(r.role)
+    const multiplier = r.jobFamilyMultiplier ?? getJobFamilyMultiplier(family)
+    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, levelScore, jobFamilyMultiplier: multiplier }
+    return { role: r.role, levelScore, jobFamily: family, jobFamilyMultiplier: multiplier, ...scores, totalScore: computeWeightedScore(scores, weights) }
   })
 }
 
@@ -206,6 +238,11 @@ function startNuovaAnalisi() {
   resultsTab.value = 'genere'
   justifications.value = {}
   justifyingRole.value = null
+  genderViewMode.value = 'media'
+  bandGenderGaps.value = []
+  adjustedGapResult.value = null
+  genderNormalizedCache.value = []
+  bandGenderJustifications.value = {}
 }
 
 function goToUpload() {
@@ -220,22 +257,22 @@ async function onLoadFromUrl() {
   uploadLoading.value = true
   geminiLoading.value = false
   try {
-    const { rows, headers } = await parseExcelFromUrl(url, { headerRowIndex: headerRowIndex.value })
+    const { rows, headers } = await parseExcelFromUrl(url)
     excelRows.value = rows
     excelHeaders.value = headers
     const heuristic = detectColumnRoles(headers, rows)
     let suggested = { ...heuristic }
-    if (googleApiKey) {
+    if (geminiEnabled.value) {
       geminiLoading.value = true
       try {
-        const geminiMapping = await suggestColumnMappingWithGemini(googleApiKey, headers, rows)
+        const geminiMapping = await suggestColumnMappingWithGemini(headers, rows)
         if (geminiMapping && Object.keys(geminiMapping).length > 0)
           suggested = { ...heuristic, ...geminiMapping }
       } catch (geminiErr) {
         uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Usa il mapping manuale.'
       } finally { geminiLoading.value = false }
     } else {
-      uploadError.value = 'Gemini non attivo: manca VITE_GOOGLE_AI_API_KEY. Uso mapping euristico.'
+      uploadError.value = 'Gemini non attivo: API non configurata sul server. Uso mapping euristico.'
     }
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
@@ -253,18 +290,18 @@ async function confirmMapping() {
     const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedGender.length > 0) {
       const localIndicators = computeIndicators(normalizedGender)
-      if (googleApiKey) {
+      if (geminiEnabled.value) {
         geminiLoading.value = true
         try {
-          const aiIndicators = await computeIndicatorsWithGemini(googleApiKey, normalizedGender)
+          const aiIndicators = await computeIndicatorsWithGemini(normalizedGender)
           const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
           const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
           const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
           const delta = comparable ? Math.abs(aiGap - localGap) : 0
-          if (comparable && delta > 10) {
+          if (comparable && delta > 15) {
             indicatorsResult.value = localIndicators
             indicatorsSource.value = 'locale'
-            uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti). Uso motore locale.`
+            uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti, soglia 15). Uso motore locale.`
           } else {
             indicatorsResult.value = {
               ...aiIndicators,
@@ -286,24 +323,29 @@ async function confirmMapping() {
     }
 
     // --- Job grading (lavori di pari valore) ---
+    const settings = analysisSettings.value
     const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedJob.length > 0) {
-      const aggregated = aggregateRolesForGrading(normalizedJob)
+      const aggregated = aggregateRolesForGrading(normalizedJob, { filterOutliers: settings.filterOutliers, strictOutliers: settings.strictOutliers })
       let scored = fallbackLocalJobScores(aggregated)
       jobSource.value = 'locale'
 
-      if (googleApiKey) {
+      if (geminiEnabled.value) {
         geminiLoading.value = true
         try {
           const aiInput = aggregated.map((r) => ({ role: r.role, level: r.level, job_description: r.description }))
-          const aiScores = await scoreJobRolesWithGemini(googleApiKey, aiInput)
+          const aiScores = await scoreJobRolesWithGemini(aiInput)
           const mapAi = new Map(aiScores.map((x) => [String(x.role || '').toLowerCase().trim(), x]))
           scored = aggregated.map((r) => {
             const ai = mapAi.get(String(r.role || '').toLowerCase().trim())
             if (!ai) return { ...fallbackLocalJobScores([r])[0], role: r.role }
             const c = Number(ai.competenze_richieste ?? 0), resp = Number(ai.responsabilita ?? 0)
             const s = Number(ai.sforzo_mentale ?? 0), cond = Number(ai.condizioni_lavorative ?? 0)
-            return { role: r.role, competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, totalScore: Number(ai.totalScore ?? (c + resp + s + cond)) }
+            const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
+            const family = r.jobFamily || getJobFamily(r.role)
+            const multiplier = r.jobFamilyMultiplier ?? getJobFamilyMultiplier(family)
+            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, levelScore, jobFamilyMultiplier: multiplier }
+            return { role: r.role, levelScore, jobFamily: family, jobFamilyMultiplier: multiplier, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
           })
           jobSource.value = 'ai'
         } catch (err) {
@@ -312,7 +354,12 @@ async function confirmMapping() {
       }
 
       const merged = aggregated.map((r) => ({ ...r, ...(scored.find((x) => x.role === r.role) || {}) }))
-      jobResults.value = enrichWithBandsAndDeviation(merged)
+      jobResults.value = enrichWithBandsAndDeviation(merged, {
+        bandCount: settings.bandCount,
+        filterOutliers: settings.filterOutliers,
+        strictOutliers: settings.strictOutliers,
+        weights: settings.weights,
+      })
     } else {
       jobResults.value = []
     }
@@ -322,12 +369,17 @@ async function confirmMapping() {
       return
     }
 
+    // Gender gap per band & gap rettificato
+    genderNormalizedCache.value = normalizedGender
+    bandGenderJustifications.value = {}
+    recomputeBandGenderGaps()
+    recomputeAdjustedGap()
+
     // Salvataggio DB
     try {
       const saved = await saveAnalysis({
         analysisType: 'combined',
         sourceUrl: excelUrl.value,
-        headerRowIndex: headerRowIndex.value,
         headers: excelHeaders.value,
         mapping: columnMapping.value,
         rows: excelRows.value.slice(0, 500),
@@ -352,10 +404,36 @@ function scoreBadgeClass(band) { return `band-${band}` }
 const justifications = ref({})
 const justifyingRole = ref(null)
 const justifyText = ref('')
+const justifyAiLoading = ref(false)
 
 function openJustify(roleName) {
   justifyingRole.value = roleName
   justifyText.value = justifications.value[roleName] || ''
+}
+
+async function suggestJustify() {
+  const roleName = justifyingRole.value
+  if (!roleName) return
+  const r = jobResults.value.find((x) => x.role === roleName)
+  if (!r) return
+  justifyAiLoading.value = true
+  try {
+    const suggestion = await suggestJustificationWithGemini({
+      role: r.role,
+      level: r.level || '',
+      band: r.band,
+      totalScore: Math.round(r.totalScore),
+      medianSalary: Math.round(r.medianTotalSalary || 0),
+      deviation: Math.round((r.deviationFromBandMedianPct || 0) * 10) / 10,
+      jobFamily: r.jobFamily || 'General',
+      nEmployees: r.n || 1,
+    })
+    justifyText.value = suggestion
+  } catch (err) {
+    justifyText.value = `[Errore AI: ${err.message}]`
+  } finally {
+    justifyAiLoading.value = false
+  }
 }
 
 function saveJustify() {
@@ -369,6 +447,109 @@ function saveJustify() {
 function cancelJustify() {
   justifyingRole.value = null
   justifyText.value = ''
+}
+
+// Gender gap dashboard
+const genderViewMode = ref('media') // 'media' | 'mediana'
+const bandGenderGaps = ref([])
+const adjustedGapResult = ref(null)
+const genderNormalizedCache = ref([])
+const bandGenderJustifications = ref({})
+const expandedJustifyBand = ref(null)
+
+const BAND_JUSTIFY_REASONS = [
+  { id: 'seniority', label: 'Anzianità di servizio', icon: '⏳', desc: 'Differenza significativa nell\'anzianità media tra i generi nella band' },
+  { id: 'performance', label: 'Performance e Merito', icon: '🏆', desc: 'Differenze retributive legate a valutazioni di performance documentate' },
+  { id: 'market', label: 'Scarsità di Mercato', icon: '📈', desc: 'Market premium applicato per ruoli con alta domanda/bassa offerta' },
+  { id: 'training', label: 'Formazione d\'Eccellenza', icon: '🎓', desc: 'Possesso di certificazioni, master o percorsi formativi rilevanti' },
+  { id: 'flexibility', label: 'Flessibilità Oraria / Turnazione', icon: '🔄', desc: 'Indennità legate a turni notturni, festivi o condizioni speciali' },
+]
+
+function getOrCreateJustification(band) {
+  if (!bandGenderJustifications.value[band]) {
+    bandGenderJustifications.value = {
+      ...bandGenderJustifications.value,
+      [band]: { reasons: [], note: '', files: [] },
+    }
+  }
+  return bandGenderJustifications.value[band]
+}
+
+function toggleJustifyBand(band) {
+  if (expandedJustifyBand.value === band) {
+    expandedJustifyBand.value = null
+  } else {
+    getOrCreateJustification(band)
+    expandedJustifyBand.value = band
+  }
+}
+
+function toggleBandReason(band, reasonId) {
+  const j = getOrCreateJustification(band)
+  const idx = j.reasons.indexOf(reasonId)
+  if (idx >= 0) j.reasons.splice(idx, 1)
+  else j.reasons.push(reasonId)
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+}
+
+function updateBandNote(band, text) {
+  const j = getOrCreateJustification(band)
+  j.note = text
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+}
+
+function onBandFileUpload(band, event) {
+  const files = event.target.files
+  if (!files?.length) return
+  const j = getOrCreateJustification(band)
+  for (const f of files) {
+    j.files.push({ name: f.name, size: f.size, file: f })
+  }
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+  event.target.value = ''
+}
+
+function removeBandFile(band, index) {
+  const j = getOrCreateJustification(band)
+  j.files.splice(index, 1)
+  bandGenderJustifications.value = { ...bandGenderJustifications.value }
+}
+
+function clearBandJustification(band) {
+  const copy = { ...bandGenderJustifications.value }
+  delete copy[band]
+  bandGenderJustifications.value = copy
+  if (expandedJustifyBand.value === band) expandedJustifyBand.value = null
+}
+
+function hasBandJustification(band) {
+  const j = bandGenderJustifications.value[band]
+  return j && (j.reasons.length > 0 || j.note || j.files.length > 0)
+}
+
+function bandJustifySummary(band) {
+  const j = bandGenderJustifications.value[band]
+  if (!j) return ''
+  const labels = j.reasons.map((id) => BAND_JUSTIFY_REASONS.find((r) => r.id === id)?.label || id)
+  const parts = []
+  if (labels.length) parts.push(labels.join(', '))
+  if (j.note) parts.push('+ nota')
+  if (j.files.length) parts.push(`${j.files.length} doc`)
+  return parts.join(' · ')
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function recomputeBandGenderGaps() {
+  bandGenderGaps.value = computeBandGenderGaps(genderNormalizedCache.value, jobResults.value)
+}
+
+function recomputeAdjustedGap() {
+  adjustedGapResult.value = computeAdjustedGap(genderNormalizedCache.value, 5)
 }
 
 // Salary Review
@@ -624,7 +805,10 @@ function cancelIncreaseEdit() {
   srView.value = 'list'
 }
 
-onMounted(() => { loadRules() })
+onMounted(async () => {
+  loadRules()
+  geminiEnabled.value = await checkGeminiAvailable()
+})
 
 // PDF export job grading
 function exportJobGradingPdf() {
@@ -649,26 +833,23 @@ function exportJobGradingPdf() {
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
   const regText = [
-    'La valutazione dei ruoli è basata sul metodo Hay, uno standard internazionale per la classificazione e la',
-    'valutazione delle posizioni lavorative. Il metodo si fonda su quattro fattori, ciascuno espresso con un',
-    'punteggio da 0 a 100:',
+    'La valutazione dei ruoli è basata su cinque fattori ponderati con Clustering Funzionale:',
     '',
-    '1. Competenze richieste (0-100): valuta il livello di conoscenze tecniche, professionali e gestionali',
-    '   necessarie per svolgere il ruolo, inclusi titoli di studio, certificazioni e anni di esperienza richiesti.',
+    '1. Inquadramento Contrattuale (Livello CCNL): fattore predominante, normalizzato in scala 0-100',
+    '   (D1-D2=20pt, C1-C3=40pt, B1-B3=65pt, AS-A=85pt, Q=100pt).',
     '',
-    '2. Responsabilità (0-100): misura l\'impatto del ruolo sugli obiettivi organizzativi, la portata delle decisioni',
-    '   prese, il livello di autonomia e la gestione di risorse umane, economiche e materiali.',
+    '2. Competenze richieste (0-100): conoscenze tecniche, professionali e gestionali necessarie.',
     '',
-    '3. Sforzo mentale (0-100): valuta la complessità dei problemi da risolvere, il grado di analisi richiesta,',
-    '   la creatività necessaria e il livello di pensiero strategico e decisionale coinvolto.',
+    '3. Responsabilità (0-100): impatto sugli obiettivi, autonomia, gestione risorse.',
     '',
-    '4. Condizioni lavorative (0-100): considera l\'ambiente fisico di lavoro, i rischi professionali, lo stress,',
-    '   la necessità di turni, trasferte, reperibilità e altre condizioni particolari del ruolo.',
+    '4. Sforzo mentale (0-100): complessità dei problemi, analisi, pensiero strategico.',
     '',
-    'Il punteggio totale (max 400) determina la fascia di appartenenza del ruolo. I ruoli sono ordinati per',
-    'punteggio decrescente e suddivisi in 5 fasce. Per ciascun ruolo viene calcolato lo scostamento percentuale',
-    'della retribuzione media rispetto alla media della fascia di appartenenza. Scostamenti superiori al ±5%',
-    'richiedono un giustificativo documentato.',
+    '5. Condizioni lavorative (0-100): ambiente fisico, rischi, turni, trasferte.',
+    '',
+    'Job Family: ai ruoli IT/Tech è applicato un moltiplicatore di mercato (1.2x) al punteggio finale.',
+    'Outliers: sono esclusi dal calcolo record con RAL < 15k o > 150k (eccezione: Manager/Dirigenti).',
+    'La deviazione di banda è calcolata sulla mediana salariale (non sulla media) per robustezza statistica.',
+    'Scostamenti superiori al ±5% richiedono un giustificativo documentato.',
   ]
   regText.forEach((line) => {
     doc.text(line, 14, y)
@@ -676,18 +857,19 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Ruolo', 'Livello', 'Competenze', 'Responsabilità', 'Sforzo', 'Condizioni', 'Totale', 'Retrib. media', 'Scost. fascia', 'N', 'Giustificativo']]
+  const head = [['Fascia', 'Ruolo', 'Livello', 'Family', 'Competenze', 'Resp.', 'Sforzo', 'Cond.', 'Totale', 'Mediana Retrib.', 'Scost. fascia', 'N', 'Giustificativo']]
   const body = jobResults.value.map((r) => [
     r.band,
     r.role || '–',
     r.level || '–',
+    r.jobFamily || '–',
     r.competenze_richieste,
     r.responsabilita,
     r.sforzo_mentale,
     r.condizioni_lavorative,
-    r.totalScore,
-    formatNum(r.avgTotalSalary),
-    formatPct(r.deviationFromBandAvgPct),
+    formatNum(r.totalScore),
+    formatNum(r.medianTotalSalary),
+    formatPct(r.deviationFromBandMedianPct),
     r.n,
     justifications.value[r.role] || '',
   ])
@@ -770,15 +952,7 @@ function exportJobGradingPdf() {
             <span v-else>Carica e mappa colonne</span>
           </button>
         </div>
-        <div class="header-row-option">
-          <label>Intestazioni colonne nella riga:</label>
-          <select v-model.number="headerRowIndex" class="header-row-select">
-            <option :value="0">1 (prima riga)</option>
-            <option :value="1">2 (seconda riga)</option>
-          </select>
-          <span class="header-row-hint">Usa «2» se la prima riga è vuota o contiene numeri.</span>
-        </div>
-        <p class="api-key-warn">Stato Gemini: <strong>{{ googleApiKey ? 'attivo' : 'non attivo' }}</strong></p>
+        <p class="api-key-warn">Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong></p>
         <p class="url-hint">Puoi incollare un link Google Sheets: verrà convertito in download .xlsx.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
@@ -800,10 +974,80 @@ function exportJobGradingPdf() {
             </select>
           </div>
         </div>
+        <!-- Analysis Settings Panel -->
+        <div class="settings-panel">
+          <h3 class="settings-title">Impostazioni Analisi</h3>
+
+          <div class="settings-row">
+            <label class="sr-label">Pesi fattori Job Grading</label>
+            <p class="settings-hint">I pesi determinano l'importanza relativa di ogni fattore. La somma deve essere 100%.</p>
+            <div class="weights-grid">
+              <div class="weight-field">
+                <label>Inquadramento Contrattuale</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.level" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('level')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Competenze</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.skills" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('skills')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Responsabilità</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.responsibility" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('responsibility')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Sforzo mentale</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+              <div class="weight-field">
+                <label>Condizioni</label>
+                <div class="weight-input-wrap">
+                  <input type="number" v-model.number="analysisSettings.weights.conditions" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('conditions')" :disabled="analysisLoading" />
+                  <span class="weight-pct">%</span>
+                </div>
+              </div>
+            </div>
+            <p class="weights-total" :class="{ 'weights-error': !weightsValid }">
+              Totale: {{ weightsTotal }}% <span v-if="!weightsValid">(deve essere 100%)</span>
+            </p>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-checkbox-row">
+              <input type="checkbox" v-model="analysisSettings.filterOutliers" :disabled="analysisLoading" />
+              <span>Filtro base (escludi record con RAL/Totale = 0, null o N/D)</span>
+            </label>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-checkbox-row">
+              <input type="checkbox" v-model="analysisSettings.strictOutliers" :disabled="analysisLoading" />
+              <span>Rimozione outlier strict (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
+            </label>
+          </div>
+
+          <div class="settings-row">
+            <label class="sr-label">Numero di bande</label>
+            <p class="settings-hint">I ruoli verranno distribuiti equamente nel numero di bande specificato.</p>
+            <input type="number" v-model.number="analysisSettings.bandCount" class="sr-input sr-input-sm" min="2" max="30" step="1" :disabled="analysisLoading" />
+          </div>
+        </div>
+
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         <div class="mapping-actions">
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
-          <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
+          <button class="btn-primary" :disabled="analysisLoading || !weightsValid" @click="confirmMapping">
             <span v-if="analysisLoading">Generazione analisi...</span>
             <span v-else>Esegui analisi completa</span>
           </button>
@@ -821,7 +1065,7 @@ function exportJobGradingPdf() {
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
 
         <div class="results-subtabs">
-          <button class="subtab" :class="{ active: resultsTab === 'genere' }" :disabled="!indicatorsResult" @click="resultsTab = 'genere'">Analisi di genere</button>
+          <button class="subtab" :class="{ active: resultsTab === 'genere' }" @click="resultsTab = 'genere'">Analisi di genere</button>
           <button class="subtab" :class="{ active: resultsTab === 'pari_valore' }" :disabled="jobResults.length === 0" @click="resultsTab = 'pari_valore'">Lavori di pari valore</button>
         </div>
 
@@ -891,39 +1135,193 @@ function exportJobGradingPdf() {
               </div>
             </section>
           </div>
+
+          <!-- Toggle Media / Mediana -->
+          <div class="gender-dashboard-toggle">
+            <span class="toggle-label">Visualizzazione divario:</span>
+            <button :class="['toggle-btn', { active: genderViewMode === 'media' }]" @click="genderViewMode = 'media'">Media</button>
+            <button :class="['toggle-btn', { active: genderViewMode === 'mediana' }]" @click="genderViewMode = 'mediana'">Mediana</button>
+            <span v-if="genderViewMode === 'mediana' && indicatorsResult && Math.abs(indicatorsResult.c_divarioMedianoGenere.percentuale) < 5" class="eu-compliant-msg">
+              Il divario mediano è conforme ai limiti della Direttiva UE (&lt; 5%)
+            </span>
+          </div>
+
+          <!-- Divario di genere per Band (Equal Value Gap) -->
+          <section v-if="bandGenderGaps.length > 0" class="indicator-card wide band-gender-section">
+            <h3>Divario di genere per Band (Equal Value Gap)</h3>
+            <p class="indicator-desc">Gender Pay Gap calcolato per ogni Band di Job Grading.</p>
+            <div class="band-gender-table">
+              <div class="band-gender-row header">
+                <span>Band</span>
+                <span>N Uomini</span>
+                <span>N Donne</span>
+                <span>Gap {{ genderViewMode === 'media' ? 'Media' : 'Mediana' }}</span>
+                <span>Stato</span>
+                <span>Giustificazione</span>
+              </div>
+              <template v-for="bg in bandGenderGaps" :key="bg.band">
+                <div class="band-gender-row" :class="{ 'gap-over': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5, 'gap-ok': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5 }">
+                  <span>{{ bg.band }}</span>
+                  <span>{{ bg.nM }}</span>
+                  <span>{{ bg.nF }}</span>
+                  <span class="gap-value" :class="{ 'gap-alert': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5 }">
+                    {{ formatPct(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) }}
+                  </span>
+                  <span>
+                    <span v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5" class="status-badge compliant">Conforme</span>
+                    <span v-else class="status-badge non-compliant">Gap &gt; 5%</span>
+                  </span>
+                  <span>
+                    <template v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5">
+                      <button v-if="!hasBandJustification(bg.band)" class="btn-justify-open" @click="toggleJustifyBand(bg.band)">
+                        {{ expandedJustifyBand === bg.band ? '▾ Chiudi' : '+ Inserisci Giustificazione' }}
+                      </button>
+                      <span v-else class="band-justify-summary" @click="toggleJustifyBand(bg.band)">
+                        {{ bandJustifySummary(bg.band) }}
+                        <button class="btn-link-sm" @click.stop="clearBandJustification(bg.band)">✕</button>
+                      </span>
+                    </template>
+                    <span v-else class="muted">—</span>
+                  </span>
+                </div>
+                <!-- Pannello giustificativi espanso -->
+                <div v-if="expandedJustifyBand === bg.band && Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5" class="band-justify-panel">
+                  <div class="bjp-header">
+                    <strong>Giustificativi per Band {{ bg.band }}</strong>
+                    <span class="muted">Seleziona uno o più motivi oggettivi</span>
+                  </div>
+                  <div class="bjp-reasons">
+                    <button
+                      v-for="reason in BAND_JUSTIFY_REASONS"
+                      :key="reason.id"
+                      :class="['bjp-reason-btn', { active: bandGenderJustifications[bg.band]?.reasons?.includes(reason.id) }]"
+                      @click="toggleBandReason(bg.band, reason.id)"
+                    >
+                      <span class="bjp-reason-icon">{{ reason.icon }}</span>
+                      <span class="bjp-reason-label">{{ reason.label }}</span>
+                      <span class="bjp-reason-desc">{{ reason.desc }}</span>
+                      <span class="bjp-reason-check">{{ bandGenderJustifications[bg.band]?.reasons?.includes(reason.id) ? '✓' : '' }}</span>
+                    </button>
+                  </div>
+                  <div class="bjp-note">
+                    <label class="bjp-note-label">Note aggiuntive</label>
+                    <textarea
+                      class="bjp-note-input"
+                      rows="2"
+                      placeholder="Aggiungi dettagli a supporto della giustificazione..."
+                      :value="bandGenderJustifications[bg.band]?.note || ''"
+                      @input="updateBandNote(bg.band, $event.target.value)"
+                    ></textarea>
+                  </div>
+                  <div class="bjp-files">
+                    <label class="bjp-note-label">Documenti allegati</label>
+                    <div class="bjp-file-list" v-if="bandGenderJustifications[bg.band]?.files?.length">
+                      <div v-for="(f, fi) in bandGenderJustifications[bg.band].files" :key="fi" class="bjp-file-item">
+                        <span class="bjp-file-icon">📄</span>
+                        <span class="bjp-file-name">{{ f.name }}</span>
+                        <span class="bjp-file-size">{{ formatFileSize(f.size) }}</span>
+                        <button class="btn-link-sm" @click="removeBandFile(bg.band, fi)">✕</button>
+                      </div>
+                    </div>
+                    <label class="bjp-upload-btn">
+                      📎 Carica documento
+                      <input type="file" multiple hidden @change="onBandFileUpload(bg.band, $event)" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" />
+                    </label>
+                  </div>
+                  <div class="bjp-actions">
+                    <button class="btn-primary btn-sm" @click="expandedJustifyBand = null">Conferma</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <!-- Gap Rettificato (escludendo Top Earners) -->
+          <section v-if="adjustedGapResult" class="indicator-card wide adjusted-gap-section">
+            <h3>Divario Rettificato (escl. Top 5% stipendi)</h3>
+            <p class="indicator-desc">Ricalcolo del divario globale escludendo i "Top Earners" (top 5% degli stipendi) per mostrare quanto i ruoli apicali pesano sul risultato.</p>
+            <div class="adjusted-gap-grid">
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Gap Rettificato (Media)</div>
+                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(adjustedGapResult.gapMedia) }">{{ formatPct(adjustedGapResult.gapMedia) }}</div>
+              </div>
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Gap Rettificato (Mediana)</div>
+                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(adjustedGapResult.gapMediana) }">{{ formatPct(adjustedGapResult.gapMediana) }}</div>
+              </div>
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Gap Originale ({{ genderViewMode === 'media' ? 'Media' : 'Mediana' }})</div>
+                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(genderViewMode === 'media' ? indicatorsResult.a_divarioRetributivoGenere.percentuale : indicatorsResult.c_divarioMedianoGenere.percentuale) }">
+                  {{ formatPct(genderViewMode === 'media' ? indicatorsResult.a_divarioRetributivoGenere.percentuale : indicatorsResult.c_divarioMedianoGenere.percentuale) }}
+                </div>
+              </div>
+              <div class="adjusted-gap-box">
+                <div class="adjusted-gap-label">Esclusi</div>
+                <div class="indicator-value plain">{{ adjustedGapResult.excluded }} / {{ adjustedGapResult.total }}</div>
+              </div>
+            </div>
+            <p v-if="adjustedGapResult && indicatorsResult" class="adjusted-gap-note">
+              <template v-if="Math.abs(adjustedGapResult.gapMedia) < Math.abs(indicatorsResult.a_divarioRetributivoGenere.percentuale)">
+                Escludendo i top earners il divario si riduce di {{ formatPct(Math.abs(indicatorsResult.a_divarioRetributivoGenere.percentuale) - Math.abs(adjustedGapResult.gapMedia)) }}, indicando un impatto significativo dei ruoli apicali sul gap complessivo.
+              </template>
+              <template v-else>
+                Il gap rettificato è pari o superiore a quello originale: i ruoli apicali non incidono significativamente sul divario.
+              </template>
+            </p>
+          </section>
+
         </div>
         <div v-else-if="resultsTab === 'genere' && !indicatorsResult" class="no-data-msg">
-          Gender data not available. Check that the Gender (M/F) column is mapped correctly.
+          <strong>Analisi di genere non disponibile.</strong><br/>
+          Per attivarla, verifica che nel file Excel sia presente una colonna <strong>Genere</strong> (con valori M/F, Maschio/Femmina, Uomo/Donna)
+          e che sia mappata correttamente nel passo "Verifica assegnazione colonne".
+          <br/><br/>
+          <button class="btn-secondary" @click="analisiStep = 'mapping'">Torna al mapping colonne</button>
         </div>
 
         <!-- Sub-tab: Lavori di pari valore -->
         <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
-          <p class="result-source">Evaluation: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Local fallback' }}</strong></p>
-          <div v-for="band in [1,2,3,4,5]" :key="band" class="band-section" v-show="jobResults.some(r => r.band === band)">
-            <h3 class="band-title" :class="scoreBadgeClass(band)">Band {{ band }}</h3>
+          <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Motore locale' }}</strong></p>
+
+          <!-- Inline weights editor -->
+          <div class="weights-bar">
+            <span class="weights-bar-label">Pesi:</span>
+            <label class="wb-field">Livello <input type="number" v-model.number="analysisSettings.weights.level" class="wb-input" min="0" max="100" step="5" @change="clampWeight('level')" />%</label>
+            <label class="wb-field">Competenze <input type="number" v-model.number="analysisSettings.weights.skills" class="wb-input" min="0" max="100" step="5" @change="clampWeight('skills')" />%</label>
+            <label class="wb-field">Resp. <input type="number" v-model.number="analysisSettings.weights.responsibility" class="wb-input" min="0" max="100" step="5" @change="clampWeight('responsibility')" />%</label>
+            <label class="wb-field">Sforzo <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="wb-input" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" />%</label>
+            <label class="wb-field">Cond. <input type="number" v-model.number="analysisSettings.weights.conditions" class="wb-input" min="0" max="100" step="5" @change="clampWeight('conditions')" />%</label>
+            <span class="wb-total" :class="{ 'weights-error': !weightsValid }">= {{ weightsTotal }}%</span>
+            <button type="button" class="btn-sm btn-primary" :disabled="!weightsValid" @click.stop.prevent="recalcBandsAndDeviation">Ricalcola</button>
+          </div>
+
+          <div v-for="band in [...new Set(jobResults.map(r => r.band))].sort((a,b) => a-b)" :key="band" class="band-section">
+            <h3 class="band-title" :class="scoreBadgeClass(band)">Banda {{ band }}</h3>
             <div class="job-table">
               <div class="job-row header">
-                <span>Role</span><span>Skills</span><span>Responsibility</span><span>Mental Effort</span><span>Conditions</span><span>Total</span><span>Avg. Comp.</span><span>Band Dev.</span><span>N</span>
+                <span>Ruolo</span><span>Livello</span><span>Famiglia</span><span>Competenze</span><span>Resp.</span><span>Sforzo</span><span>Cond.</span><span>Totale</span><span>Mediana Retrib.</span><span>Dev. Banda</span><span>N</span>
               </div>
               <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
-                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role) }">
+                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandMedianPct) > 25 }">
                   <span>
                     <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
                     {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
                   </span>
+                  <span>{{ formatNum(r.levelScore) }} <small v-if="r.level" class="level-tag">{{ r.level }}</small></span>
+                  <span class="job-family-cell">{{ r.jobFamily }}<small v-if="r.jobFamilyMultiplier > 1" class="multiplier-badge">×{{ r.jobFamilyMultiplier }}</small></span>
                   <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
                   <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
-                  <span>{{ formatNum(r.avgTotalSalary) }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandAvgPct) }">
-                    {{ formatPct(r.deviationFromBandAvgPct) }}
+                  <span>{{ formatNum(r.medianTotalSalary) }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandMedianPct) }">
+                    {{ formatPct(r.deviationFromBandMedianPct) }}
                     <button
-                      v-if="isGapAlert(r.deviationFromBandAvgPct)"
+                      v-if="isGapAlert(r.deviationFromBandMedianPct)"
                       class="btn-justify"
                       :class="{ 'has-note': justifications[r.role] }"
-                      title="Add justification"
+                      title="Aggiungi giustificativo"
                       @click.stop="openJustify(r.role)"
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
@@ -932,7 +1330,7 @@ function exportJobGradingPdf() {
                   <span>{{ r.n }}</span>
                 </div>
                 <div v-if="expandedRoles.has(r.role) && r.people && r.people.length > 1" class="people-detail">
-                  <div class="people-header"><span>#</span><span>Employee</span><span>Base Salary</span><span>Variable Comp.</span><span>Total Comp.</span><span>Dev. from Role Avg.</span></div>
+                  <div class="people-header"><span>#</span><span>Dipendente</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da Media Ruolo</span></div>
                   <div v-for="p in r.people" :key="p.index" class="people-row">
                     <span>{{ p.index }}</span><span>{{ p.name || '–' }}</span><span>{{ formatNum(p.baseSalary) }}</span><span>{{ formatNum(p.variableComponents) }}</span><span>{{ formatNum(p.totalSalary) }}</span>
                     <span :class="{ 'gap-alert': isGapAlert(p.deviationFromRoleAvgPct) }">{{ formatPct(p.deviationFromRoleAvgPct) }}</span>
@@ -944,28 +1342,36 @@ function exportJobGradingPdf() {
           <div class="mapping-actions" style="margin-top: 1.5rem;">
             <button class="btn-primary" @click="exportJobGradingPdf">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="vertical-align: -3px; margin-right: 0.35rem;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-              Export PDF
+              Esporta PDF
             </button>
           </div>
         </div>
         <div v-else-if="resultsTab === 'pari_valore' && jobResults.length === 0" class="no-data-msg">
-          Job grading data not available. Check that the Role, Level and Job Description columns are mapped.
+          Dati job grading non disponibili. Verifica che le colonne Ruolo, Livello e Descrizione siano mappate correttamente.
         </div>
 
         <div class="mapping-actions">
-          <button class="btn-secondary" @click="analisiStep = 'mapping'">Edit mapping</button>
-          <button class="btn-primary" @click="startNuovaAnalisi">New analysis</button>
+          <button class="btn-secondary" @click="analisiStep = 'mapping'">Modifica mapping</button>
+          <button class="btn-primary" @click="startNuovaAnalisi">Nuova analisi</button>
         </div>
 
         <!-- Modal giustificativo -->
         <div v-if="justifyingRole != null" class="justify-overlay" @click.self="cancelJustify">
           <div class="justify-modal">
-            <h3>Justification – {{ justifyingRole }}</h3>
-            <p class="justify-hint">Enter a justification for the pay deviation exceeding ±5% from the band average.</p>
-            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Reason..."></textarea>
+            <h3>Giustificativo – {{ justifyingRole }}</h3>
+            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla mediana di banda.</p>
+            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..." :disabled="justifyAiLoading"></textarea>
             <div class="justify-actions">
-              <button class="btn-secondary" @click="cancelJustify">Cancel</button>
-              <button class="btn-primary" @click="saveJustify">Save</button>
+              <button v-if="geminiEnabled" type="button" class="btn-ai" :disabled="justifyAiLoading" @click="suggestJustify">
+                <span v-if="justifyAiLoading" class="spinner-sm"></span>
+                <span v-else>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:4px"><path d="M12 2l2.09 6.26L20.18 9l-5.09 4.09L16.82 20 12 16.18 7.18 20l1.73-6.91L3.82 9l6.09-.74z"/></svg>
+                  Suggerisci con AI
+                </span>
+              </button>
+              <span style="flex:1"></span>
+              <button class="btn-secondary" @click="cancelJustify">Annulla</button>
+              <button class="btn-primary" @click="saveJustify" :disabled="justifyAiLoading">Salva</button>
             </div>
           </div>
         </div>
@@ -975,20 +1381,20 @@ function exportJobGradingPdf() {
     <!-- Storico analisi -->
     <template v-else-if="showStorico">
       <div class="analisi-content">
-        <h2 class="analisi-title">Analysis History</h2>
-        <p v-if="storicoLoading" class="storico-status">Loading history…</p>
+        <h2 class="analisi-title">Storico Analisi</h2>
+        <p v-if="storicoLoading" class="storico-status">Caricamento storico…</p>
         <p v-if="storicoError" class="upload-error">{{ storicoError }}</p>
         <div v-if="!storicoLoading && storicoList.length === 0 && !storicoError" class="storico-empty">
-          No saved analyses.
+          Nessuna analisi salvata.
         </div>
         <div v-if="storicoList.length > 0" class="storico-table-wrap">
           <table class="storico-table">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Source</th>
-                <th>Calculation</th>
+                <th>Data</th>
+                <th>Tipo</th>
+                <th>Fonte</th>
+                <th>Calcolo</th>
                 <th>ID</th>
                 <th></th>
               </tr>
@@ -1006,14 +1412,14 @@ function exportJobGradingPdf() {
                     :disabled="storicoViewing === a.id"
                     @click="viewAnalysis(a.id)"
                   >
-                    {{ storicoViewing === a.id ? '…' : 'View' }}
+                    {{ storicoViewing === a.id ? '…' : 'Apri' }}
                   </button>
                   <button
                     class="btn-delete"
                     :disabled="storicoDeleting === a.id"
                     @click="removeAnalysis(a.id)"
                   >
-                    {{ storicoDeleting === a.id ? '…' : 'Delete' }}
+                    {{ storicoDeleting === a.id ? '…' : 'Elimina' }}
                   </button>
                 </td>
               </tr>
@@ -1021,7 +1427,7 @@ function exportJobGradingPdf() {
           </table>
         </div>
         <div class="mapping-actions">
-          <button class="btn-secondary" @click="loadStorico">Refresh</button>
+          <button class="btn-secondary" @click="loadStorico">Aggiorna</button>
         </div>
       </div>
     </template>
@@ -1032,15 +1438,15 @@ function exportJobGradingPdf() {
       <!-- CTA buttons + Sub-tab bar -->
       <div v-if="srView === 'list'" class="sr-top-bar">
         <div class="sr-cta-bar">
-          <button class="btn-primary" @click="startCreateRule">+ Create Rule</button>
-          <button class="btn-outline" @click="startCreateIncrease">+ Create Increase</button>
+          <button class="btn-primary" @click="startCreateRule">+ Nuova Regola</button>
+          <button class="btn-outline" @click="startCreateIncrease">+ Nuovo Aumento</button>
         </div>
         <div class="results-subtabs">
           <button class="subtab" :class="{ active: srSubTab === 'reviews' }" @click="srSubTab = 'reviews'">
-            Salary Reviews
+            Revisioni Salariali
             <span v-if="eligibleReviews.filter(r => reviewStatus(r.name) === 'pending').length" class="sr-badge">{{ eligibleReviews.filter(r => reviewStatus(r.name) === 'pending').length }}</span>
           </button>
-          <button class="subtab" :class="{ active: srSubTab === 'rules' }" @click="srSubTab = 'rules'">Rules</button>
+          <button class="subtab" :class="{ active: srSubTab === 'rules' }" @click="srSubTab = 'rules'">Regole</button>
         </div>
       </div>
 
@@ -1052,37 +1458,37 @@ function exportJobGradingPdf() {
           <p v-if="srRulesError" class="upload-error">{{ srRulesError }}</p>
 
           <div class="sr-section">
-            <p v-if="srRulesLoading" class="storico-status">Loading rules…</p>
-            <div v-if="!srRulesLoading && srRules.length === 0 && !srRulesError" class="no-data-msg">No rules created.</div>
+            <p v-if="srRulesLoading" class="storico-status">Caricamento regole…</p>
+            <div v-if="!srRulesLoading && srRules.length === 0 && !srRulesError" class="no-data-msg">Nessuna regola creata.</div>
             <div class="sr-rules-grid">
               <article v-for="rule in srRules" :key="rule.id" class="sr-rule-card">
                 <div class="sr-rule-header">
-                  <h3>{{ rule.name || 'Unnamed rule' }}</h3>
+                  <h3>{{ rule.name || 'Regola senza nome' }}</h3>
                   <span class="sr-rule-year">{{ rule.year }}</span>
                 </div>
                 <div class="sr-rule-meta">
-                  <span v-if="rule.applyToAll">All employees</span>
-                  <span v-else>{{ (rule.eligibleUsers || []).length }} employee{{ (rule.eligibleUsers || []).length !== 1 ? 's' : '' }}</span>
-                  <span>Trigger: {{ rule.triggerType === 'performance' ? 'Performance \u2265 ' + rule.performanceScore : (rule.objectives || []).length + ' objectives' }}</span>
+                  <span v-if="rule.applyToAll">Tutti i dipendenti</span>
+                  <span v-else>{{ (rule.eligibleUsers || []).length }} dipendent{{ (rule.eligibleUsers || []).length !== 1 ? 'i' : 'e' }}</span>
+                  <span>Trigger: {{ rule.triggerType === 'performance' ? 'Performance \u2265 ' + rule.performanceScore : (rule.objectives || []).length + ' obiettivi' }}</span>
                   <span>RAL +{{ rule.defaultRalPct }}% / Var +{{ rule.defaultVariablePct }}%</span>
                 </div>
                 <div class="sr-rule-meta">
-                  <span>{{ (rule.approvalSteps || []).length }} approval step{{ (rule.approvalSteps || []).length !== 1 ? 's' : '' }}</span>
+                  <span>{{ (rule.approvalSteps || []).length }} step di approvazione</span>
                 </div>
                 <div class="sr-rule-actions">
-                  <button class="btn-secondary" @click="editRule(rule)">Edit</button>
-                  <button class="btn-outline" @click="duplicateRule(rule)">Duplicate</button>
-                  <button class="btn-delete" @click="removeRule(rule.id)">Delete</button>
+                  <button class="btn-secondary" @click="editRule(rule)">Modifica</button>
+                  <button class="btn-outline" @click="duplicateRule(rule)">Duplica</button>
+                  <button class="btn-delete" @click="removeRule(rule.id)">Elimina</button>
                 </div>
               </article>
             </div>
           </div>
 
           <div v-if="srIncreases.length > 0" class="sr-section">
-            <h2 class="analisi-title">Increases</h2>
+            <h2 class="analisi-title">Aumenti</h2>
             <table class="storico-table">
               <thead>
-                <tr><th>Employee</th><th>Base %</th><th>Variable %</th><th>Notes</th></tr>
+                <tr><th>Dipendente</th><th>Base %</th><th>Variabile %</th><th>Note</th></tr>
               </thead>
               <tbody>
                 <tr v-for="inc in srIncreases" :key="inc.id">
@@ -1099,17 +1505,17 @@ function exportJobGradingPdf() {
         <!-- Sub-tab: Salary Reviews -->
         <template v-if="srSubTab === 'reviews'">
           <div v-if="eligibleReviews.length === 0" class="no-data-msg">
-            No eligible employees. Create a rule in the Rules tab to generate salary reviews.
+            Nessun dipendente idoneo. Crea una regola nella tab Regole per generare le revisioni salariali.
           </div>
           <div v-else class="rv-list">
             <div class="rv-header">
-              <span class="rv-col rv-col-name">NAME</span>
-              <span class="rv-col rv-col-role">ROLE</span>
+              <span class="rv-col rv-col-name">NOME</span>
+              <span class="rv-col rv-col-role">RUOLO</span>
               <span class="rv-col rv-col-perf">PERFORMANCE</span>
-              <span class="rv-col rv-col-increase">PROPOSED INCREASE</span>
-              <span class="rv-col rv-col-rule">RULE</span>
-              <span class="rv-col rv-col-status">STATUS</span>
-              <span class="rv-col rv-col-actions">ACTIONS</span>
+              <span class="rv-col rv-col-increase">AUMENTO PROPOSTO</span>
+              <span class="rv-col rv-col-rule">REGOLA</span>
+              <span class="rv-col rv-col-status">STATO</span>
+              <span class="rv-col rv-col-actions">AZIONI</span>
             </div>
             <div
               v-for="rv in eligibleReviews"
@@ -1139,14 +1545,14 @@ function exportJobGradingPdf() {
               <span class="rv-col rv-col-rule">{{ rv.ruleName }}</span>
               <span class="rv-col rv-col-status">
                 <span class="sr-status" :class="'sr-status-' + reviewStatus(rv.name)">
-                  {{ reviewStatus(rv.name) === 'approved' ? 'Approved' : reviewStatus(rv.name) === 'rejected' ? 'Rejected' : reviewStatus(rv.name) === 'removed' ? 'Removed' : 'Pending' }}
+                  {{ reviewStatus(rv.name) === 'approved' ? 'Approvato' : reviewStatus(rv.name) === 'rejected' ? 'Rifiutato' : reviewStatus(rv.name) === 'removed' ? 'Rimosso' : 'In attesa' }}
                 </span>
               </span>
               <span class="rv-col rv-col-actions" v-if="reviewStatus(rv.name) !== 'removed'">
-                <button class="rv-action-btn rv-action-view" title="View" @click="viewReview(rv)">
+                <button class="rv-action-btn rv-action-view" title="Visualizza" @click="viewReview(rv)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
-                <button class="rv-action-btn rv-action-delete" title="Delete" @click="removeReview(rv.name)">
+                <button class="rv-action-btn rv-action-delete" title="Elimina" @click="removeReview(rv.name)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
                 </button>
               </span>
@@ -1159,9 +1565,9 @@ function exportJobGradingPdf() {
       <!-- Dettaglio review -->
       <template v-if="srView === 'viewReview' && srViewingReview">
         <div class="sr-form">
-          <button class="btn-secondary" style="margin-bottom: 1rem;" @click="backToReviewsList">&larr; Back to list</button>
+          <button class="btn-secondary" style="margin-bottom: 1rem;" @click="backToReviewsList">&larr; Torna alla lista</button>
           <h2 class="analisi-title">{{ srViewingReview.name }}</h2>
-          <p class="sr-rule-meta" style="margin-bottom: 1.25rem;">{{ srViewingReview.role }} &middot; Rule: {{ srViewingReview.ruleName }}</p>
+          <p class="sr-rule-meta" style="margin-bottom: 1.25rem;">{{ srViewingReview.role }} &middot; Regola: {{ srViewingReview.ruleName }}</p>
 
           <div class="sr-review-grid">
             <div class="sr-review-card">
@@ -1169,17 +1575,17 @@ function exportJobGradingPdf() {
               <div class="sr-review-card-value" :class="{ 'gap-alert': srViewingReview.performanceScore < 60 }">{{ srViewingReview.performanceScore }} <span class="sr-hint">/ 100</span></div>
             </div>
             <div class="sr-review-card">
-              <div class="sr-review-card-label">Proposed Base Increase</div>
+              <div class="sr-review-card-label">Aumento Base Proposto</div>
               <div class="sr-review-card-value">+{{ srViewingReview.proposedRalPct }}%</div>
             </div>
             <div class="sr-review-card">
-              <div class="sr-review-card-label">Proposed Variable Increase</div>
+              <div class="sr-review-card-label">Aumento Variabile Proposto</div>
               <div class="sr-review-card-value">+{{ srViewingReview.proposedVariablePct }}%</div>
             </div>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Objectives</label>
+            <label class="sr-label">Obiettivi</label>
             <div class="sr-obj-list">
               <div v-for="obj in srViewingReview.objectives" :key="obj" class="sr-obj-item">
                 <span class="sr-obj-check" :class="{ reached: (srViewingReview.objectivesReached || []).includes(obj) }">
@@ -1187,17 +1593,17 @@ function exportJobGradingPdf() {
                 </span>
                 <span>{{ obj }}</span>
               </div>
-              <div v-if="!srViewingReview.objectives || srViewingReview.objectives.length === 0" class="sr-hint">No objectives defined</div>
+              <div v-if="!srViewingReview.objectives || srViewingReview.objectives.length === 0" class="sr-hint">Nessun obiettivo definito</div>
             </div>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Current status: <span class="sr-status" :class="'sr-status-' + reviewStatus(srViewingReview.name)">{{ reviewStatus(srViewingReview.name) === 'approved' ? 'Approved' : reviewStatus(srViewingReview.name) === 'rejected' ? 'Rejected' : 'Pending' }}</span></label>
+            <label class="sr-label">Stato attuale: <span class="sr-status" :class="'sr-status-' + reviewStatus(srViewingReview.name)">{{ reviewStatus(srViewingReview.name) === 'approved' ? 'Approvato' : reviewStatus(srViewingReview.name) === 'rejected' ? 'Rifiutato' : 'In attesa' }}</span></label>
           </div>
 
           <div class="mapping-actions">
-            <button class="btn-delete" style="padding: 0.65rem 1.25rem; font-size: 0.85rem;" @click="rejectReview(srViewingReview.name)">Reject</button>
-            <button class="btn-primary" @click="approveReview(srViewingReview.name)">Approve</button>
+            <button class="btn-delete" style="padding: 0.65rem 1.25rem; font-size: 0.85rem;" @click="rejectReview(srViewingReview.name)">Rifiuta</button>
+            <button class="btn-primary" @click="approveReview(srViewingReview.name)">Approva</button>
           </div>
         </div>
       </template>
@@ -1205,18 +1611,18 @@ function exportJobGradingPdf() {
       <!-- Pannello crea/modifica regola -->
       <template v-if="srView === 'editRule' && srCurrentRule">
         <div class="sr-form">
-          <h2 class="analisi-title">{{ srRules.some(r => r.id === srCurrentRule.id) ? 'Edit Rule' : 'New Rule' }}</h2>
+          <h2 class="analisi-title">{{ srRules.some(r => r.id === srCurrentRule.id) ? 'Modifica Regola' : 'Nuova Regola' }}</h2>
 
           <div class="sr-form-section">
-            <label class="sr-label">Rule Name</label>
-            <input v-model="srCurrentRule.name" type="text" class="sr-input" placeholder="E.g. Annual Review 2026" />
+            <label class="sr-label">Nome Regola</label>
+            <input v-model="srCurrentRule.name" type="text" class="sr-input" placeholder="Es. Revisione Annuale 2026" />
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Eligibility</label>
+            <label class="sr-label">Idoneità</label>
             <label class="sr-checkbox-row">
               <input type="checkbox" v-model="srCurrentRule.applyToAll" />
-              <span>Apply to all employees</span>
+              <span>Applica a tutti i dipendenti</span>
             </label>
             <div v-if="!srCurrentRule.applyToAll" class="multi-select-wrap">
               <div class="multi-select-box" @click="srEligibilityDropdownOpen = !srEligibilityDropdownOpen">
@@ -1225,7 +1631,7 @@ function exportJobGradingPdf() {
                     {{ u }}
                     <button type="button" class="pill-x" @click.stop="removePill(srCurrentRule.eligibleUsers, i)">&times;</button>
                   </span>
-                  <span v-if="srCurrentRule.eligibleUsers.length === 0" class="multi-select-placeholder">Select employees...</span>
+                  <span v-if="srCurrentRule.eligibleUsers.length === 0" class="multi-select-placeholder">Seleziona dipendenti...</span>
                 </div>
                 <span class="multi-select-arrow">&#9662;</span>
               </div>
@@ -1244,16 +1650,16 @@ function exportJobGradingPdf() {
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Reference Year</label>
+            <label class="sr-label">Anno di Riferimento</label>
             <input v-model.number="srCurrentRule.year" type="number" class="sr-input sr-input-sm" min="2020" max="2040" />
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Trigger</label>
+            <label class="sr-label">Condizione di attivazione</label>
             <div class="sr-radio-group">
               <label class="sr-radio-row">
                 <input type="radio" v-model="srCurrentRule.triggerType" value="performance" />
-                <span>Minimum performance score</span>
+                <span>Punteggio performance minimo</span>
               </label>
               <div v-if="srCurrentRule.triggerType === 'performance'" class="sr-indent">
                 <input v-model.number="srCurrentRule.performanceScore" type="number" class="sr-input sr-input-sm" min="0" max="100" />
@@ -1261,7 +1667,7 @@ function exportJobGradingPdf() {
               </div>
               <label class="sr-radio-row">
                 <input type="radio" v-model="srCurrentRule.triggerType" value="objectives" />
-                <span>Specific objectives achieved</span>
+                <span>Obiettivi specifici raggiunti</span>
               </label>
               <div v-if="srCurrentRule.triggerType === 'objectives'" class="sr-indent">
                 <div class="pills-wrap">
@@ -1273,7 +1679,7 @@ function exportJobGradingPdf() {
                     v-model="srObjInput"
                     type="text"
                     class="pill-input"
-                    placeholder="Add objective and press Enter"
+                    placeholder="Aggiungi obiettivo e premi Invio"
                     @keydown.enter.prevent="addPill(srCurrentRule.objectives, srObjInput); srObjInput = '';"
                   />
                 </div>
@@ -1282,14 +1688,14 @@ function exportJobGradingPdf() {
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Approval Workflow</label>
+            <label class="sr-label">Workflow di Approvazione</label>
             <div class="wf-steps">
               <div v-for="(step, si) in srCurrentRule.approvalSteps" :key="si" class="wf-step">
                 <div class="wf-step-header">
                   <span class="wf-step-num">{{ si + 1 }}</span>
                   <select v-model="step.type" class="sr-select">
-                    <option value="manager">Direct Manager</option>
-                    <option value="users">Specific Users</option>
+                    <option value="manager">Manager Diretto</option>
+                    <option value="users">Utenti Specifici</option>
                   </select>
                   <button v-if="srCurrentRule.approvalSteps.length > 1" type="button" class="wf-step-remove" @click="removeApprovalStep(si)">&times;</button>
                 </div>
@@ -1300,7 +1706,7 @@ function exportJobGradingPdf() {
                         {{ u }}
                         <button type="button" class="pill-x" @click.stop="removePill(step.users, ui)">&times;</button>
                       </span>
-                      <span v-if="step.users.length === 0" class="multi-select-placeholder">Select approvers...</span>
+                      <span v-if="step.users.length === 0" class="multi-select-placeholder">Seleziona approvatori...</span>
                     </div>
                     <span class="multi-select-arrow">&#9662;</span>
                   </div>
@@ -1318,18 +1724,18 @@ function exportJobGradingPdf() {
                 </div>
               </div>
             </div>
-            <button type="button" class="btn-outline sr-add-step" @click="addApprovalStep">+ Add step</button>
+            <button type="button" class="btn-outline sr-add-step" @click="addApprovalStep">+ Aggiungi step</button>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Default Increase</label>
+            <label class="sr-label">Aumento Predefinito</label>
             <div class="sr-pct-row">
               <div class="sr-pct-field">
                 <label>% Base</label>
                 <input v-model.number="srCurrentRule.defaultRalPct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
               <div class="sr-pct-field">
-                <label>% Variable</label>
+                <label>% Variabile</label>
                 <input v-model.number="srCurrentRule.defaultVariablePct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
             </div>
@@ -1337,9 +1743,9 @@ function exportJobGradingPdf() {
 
           <p v-if="srRulesError" class="upload-error">{{ srRulesError }}</p>
           <div class="mapping-actions">
-            <button class="btn-secondary" :disabled="srSaving" @click="cancelRuleEdit">Cancel</button>
+            <button class="btn-secondary" :disabled="srSaving" @click="cancelRuleEdit">Annulla</button>
             <button class="btn-primary" :disabled="srSaving" @click="saveCurrentRule">
-              {{ srSaving ? 'Saving…' : 'Save Rule' }}
+              {{ srSaving ? 'Salvataggio…' : 'Salva Regola' }}
             </button>
           </div>
         </div>
@@ -1348,12 +1754,12 @@ function exportJobGradingPdf() {
       <!-- Form crea aumento -->
       <template v-if="srView === 'newIncrease' && srCurrentIncrease">
         <div class="sr-form">
-          <h2 class="analisi-title">New Increase</h2>
+          <h2 class="analisi-title">Nuovo Aumento</h2>
 
           <div class="sr-form-section">
-            <label class="sr-label">Employee</label>
+            <label class="sr-label">Dipendente</label>
             <select v-model="srCurrentIncrease.employee" class="sr-select">
-              <option value="" disabled>Select employee...</option>
+              <option value="" disabled>Seleziona dipendente...</option>
               <option v-for="u in sampleUsers" :key="u" :value="u">{{ u }}</option>
             </select>
           </div>
@@ -1361,24 +1767,24 @@ function exportJobGradingPdf() {
           <div class="sr-form-section">
             <div class="sr-pct-row">
               <div class="sr-pct-field">
-                <label>Base Increase %</label>
+                <label>Aumento Base %</label>
                 <input v-model.number="srCurrentIncrease.ralPct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
               <div class="sr-pct-field">
-                <label>Variable Increase %</label>
+                <label>Aumento Variabile %</label>
                 <input v-model.number="srCurrentIncrease.variablePct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
               </div>
             </div>
           </div>
 
           <div class="sr-form-section">
-            <label class="sr-label">Notes</label>
-            <textarea v-model="srCurrentIncrease.notes" class="justify-textarea" rows="3" placeholder="Reason or details..."></textarea>
+            <label class="sr-label">Note</label>
+            <textarea v-model="srCurrentIncrease.notes" class="justify-textarea" rows="3" placeholder="Motivazione o dettagli..."></textarea>
           </div>
 
           <div class="mapping-actions">
-            <button class="btn-secondary" @click="cancelIncreaseEdit">Cancel</button>
-            <button class="btn-primary" @click="saveCurrentIncrease">Save Increase</button>
+            <button class="btn-secondary" @click="cancelIncreaseEdit">Annulla</button>
+            <button class="btn-primary" @click="saveCurrentIncrease">Salva Aumento</button>
           </div>
         </div>
       </template>
@@ -2451,7 +2857,7 @@ function exportJobGradingPdf() {
 
 .job-row {
   display: grid;
-  grid-template-columns: 2fr repeat(5, 1fr) 1fr 1fr 0.5fr;
+  grid-template-columns: 2fr 0.6fr 1fr repeat(4, 0.7fr) 0.8fr 1.1fr 0.9fr 0.5fr;
   gap: 0.5rem;
   padding: 0.6rem 0.85rem;
   border-bottom: 1px solid var(--border-light);
@@ -2892,8 +3298,504 @@ function exportJobGradingPdf() {
 
 .justify-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+.btn-ai {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--primary, #0a6cd2);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 108, 210, 0.06);
+  color: var(--primary, #0a6cd2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  display: inline-flex;
+  align-items: center;
+}
+.btn-ai:hover:not(:disabled) {
+  background: rgba(10, 108, 210, 0.14);
+  box-shadow: 0 2px 8px rgba(10, 108, 210, 0.15);
+}
+.btn-ai:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.spinner-sm {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(10, 108, 210, 0.2);
+  border-top-color: var(--primary, #0a6cd2);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* Analysis Settings Panel */
+.settings-panel {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  box-shadow: var(--shadow-soft);
+  margin: 1.5rem 0;
+  border: 1px solid var(--border-light);
+}
+
+.settings-title {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.settings-row {
+  margin-bottom: 1.25rem;
+}
+
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+
+.settings-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.weights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.weight-field label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+  font-weight: 500;
+}
+
+.weight-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.weight-pct {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.weights-total {
+  margin: 0.6rem 0 0;
+  font-size: 0.825rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.weights-error {
+  color: #dc2626;
+}
+
+/* Warning row for >25% deviation */
+.row-warning {
+  background: rgba(245, 158, 11, 0.08) !important;
+  border-left: 3px solid #f59e0b;
+}
+.job-family-cell {
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.multiplier-badge {
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.level-tag {
+  background: var(--bg-page);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 6px;
+  font-weight: 600;
+  margin-left: 0.2rem;
+}
+.weights-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 0.6rem 1rem;
+  margin-bottom: 1.2rem;
+  box-shadow: var(--shadow-soft);
+}
+.weights-bar-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+.wb-field {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+.wb-input {
+  width: 48px;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.8rem;
+  background: var(--bg-page);
+}
+.wb-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.12);
+}
+.wb-total {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+.btn-sm {
+  padding: 0.3rem 0.85rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+}
+
+/* Gender dashboard toggle */
+.gender-dashboard-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.5rem 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+  flex-wrap: wrap;
+}
+.toggle-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  margin-right: 0.25rem;
+}
+.toggle-btn {
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-page);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s;
+}
+.toggle-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  font-weight: 600;
+}
+.eu-compliant-msg {
+  color: #16a34a;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-left: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: rgba(22, 163, 74, 0.08);
+  border-radius: 6px;
+}
+
+/* Band gender gap table */
+.band-gender-section {
+  margin-top: 1rem;
+}
+.band-gender-table {
+  display: grid;
+  gap: 0;
+  font-size: 0.85rem;
+}
+.band-gender-row {
+  display: grid;
+  grid-template-columns: 60px 80px 80px 120px 110px 1fr;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  align-items: center;
+  border-bottom: 1px solid var(--border-light);
+}
+.band-gender-row.header {
+  font-weight: 700;
+  background: var(--bg-page);
+  border-radius: 6px 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.band-gender-row.gap-over {
+  background: rgba(239, 68, 68, 0.05);
+}
+.band-gender-row.gap-ok {
+  background: rgba(22, 163, 74, 0.04);
+}
+.gap-value {
+  font-weight: 600;
+}
+.status-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status-badge.compliant {
+  background: rgba(22, 163, 74, 0.12);
+  color: #16a34a;
+}
+.status-badge.non-compliant {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+.btn-justify-open {
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px dashed var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-page);
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 500;
+  transition: all 0.15s;
+}
+.btn-justify-open:hover {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.05);
+}
+.band-justify-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  background: rgba(10, 108, 210, 0.06);
+  border-radius: 5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.band-justify-summary:hover { background: rgba(10, 108, 210, 0.1); }
+.btn-link-sm {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding: 0;
+}
+.btn-link-sm:hover { color: #ef4444; }
+
+/* Justification panel */
+.band-justify-panel {
+  grid-column: 1 / -1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 0.25rem 0 0.5rem;
+  box-shadow: var(--shadow-soft);
+}
+.bjp-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.bjp-header strong { font-size: 0.9rem; }
+.bjp-reasons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.bjp-reason-btn {
+  display: grid;
+  grid-template-columns: 28px 1fr 22px;
+  grid-template-rows: auto auto;
+  gap: 0 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1.5px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-page);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+.bjp-reason-btn:hover {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.03);
+}
+.bjp-reason-btn.active {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.08);
+  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.12);
+}
+.bjp-reason-icon {
+  grid-row: 1 / 3;
+  font-size: 1.2rem;
+  align-self: center;
+}
+.bjp-reason-label {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+.bjp-reason-desc {
+  grid-column: 2;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+.bjp-reason-check {
+  grid-row: 1 / 3;
+  align-self: center;
+  justify-self: center;
+  font-size: 0.9rem;
+  color: var(--primary);
+  font-weight: 700;
+}
+.bjp-note { margin-bottom: 0.75rem; }
+.bjp-note-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.bjp-note-input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: var(--bg-page);
+  resize: vertical;
+  font-family: inherit;
+}
+.bjp-note-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.12);
+}
+.bjp-files { margin-bottom: 0.75rem; }
+.bjp-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+.bjp-file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--bg-page);
+  border-radius: 5px;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-light);
+}
+.bjp-file-icon { font-size: 0.9rem; }
+.bjp-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.bjp-file-size {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+.bjp-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px dashed var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-page);
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--primary);
+  font-weight: 500;
+  transition: all 0.15s;
+}
+.bjp-upload-btn:hover {
+  border-color: var(--primary);
+  background: rgba(10, 108, 210, 0.05);
+}
+.bjp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Adjusted gap section */
+.adjusted-gap-section {
+  margin-top: 1rem;
+}
+.adjusted-gap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+.adjusted-gap-box {
+  text-align: center;
+  padding: 0.75rem;
+  background: var(--bg-page);
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+}
+.adjusted-gap-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.25rem;
+}
+.indicator-value.plain {
+  color: var(--text-primary);
+  font-size: 1.5rem;
+}
+.adjusted-gap-note {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 </style>
