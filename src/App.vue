@@ -239,21 +239,11 @@ async function confirmMapping() {
         geminiLoading.value = true
         try {
           const aiIndicators = await computeIndicatorsWithGemini(normalizedGender)
-          const aiGap = aiIndicators?.b_divarioComponentiVariabili?.percentuale
-          const localGap = localIndicators?.b_divarioComponentiVariabili?.percentuale
-          const comparable = Number.isFinite(aiGap) && Number.isFinite(localGap)
-          const delta = comparable ? Math.abs(aiGap - localGap) : 0
-          if (comparable && delta > 15) {
-            indicatorsResult.value = localIndicators
-            indicatorsSource.value = 'locale'
-            uploadError.value = `Calcolo AI scartato per incoerenza (delta ${delta.toFixed(2)} punti, soglia 15). Uso motore locale.`
-          } else {
-            indicatorsResult.value = {
-              ...aiIndicators,
-              h_divarioRetribuzioneBase: aiIndicators?.h_divarioRetribuzioneBase ?? localIndicators.h_divarioRetribuzioneBase,
-            }
-            indicatorsSource.value = 'ai'
+          indicatorsResult.value = {
+            ...aiIndicators,
+            h_divarioRetribuzioneBase: aiIndicators?.h_divarioRetribuzioneBase ?? localIndicators.h_divarioRetribuzioneBase,
           }
+          indicatorsSource.value = 'ai'
         } catch (aiErr) {
           indicatorsResult.value = localIndicators
           indicatorsSource.value = 'locale'
