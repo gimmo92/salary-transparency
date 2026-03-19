@@ -1,4 +1,4 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 function extractJson(text) {
   const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
