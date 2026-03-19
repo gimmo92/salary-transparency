@@ -11,18 +11,12 @@ import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
-  scoreJobRolesWithGemini,
   checkGeminiAvailable,
-  suggestJustificationWithGemini,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
-  aggregateRolesForGrading,
-  enrichWithBandsAndDeviation,
-  computeWeightedScore,
-  normalizeLevelScore,
-  getJobFamily,
-  getJobFamilyMultiplier,
+  groupByLevel,
+  enrichWithDeviation,
 } from './lib/jobGrading.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
@@ -52,32 +46,11 @@ const indicatorsResult = ref(null)
 const indicatorsSource = ref('locale')
 
 const jobResults = ref([])
-const jobSource = ref('locale')
 
 const resultsTab = ref('genere') // 'genere' | 'pari_valore'
 
 const geminiEnabled = ref(false)
 
-// Analysis settings
-const analysisSettings = ref({
-  weights: { level: 45, skills: 15, responsibility: 20, mentalEffort: 10, conditions: 10 },
-  filterOutliers: true,
-  strictOutliers: true,
-  bandCount: 10,
-})
-
-const weightsTotal = computed(() => {
-  const w = analysisSettings.value.weights
-  return w.level + w.skills + w.responsibility + w.mentalEffort + w.conditions
-})
-
-const weightsValid = computed(() => weightsTotal.value === 100)
-
-function clampWeight(key) {
-  const w = analysisSettings.value.weights
-  if (w[key] < 0) w[key] = 0
-  if (w[key] > 100) w[key] = 100
-}
 
 const allRoleKeys = [
   COLUMN_ROLES.gender,
@@ -138,8 +111,7 @@ async function viewAnalysis(id) {
 
     const jg = results.jobGrading || []
     jobResults.value = jg
-    jobSource.value = (record.calculation_source || '').includes('job:ai') ? 'ai' : 'locale'
-    expandedRoles.value = new Set()
+    expandedLevels.value = new Set()
     justifications.value = {}
 
     excelUrl.value = record.source_url || ''
@@ -182,49 +154,22 @@ function isGapAlert(pct) {
 }
 
 // Job grading helpers
-const expandedRoles = ref(new Set())
+const expandedLevels = ref(new Set())
 
-function toggleRoleExpand(role) {
-  if (expandedRoles.value.has(role)) expandedRoles.value.delete(role)
-  else expandedRoles.value.add(role)
-  expandedRoles.value = new Set(expandedRoles.value)
+function toggleLevelExpand(level) {
+  if (expandedLevels.value.has(level)) expandedLevels.value.delete(level)
+  else expandedLevels.value.add(level)
+  expandedLevels.value = new Set(expandedLevels.value)
 }
 
-function onScoreEdit(r) {
-  r.totalScore = computeWeightedScore(r, analysisSettings.value.weights)
-  recalcBandsAndDeviation()
-}
-
-function recalcBandsAndDeviation() {
-  const settings = analysisSettings.value
-  const current = jobResults.value.map((r) => ({ ...r }))
-  jobResults.value = enrichWithBandsAndDeviation(current, {
-    bandCount: settings.bandCount,
-    filterOutliers: settings.filterOutliers,
-    strictOutliers: settings.strictOutliers,
-    weights: settings.weights,
-  })
-  if (genderNormalizedCache.value.length) {
-    recomputeBandGenderGaps()
+function runJobGrading() {
+  const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
+  if (normalizedJob.length > 0) {
+    const grouped = groupByLevel(normalizedJob)
+    jobResults.value = enrichWithDeviation(grouped)
+  } else {
+    jobResults.value = []
   }
-}
-
-function fallbackLocalJobScores(roles) {
-  const weights = analysisSettings.value.weights
-  return roles.map((r) => {
-    const text = `${r.role || ''} ${r.level || ''} ${r.description || ''}`.toLowerCase()
-    const clamp = (x) => Math.max(0, Math.min(100, Math.round(x)))
-    const kw = (list) => list.reduce((c, w) => c + (text.includes(w) ? 1 : 0), 0)
-    const competenze = clamp(35 + kw(['specialist', 'tecnico', 'engineer', 'analyst', 'senior']) * 10 + text.length / 50)
-    const responsabilita = clamp(30 + kw(['manager', 'responsabile', 'head', 'direttore', 'lead']) * 14 + (r.level?.length || 0) * 2)
-    const sforzo = clamp(30 + kw(['controllo', 'strateg', 'analisi', 'progett', 'decision']) * 9 + text.length / 70)
-    const condizioni = clamp(25 + kw(['turno', 'notte', 'impianto', 'produzione', 'stabilimento']) * 12)
-    const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
-    const family = r.jobFamily || getJobFamily(r.role)
-    const multiplier = r.jobFamilyMultiplier ?? getJobFamilyMultiplier(family)
-    const scores = { competenze_richieste: competenze, responsabilita, sforzo_mentale: sforzo, condizioni_lavorative: condizioni, levelScore, jobFamilyMultiplier: multiplier }
-    return { role: r.role, levelScore, jobFamily: family, jobFamilyMultiplier: multiplier, ...scores, totalScore: computeWeightedScore(scores, weights) }
-  })
 }
 
 // Flusso unificato
@@ -237,7 +182,7 @@ function startNuovaAnalisi() {
   saveStatus.value = ''
   resultsTab.value = 'genere'
   justifications.value = {}
-  justifyingRole.value = null
+  justifyingLevel.value = null
   genderViewMode.value = 'media'
   bandGenderGaps.value = []
   adjustedGapResult.value = null
@@ -323,46 +268,7 @@ async function confirmMapping() {
     }
 
     // --- Job grading (lavori di pari valore) ---
-    const settings = analysisSettings.value
-    const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
-    if (normalizedJob.length > 0) {
-      const aggregated = aggregateRolesForGrading(normalizedJob, { filterOutliers: settings.filterOutliers, strictOutliers: settings.strictOutliers })
-      let scored = fallbackLocalJobScores(aggregated)
-      jobSource.value = 'locale'
-
-      if (geminiEnabled.value) {
-        geminiLoading.value = true
-        try {
-          const aiInput = aggregated.map((r) => ({ role: r.role, level: r.level, job_description: r.description }))
-          const aiScores = await scoreJobRolesWithGemini(aiInput)
-          const mapAi = new Map(aiScores.map((x) => [String(x.role || '').toLowerCase().trim(), x]))
-          scored = aggregated.map((r) => {
-            const ai = mapAi.get(String(r.role || '').toLowerCase().trim())
-            if (!ai) return { ...fallbackLocalJobScores([r])[0], role: r.role }
-            const c = Number(ai.competenze_richieste ?? 0), resp = Number(ai.responsabilita ?? 0)
-            const s = Number(ai.sforzo_mentale ?? 0), cond = Number(ai.condizioni_lavorative ?? 0)
-            const levelScore = r.levelScore ?? normalizeLevelScore(r.level)
-            const family = r.jobFamily || getJobFamily(r.role)
-            const multiplier = r.jobFamilyMultiplier ?? getJobFamilyMultiplier(family)
-            const scores = { competenze_richieste: c, responsabilita: resp, sforzo_mentale: s, condizioni_lavorative: cond, levelScore, jobFamilyMultiplier: multiplier }
-            return { role: r.role, levelScore, jobFamily: family, jobFamilyMultiplier: multiplier, ...scores, totalScore: computeWeightedScore(scores, settings.weights) }
-          })
-          jobSource.value = 'ai'
-        } catch (err) {
-          uploadError.value += (uploadError.value ? ' | ' : '') + 'Job Grading AI fallback locale: ' + (err.message || String(err))
-        } finally { geminiLoading.value = false }
-      }
-
-      const merged = aggregated.map((r) => ({ ...r, ...(scored.find((x) => x.role === r.role) || {}) }))
-      jobResults.value = enrichWithBandsAndDeviation(merged, {
-        bandCount: settings.bandCount,
-        filterOutliers: settings.filterOutliers,
-        strictOutliers: settings.strictOutliers,
-        weights: settings.weights,
-      })
-    } else {
-      jobResults.value = []
-    }
+    runJobGrading()
 
     if (!indicatorsResult.value && jobResults.value.length === 0) {
       uploadError.value = 'Nessun dato valido. Verifica il mapping delle colonne (Genere per analisi di genere, Ruolo per job grading).'
@@ -384,7 +290,7 @@ async function confirmMapping() {
         mapping: columnMapping.value,
         rows: excelRows.value.slice(0, 500),
         results: { gender: indicatorsResult.value, jobGrading: jobResults.value },
-        calculationSource: `gender:${indicatorsSource.value},job:${jobSource.value}`,
+        calculationSource: `gender:${indicatorsSource.value},job:locale`,
       })
       saveStatus.value = `Analisi salvata nel database (ID: ${saved.id})`
     } catch (saveErr) {
@@ -398,54 +304,26 @@ async function confirmMapping() {
 
 function formatPct(n) { return n == null ? '–' : n.toFixed(2) + '%' }
 function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 }) }
-function scoreBadgeClass(band) { return `band-${band}` }
-
-// Giustificativi per ruoli fuori ±5%
+// Giustificativi per livelli fuori soglia
 const justifications = ref({})
-const justifyingRole = ref(null)
+const justifyingLevel = ref(null)
 const justifyText = ref('')
-const justifyAiLoading = ref(false)
 
-function openJustify(roleName) {
-  justifyingRole.value = roleName
-  justifyText.value = justifications.value[roleName] || ''
-}
-
-async function suggestJustify() {
-  const roleName = justifyingRole.value
-  if (!roleName) return
-  const r = jobResults.value.find((x) => x.role === roleName)
-  if (!r) return
-  justifyAiLoading.value = true
-  try {
-    const suggestion = await suggestJustificationWithGemini({
-      role: r.role,
-      level: r.level || '',
-      band: r.band,
-      totalScore: Math.round(r.totalScore),
-      medianSalary: Math.round(r.medianTotalSalary || 0),
-      deviation: Math.round((r.deviationFromBandMedianPct || 0) * 10) / 10,
-      jobFamily: r.jobFamily || 'General',
-      nEmployees: r.n || 1,
-    })
-    justifyText.value = suggestion
-  } catch (err) {
-    justifyText.value = `[Errore AI: ${err.message}]`
-  } finally {
-    justifyAiLoading.value = false
-  }
+function openJustify(level) {
+  justifyingLevel.value = level
+  justifyText.value = justifications.value[level] || ''
 }
 
 function saveJustify() {
-  if (justifyingRole.value != null) {
-    justifications.value[justifyingRole.value] = justifyText.value
+  if (justifyingLevel.value != null) {
+    justifications.value[justifyingLevel.value] = justifyText.value
   }
-  justifyingRole.value = null
+  justifyingLevel.value = null
   justifyText.value = ''
 }
 
 function cancelJustify() {
-  justifyingRole.value = null
+  justifyingLevel.value = null
   justifyText.value = ''
 }
 
@@ -833,23 +711,10 @@ function exportJobGradingPdf() {
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
   const regText = [
-    'La valutazione dei ruoli è basata su cinque fattori ponderati con Clustering Funzionale:',
-    '',
-    '1. Inquadramento Contrattuale (Livello CCNL): fattore predominante, normalizzato in scala 0-100',
-    '   (D1-D2=20pt, C1-C3=40pt, B1-B3=65pt, AS-A=85pt, Q=100pt).',
-    '',
-    '2. Competenze richieste (0-100): conoscenze tecniche, professionali e gestionali necessarie.',
-    '',
-    '3. Responsabilità (0-100): impatto sugli obiettivi, autonomia, gestione risorse.',
-    '',
-    '4. Sforzo mentale (0-100): complessità dei problemi, analisi, pensiero strategico.',
-    '',
-    '5. Condizioni lavorative (0-100): ambiente fisico, rischi, turni, trasferte.',
-    '',
-    'Job Family: ai ruoli IT/Tech è applicato un moltiplicatore di mercato (1.2x) al punteggio finale.',
-    'Outliers: sono esclusi dal calcolo record con RAL < 15k o > 150k (eccezione: Manager/Dirigenti).',
-    'La deviazione di banda è calcolata sulla mediana salariale (non sulla media) per robustezza statistica.',
-    'Scostamenti superiori al ±5% richiedono un giustificativo documentato.',
+    'I dipendenti sono raggruppati per livello di inquadramento CCNL.',
+    'Ogni livello costituisce una fascia retributiva omogenea.',
+    'La deviazione e calcolata sulla mediana salariale complessiva per robustezza statistica.',
+    'Scostamenti superiori al +/-5% richiedono un giustificativo documentato.',
   ]
   regText.forEach((line) => {
     doc.text(line, 14, y)
@@ -857,21 +722,17 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Ruolo', 'Livello', 'Family', 'Competenze', 'Resp.', 'Sforzo', 'Cond.', 'Totale', 'Mediana Retrib.', 'Scost. fascia', 'N', 'Giustificativo']]
-  const body = jobResults.value.map((r) => [
-    r.band,
-    r.role || '–',
-    r.level || '–',
-    r.jobFamily || '–',
-    r.competenze_richieste,
-    r.responsabilita,
-    r.sforzo_mentale,
-    r.condizioni_lavorative,
-    formatNum(r.totalScore),
-    formatNum(r.medianTotalSalary),
-    formatPct(r.deviationFromBandMedianPct),
-    r.n,
-    justifications.value[r.role] || '',
+  const head = [['Fascia', 'Livello CCNL', 'N Dipendenti', 'N Validi', 'Media RAL', 'Mediana Retrib.', 'Dev. da mediana globale', 'Ruoli', 'Giustificativo']]
+  const body = jobResults.value.map((b) => [
+    b.band,
+    b.level || '–',
+    b.n,
+    b.nValid,
+    formatNum(b.avgBaseSalary),
+    formatNum(b.medianTotalSalary),
+    formatPct(b.deviationFromOverallMedianPct),
+    b.roles.join(', ') || '–',
+    justifications.value[b.level] || '',
   ])
 
   doc.autoTable({
@@ -883,18 +744,15 @@ function exportJobGradingPdf() {
     bodyStyles: { fontSize: 7.5 },
     columnStyles: {
       0: { halign: 'center', cellWidth: 14 },
+      2: { halign: 'center' },
       3: { halign: 'center' },
-      4: { halign: 'center' },
-      5: { halign: 'center' },
+      4: { halign: 'right' },
+      5: { halign: 'right' },
       6: { halign: 'center' },
-      7: { halign: 'center', fontStyle: 'bold' },
-      8: { halign: 'right' },
-      9: { halign: 'right' },
-      10: { halign: 'center', cellWidth: 10 },
-      11: { cellWidth: 45 },
+      8: { cellWidth: 45 },
     },
     didParseCell(data) {
-      if (data.section === 'body' && data.column.index === 9) {
+      if (data.section === 'body' && data.column.index === 6) {
         const raw = data.cell.raw
         const num = typeof raw === 'string' ? parseFloat(raw) : raw
         if (Number.isFinite(num) && Math.abs(num) > 5) {
@@ -960,7 +818,7 @@ function exportJobGradingPdf() {
       <!-- Step 2: Mapping colonne unificato -->
       <div v-else-if="analisiStep === 'mapping'" class="analisi-content">
         <h2 class="analisi-title">Verifica assegnazione colonne</h2>
-        <p class="analisi-desc">Associa ogni dato richiesto alla colonna corrispondente del file. I campi servono sia per l'analisi di genere sia per il job grading.</p>
+        <p class="analisi-desc">Associa ogni dato richiesto alla colonna corrispondente del file.</p>
         <div class="mapping-table">
           <div class="mapping-row header">
             <span>Dato richiesto</span>
@@ -974,87 +832,22 @@ function exportJobGradingPdf() {
             </select>
           </div>
         </div>
-        <!-- Analysis Settings Panel -->
         <div class="settings-panel">
-          <h3 class="settings-title">Impostazioni Analisi</h3>
-
-          <div class="settings-row">
-            <label class="sr-label">Pesi fattori Job Grading</label>
-            <p class="settings-hint">I pesi determinano l'importanza relativa di ogni fattore. La somma deve essere 100%.</p>
-            <div class="weights-grid">
-              <div class="weight-field">
-                <label>Inquadramento Contrattuale</label>
-                <div class="weight-input-wrap">
-                  <input type="number" v-model.number="analysisSettings.weights.level" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('level')" :disabled="analysisLoading" />
-                  <span class="weight-pct">%</span>
-                </div>
-              </div>
-              <div class="weight-field">
-                <label>Competenze</label>
-                <div class="weight-input-wrap">
-                  <input type="number" v-model.number="analysisSettings.weights.skills" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('skills')" :disabled="analysisLoading" />
-                  <span class="weight-pct">%</span>
-                </div>
-              </div>
-              <div class="weight-field">
-                <label>Responsabilità</label>
-                <div class="weight-input-wrap">
-                  <input type="number" v-model.number="analysisSettings.weights.responsibility" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('responsibility')" :disabled="analysisLoading" />
-                  <span class="weight-pct">%</span>
-                </div>
-              </div>
-              <div class="weight-field">
-                <label>Sforzo mentale</label>
-                <div class="weight-input-wrap">
-                  <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" :disabled="analysisLoading" />
-                  <span class="weight-pct">%</span>
-                </div>
-              </div>
-              <div class="weight-field">
-                <label>Condizioni</label>
-                <div class="weight-input-wrap">
-                  <input type="number" v-model.number="analysisSettings.weights.conditions" class="sr-input sr-input-sm" min="0" max="100" step="5" @change="clampWeight('conditions')" :disabled="analysisLoading" />
-                  <span class="weight-pct">%</span>
-                </div>
-              </div>
-            </div>
-            <p class="weights-total" :class="{ 'weights-error': !weightsValid }">
-              Totale: {{ weightsTotal }}% <span v-if="!weightsValid">(deve essere 100%)</span>
-            </p>
-          </div>
-
-          <div class="settings-row">
-            <label class="sr-checkbox-row">
-              <input type="checkbox" v-model="analysisSettings.filterOutliers" :disabled="analysisLoading" />
-              <span>Filtro base (escludi record con RAL/Totale = 0, null o N/D)</span>
-            </label>
-          </div>
-
-          <div class="settings-row">
-            <label class="sr-checkbox-row">
-              <input type="checkbox" v-model="analysisSettings.strictOutliers" :disabled="analysisLoading" />
-              <span>Rimozione outlier strict (escludi RAL &lt; 15k o &gt; 150k, tranne Manager/Dirigenti)</span>
-            </label>
-          </div>
-
-          <div class="settings-row">
-            <label class="sr-label">Numero di bande</label>
-            <p class="settings-hint">I ruoli verranno distribuiti equamente nel numero di bande specificato.</p>
-            <input type="number" v-model.number="analysisSettings.bandCount" class="sr-input sr-input-sm" min="2" max="30" step="1" :disabled="analysisLoading" />
-          </div>
+          <h3 class="settings-title">Metodo di analisi</h3>
+          <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello forma una fascia e ne viene calcolata la retribuzione mediana e la deviazione.</p>
         </div>
 
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         <div class="mapping-actions">
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
-          <button class="btn-primary" :disabled="analysisLoading || !weightsValid" @click="confirmMapping">
+          <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
             <span v-if="analysisLoading">Generazione analisi...</span>
             <span v-else>Esegui analisi completa</span>
           </button>
         </div>
         <div v-if="analysisLoading" class="analysis-loader">
           <span class="spinner" aria-hidden="true"></span>
-          <span>Elaboro analisi di genere e job grading...</span>
+          <span>Elaboro analisi...</span>
         </div>
       </div>
 
@@ -1281,60 +1074,43 @@ function exportJobGradingPdf() {
 
         <!-- Sub-tab: Lavori di pari valore -->
         <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
-          <p class="result-source">Valutazione: <strong>{{ jobSource === 'ai' ? 'Gemini NLP' : 'Motore locale' }}</strong></p>
+          <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
 
-          <!-- Inline weights editor -->
-          <div class="weights-bar">
-            <span class="weights-bar-label">Pesi:</span>
-            <label class="wb-field">Livello <input type="number" v-model.number="analysisSettings.weights.level" class="wb-input" min="0" max="100" step="5" @change="clampWeight('level')" />%</label>
-            <label class="wb-field">Competenze <input type="number" v-model.number="analysisSettings.weights.skills" class="wb-input" min="0" max="100" step="5" @change="clampWeight('skills')" />%</label>
-            <label class="wb-field">Resp. <input type="number" v-model.number="analysisSettings.weights.responsibility" class="wb-input" min="0" max="100" step="5" @change="clampWeight('responsibility')" />%</label>
-            <label class="wb-field">Sforzo <input type="number" v-model.number="analysisSettings.weights.mentalEffort" class="wb-input" min="0" max="100" step="5" @change="clampWeight('mentalEffort')" />%</label>
-            <label class="wb-field">Cond. <input type="number" v-model.number="analysisSettings.weights.conditions" class="wb-input" min="0" max="100" step="5" @change="clampWeight('conditions')" />%</label>
-            <span class="wb-total" :class="{ 'weights-error': !weightsValid }">= {{ weightsTotal }}%</span>
-            <button type="button" class="btn-sm btn-primary" :disabled="!weightsValid" @click.stop.prevent="recalcBandsAndDeviation">Ricalcola</button>
-          </div>
-
-          <div v-for="band in [...new Set(jobResults.map(r => r.band))].sort((a,b) => a-b)" :key="band" class="band-section">
-            <h3 class="band-title" :class="scoreBadgeClass(band)">Banda {{ band }}</h3>
-            <div class="job-table">
-              <div class="job-row header">
-                <span>Ruolo</span><span>Livello</span><span>Famiglia</span><span>Competenze</span><span>Resp.</span><span>Sforzo</span><span>Cond.</span><span>Totale</span><span>Mediana Retrib.</span><span>Dev. Banda</span><span>N</span>
+          <div v-for="band in jobResults" :key="band.band" class="band-section">
+            <h3 class="band-title">Fascia {{ band.band }} – {{ band.level }}</h3>
+            <div class="band-summary">
+              <span><strong>{{ band.n }}</strong> dipendenti ({{ band.nValid }} validi)</span>
+              <span>Mediana retrib.: <strong>{{ formatNum(band.medianTotalSalary) }}</strong></span>
+              <span>Media RAL: <strong>{{ formatNum(band.avgBaseSalary) }}</strong></span>
+              <span :class="{ 'gap-alert': isGapAlert(band.deviationFromOverallMedianPct) }">
+                Dev. dalla mediana globale: <strong>{{ formatPct(band.deviationFromOverallMedianPct) }}</strong>
+                <button
+                  v-if="isGapAlert(band.deviationFromOverallMedianPct)"
+                  class="btn-justify"
+                  :class="{ 'has-note': justifications[band.level] }"
+                  title="Aggiungi giustificativo"
+                  @click.stop="openJustify(band.level)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                </button>
+              </span>
+              <span v-if="band.roles.length">Ruoli: {{ band.roles.join(', ') }}</span>
+            </div>
+            <div class="people-detail" v-if="band.people.length > 0">
+              <div class="people-header clickable" @click="toggleLevelExpand(band.level)">
+                <span class="expand-icon">{{ expandedLevels.has(band.level) ? '▾' : '▸' }}</span>
+                <span>Mostra {{ band.people.length }} dipendenti</span>
               </div>
-              <template v-for="r in jobResults.filter(x => x.band === band)" :key="`${band}-${r.role}`">
-                <div class="job-row clickable" @click="r.n > 1 ? toggleRoleExpand(r.role) : null" :class="{ expanded: expandedRoles.has(r.role), 'row-warning': Math.abs(r.deviationFromBandMedianPct) > 25 }">
-                  <span>
-                    <span v-if="r.n > 1" class="expand-icon">{{ expandedRoles.has(r.role) ? '▾' : '▸' }}</span>
-                    {{ r.role }} <small v-if="r.level">({{ r.level }})</small>
-                  </span>
-                  <span>{{ formatNum(r.levelScore) }} <small v-if="r.level" class="level-tag">{{ r.level }}</small></span>
-                  <span class="job-family-cell">{{ r.jobFamily }}<small v-if="r.jobFamilyMultiplier > 1" class="multiplier-badge">×{{ r.jobFamilyMultiplier }}</small></span>
-                  <span><input type="number" class="score-input" v-model.number="r.competenze_richieste" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                  <span><input type="number" class="score-input" v-model.number="r.responsabilita" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                  <span><input type="number" class="score-input" v-model.number="r.sforzo_mentale" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                  <span><input type="number" class="score-input" v-model.number="r.condizioni_lavorative" @input="onScoreEdit(r)" @click.stop min="0" max="100" /></span>
-                  <span><strong>{{ formatNum(r.totalScore) }}</strong></span>
-                  <span>{{ formatNum(r.medianTotalSalary) }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(r.deviationFromBandMedianPct) }">
-                    {{ formatPct(r.deviationFromBandMedianPct) }}
-                    <button
-                      v-if="isGapAlert(r.deviationFromBandMedianPct)"
-                      class="btn-justify"
-                      :class="{ 'has-note': justifications[r.role] }"
-                      title="Aggiungi giustificativo"
-                      @click.stop="openJustify(r.role)"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
-                    </button>
-                  </span>
-                  <span>{{ r.n }}</span>
-                </div>
-                <div v-if="expandedRoles.has(r.role) && r.people && r.people.length > 1" class="people-detail">
-                  <div class="people-header"><span>#</span><span>Dipendente</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da Media Ruolo</span></div>
-                  <div v-for="p in r.people" :key="p.index" class="people-row">
-                    <span>{{ p.index }}</span><span>{{ p.name || '–' }}</span><span>{{ formatNum(p.baseSalary) }}</span><span>{{ formatNum(p.variableComponents) }}</span><span>{{ formatNum(p.totalSalary) }}</span>
-                    <span :class="{ 'gap-alert': isGapAlert(p.deviationFromRoleAvgPct) }">{{ formatPct(p.deviationFromRoleAvgPct) }}</span>
-                  </div>
+              <template v-if="expandedLevels.has(band.level)">
+                <div class="people-header"><span>#</span><span>Dipendente</span><span>Ruolo</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da mediana livello</span></div>
+                <div v-for="p in band.people" :key="p.index" class="people-row">
+                  <span>{{ p.index }}</span>
+                  <span>{{ p.name || '–' }}</span>
+                  <span>{{ p.role || '–' }}</span>
+                  <span>{{ formatNum(p.baseSalary) }}</span>
+                  <span>{{ formatNum(p.variableComponents) }}</span>
+                  <span>{{ formatNum(p.totalSalary) }}</span>
+                  <span :class="{ 'gap-alert': isGapAlert(p.deviationFromLevelMedianPct) }">{{ formatPct(p.deviationFromLevelMedianPct) }}</span>
                 </div>
               </template>
             </div>
@@ -1347,7 +1123,7 @@ function exportJobGradingPdf() {
           </div>
         </div>
         <div v-else-if="resultsTab === 'pari_valore' && jobResults.length === 0" class="no-data-msg">
-          Dati job grading non disponibili. Verifica che le colonne Ruolo, Livello e Descrizione siano mappate correttamente.
+          Dati job grading non disponibili. Verifica che la colonna <strong>Livello</strong> sia mappata correttamente.
         </div>
 
         <div class="mapping-actions">
@@ -1356,22 +1132,15 @@ function exportJobGradingPdf() {
         </div>
 
         <!-- Modal giustificativo -->
-        <div v-if="justifyingRole != null" class="justify-overlay" @click.self="cancelJustify">
+        <div v-if="justifyingLevel != null" class="justify-overlay" @click.self="cancelJustify">
           <div class="justify-modal">
-            <h3>Giustificativo – {{ justifyingRole }}</h3>
-            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla mediana di banda.</p>
-            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..." :disabled="justifyAiLoading"></textarea>
+            <h3>Giustificativo – {{ justifyingLevel }}</h3>
+            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla mediana complessiva.</p>
+            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
             <div class="justify-actions">
-              <button v-if="geminiEnabled" type="button" class="btn-ai" :disabled="justifyAiLoading" @click="suggestJustify">
-                <span v-if="justifyAiLoading" class="spinner-sm"></span>
-                <span v-else>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:4px"><path d="M12 2l2.09 6.26L20.18 9l-5.09 4.09L16.82 20 12 16.18 7.18 20l1.73-6.91L3.82 9l6.09-.74z"/></svg>
-                  Suggerisci con AI
-                </span>
-              </button>
               <span style="flex:1"></span>
               <button class="btn-secondary" @click="cancelJustify">Annulla</button>
-              <button class="btn-primary" @click="saveJustify" :disabled="justifyAiLoading">Salva</button>
+              <button class="btn-primary" @click="saveJustify">Salva</button>
             </div>
           </div>
         </div>
@@ -2839,13 +2608,21 @@ function exportJobGradingPdf() {
   margin: 0 0 0.5rem;
   font-size: 1rem;
   font-weight: 700;
+  color: var(--primary);
 }
 
-.band-1 { color: #1f7a8c; }
-.band-2 { color: #2b86ed; }
-.band-3 { color: #4a7c59; }
-.band-4 { color: #8a6d3b; }
-.band-5 { color: #8b3a3a; }
+.band-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  align-items: center;
+}
 
 .job-table {
   width: 100%;

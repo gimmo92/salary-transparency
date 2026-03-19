@@ -1,34 +1,35 @@
-// --- 1. Level Hierarchy ---
+// --- CCNL Level hierarchy (higher number = higher band) ---
 
-const LEVEL_EXACT = {
-  'd1': 20, 'd2': 25, 'd': 20,
-  'c3': 40, 'c2': 45, 'c1': 50, 'c': 45,
-  'b3': 60, 'b2': 65, 'b1': 70, 'b': 65,
-  'as': 80,
-  'a': 85, 'a2': 85, 'a1': 90,
-  'q': 100, 'quadro': 100, 'quadri': 100,
-  'dirigente': 100, 'dir': 100, 'manager': 100,
+const LEVEL_ORDER = {
+  'd1': 1, 'd2': 2, 'd': 1,
+  'c3': 3, 'c2': 4, 'c1': 5, 'c': 4,
+  'b3': 6, 'b2': 7, 'b1': 8, 'b': 7,
+  'as': 9,
+  'a': 10, 'a2': 10, 'a1': 11,
+  'q': 12, 'quadro': 12, 'quadri': 12,
+  'dirigente': 13, 'dir': 13, 'manager': 13,
 }
 
-const LEVEL_NUMERIC = { 1: 100, 2: 85, 3: 65, 4: 45, 5: 30, 6: 20, 7: 20, 8: 20 }
+const LEVEL_NUMERIC = { 8: 1, 7: 2, 6: 3, 5: 4, 4: 5, 3: 7, 2: 10, 1: 12 }
 
 const LEVEL_FUZZY = [
-  [/\bq\b|quadr|dirig|manager/i, 100],
-  [/\ba1\b/i, 90],
-  [/\ba2?\b/i, 85],
-  [/\bas\b/i, 80],
-  [/\bb1\b/i, 70],
-  [/\bb2?\b/i, 65],
-  [/\bb3\b/i, 60],
-  [/\bc1\b/i, 50],
-  [/\bc2?\b/i, 45],
-  [/\bc3\b/i, 40],
-  [/\bd2\b/i, 25],
-  [/\bd1?\b/i, 20],
+  [/\bdirig|manager/i, 13],
+  [/\bq\b|quadr/i, 12],
+  [/\ba1\b/i, 11],
+  [/\ba2?\b/i, 10],
+  [/\bas\b/i, 9],
+  [/\bb1\b/i, 8],
+  [/\bb2?\b/i, 7],
+  [/\bb3\b/i, 6],
+  [/\bc1\b/i, 5],
+  [/\bc2?\b/i, 4],
+  [/\bc3\b/i, 3],
+  [/\bd2\b/i, 2],
+  [/\bd1?\b/i, 1],
 ]
 
-export function normalizeLevelScore(levelRaw) {
-  if (levelRaw == null || levelRaw === '') return 40
+export function normalizeLevelLabel(levelRaw) {
+  if (levelRaw == null || levelRaw === '') return null
   const raw = String(levelRaw).trim()
   const cleaned = raw.toLowerCase()
     .replace(/\s+/g, '')
@@ -36,54 +37,37 @@ export function normalizeLevelScore(levelRaw) {
     .replace(/^liv\.?/i, '')
     .trim()
 
-  if (LEVEL_EXACT[cleaned] != null) return LEVEL_EXACT[cleaned]
+  if (LEVEL_ORDER[cleaned] != null) return cleaned.toUpperCase()
+
+  const asNum = Number(cleaned)
+  if (Number.isInteger(asNum) && LEVEL_NUMERIC[asNum] != null) return `Livello ${asNum}`
+
+  for (const [regex] of LEVEL_FUZZY) {
+    if (regex.test(raw)) return raw.trim()
+  }
+
+  return raw.trim() || null
+}
+
+export function levelSortOrder(levelRaw) {
+  if (levelRaw == null || levelRaw === '') return 0
+  const raw = String(levelRaw).trim()
+  const cleaned = raw.toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/^livello/i, '')
+    .replace(/^liv\.?/i, '')
+    .trim()
+
+  if (LEVEL_ORDER[cleaned] != null) return LEVEL_ORDER[cleaned]
 
   const asNum = Number(cleaned)
   if (Number.isInteger(asNum) && LEVEL_NUMERIC[asNum] != null) return LEVEL_NUMERIC[asNum]
 
-  for (const [regex, score] of LEVEL_FUZZY) {
-    if (regex.test(raw)) return score
+  for (const [regex, order] of LEVEL_FUZZY) {
+    if (regex.test(raw)) return order
   }
 
-  if (Number.isFinite(asNum) && asNum >= 0 && asNum <= 100) return asNum
-  return 40
-}
-
-// --- 2. Job Families ---
-
-const IT_KEYWORDS = ['it', 'sviluppo', 'sviluppatore', 'ingegnere', 'software', 'developer', 'devops', 'data engineer', 'data scientist', 'cyber', 'cloud', 'sre', 'frontend', 'backend', 'fullstack']
-const MANAGER_KEYWORDS = ['manager', 'responsabile', 'head', 'direttore', 'director', 'lead', 'dirigente', 'quadro']
-
-export function getJobFamily(role) {
-  if (!role) return 'General'
-  const lower = String(role).toLowerCase()
-  for (const kw of IT_KEYWORDS) {
-    if (lower.includes(kw)) return 'IT / Tech'
-  }
-  return 'General'
-}
-
-export function isManagerRole(role) {
-  if (!role) return false
-  const lower = String(role).toLowerCase()
-  return MANAGER_KEYWORDS.some((kw) => lower.includes(kw))
-}
-
-const JOB_FAMILY_MULTIPLIER = {
-  'IT / Tech': 1.20,
-  'General': 1.00,
-}
-
-export function getJobFamilyMultiplier(family) {
-  return JOB_FAMILY_MULTIPLIER[family] ?? 1.0
-}
-
-// --- 3. Strict Outlier helpers ---
-
-export function isStrictOutlier(person, { isManager = false } = {}) {
-  if (isManager) return false
-  const ral = person.baseSalary ?? 0
-  return ral < 15000 || ral > 150000
+  return 0
 }
 
 function median(arr) {
@@ -93,7 +77,12 @@ function median(arr) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
-// --- Core functions ---
+function isValidSalary(person) {
+  return Number.isFinite(person.baseSalary) && person.baseSalary > 0
+    && Number.isFinite(person.totalSalary) && person.totalSalary > 0
+}
+
+// --- Core: parse Excel rows into normalized records ---
 
 export function buildNormalizedJobGradingData(rows, headers, mapping) {
   if (!rows?.length || !headers?.length || !mapping) return []
@@ -103,7 +92,6 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
 
   const roleIdx = idx('role')
   const levelIdx = idx('level')
-  const descIdx = idx('description')
   const baseIdx = idx('baseSalary')
   const varIdx = idx('variableComponents')
   const nameIdx = idx('employeeName')
@@ -131,9 +119,6 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       name: nameIdx != null ? row[nameIdx] : null,
       role,
       level: levelRaw,
-      levelScore: normalizeLevelScore(levelRaw),
-      jobFamily: getJobFamily(role),
-      description: descIdx != null ? row[descIdx] : null,
       baseSalary: base,
       variableComponents: variable,
       totalSalary: total,
@@ -141,118 +126,79 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
   })
 }
 
-function isValidSalary(person) {
-  return Number.isFinite(person.baseSalary) && person.baseSalary > 0
-    && Number.isFinite(person.totalSalary) && person.totalSalary > 0
-}
+// --- Group people by CCNL level → each level is a "band" ---
 
-export function aggregateRolesForGrading(normalizedJob, { filterOutliers = true, strictOutliers = true } = {}) {
+export function groupByLevel(normalizedData) {
   const map = new Map()
-  for (const r of normalizedJob) {
-    const key = `${r.role || 'N/D'}|${r.level || ''}`
-    if (!map.has(key)) {
-      map.set(key, {
-        role: r.role || 'N/D',
-        level: r.level || '',
-        levelScore: r.levelScore ?? 40,
-        jobFamily: r.jobFamily || 'General',
-        description: r.description || '',
+
+  for (const person of normalizedData) {
+    const levelKey = normalizeLevelLabel(person.level) || 'N/D'
+    if (!map.has(levelKey)) {
+      map.set(levelKey, {
+        level: levelKey,
+        sortOrder: levelSortOrder(person.level),
         people: [],
       })
     }
-    map.get(key).people.push(r)
+    map.get(levelKey).people.push(person)
   }
 
-  return Array.from(map.values()).map((agg) => {
-    const manager = isManagerRole(agg.role)
-    let validPeople = filterOutliers
-      ? agg.people.filter(isValidSalary)
-      : agg.people
-    if (strictOutliers) {
-      validPeople = validPeople.filter((p) => !isStrictOutlier(p, { isManager: manager }))
-    }
+  const groups = Array.from(map.values())
+    .sort((a, b) => b.sortOrder - a.sortOrder)
 
+  groups.forEach((g, i) => {
+    g.band = i + 1
+  })
+
+  return groups.map((g) => {
+    const validPeople = g.people.filter(isValidSalary)
     const n = validPeople.length
     const totalBase = validPeople.reduce((s, p) => s + p.baseSalary, 0)
     const totalVar = validPeople.reduce((s, p) => s + p.variableComponents, 0)
     const totalSals = validPeople.map((p) => p.totalSalary)
     const medianSalary = median(totalSals)
+    const roles = [...new Set(g.people.map((p) => p.role).filter(Boolean))]
 
     return {
-      role: agg.role,
-      level: agg.level,
-      levelScore: agg.levelScore,
-      jobFamily: agg.jobFamily,
-      jobFamilyMultiplier: getJobFamilyMultiplier(agg.jobFamily),
-      description: agg.description,
-      n: agg.people.length,
+      level: g.level,
+      band: g.band,
+      sortOrder: g.sortOrder,
+      roles,
+      n: g.people.length,
       nValid: n,
       avgBaseSalary: n ? totalBase / n : 0,
       avgVariableComponents: n ? totalVar / n : 0,
       avgTotalSalary: n ? totalSals.reduce((a, b) => a + b, 0) / n : 0,
       medianTotalSalary: medianSalary,
-      people: agg.people,
+      people: g.people,
     }
   })
 }
 
-export function computeWeightedScore(scores, weights) {
-  const wLevel = (weights?.level ?? 45) / 100
-  const wSkills = (weights?.skills ?? 15) / 100
-  const wResp = (weights?.responsibility ?? 20) / 100
-  const wEffort = (weights?.mentalEffort ?? 10) / 100
-  const wCond = (weights?.conditions ?? 10) / 100
+// --- Compute deviation of each band from overall median ---
 
-  const baseScore = (
-    (Number(scores.levelScore) || 0) * wLevel +
-    (Number(scores.competenze_richieste) || 0) * wSkills +
-    (Number(scores.responsabilita) || 0) * wResp +
-    (Number(scores.sforzo_mentale) || 0) * wEffort +
-    (Number(scores.condizioni_lavorative) || 0) * wCond
-  )
+export function enrichWithDeviation(bands) {
+  if (!bands.length) return []
 
-  const multiplier = scores.jobFamilyMultiplier ?? 1.0
-  return baseScore * multiplier
-}
+  const allMedians = bands.filter((b) => b.nValid > 0).map((b) => b.medianTotalSalary)
+  const overallMedian = median(allMedians)
 
-export function enrichWithBandsAndDeviation(roles, { bandCount = 10, filterOutliers = true, strictOutliers = true, weights } = {}) {
-  if (!roles.length) return []
+  return bands.map((b) => {
+    const val = b.medianTotalSalary || 0
+    const deviationPct = overallMedian ? ((val - overallMedian) / overallMedian) * 100 : 0
 
-  roles.forEach((r) => {
-    r.totalScore = computeWeightedScore(r, weights)
-  })
+    const people = b.people.map((p) => ({
+      ...p,
+      deviationFromLevelMedianPct: b.medianTotalSalary
+        ? ((p.totalSalary - b.medianTotalSalary) / b.medianTotalSalary) * 100
+        : 0,
+    }))
 
-  const sorted = [...roles].sort((a, b) => b.totalScore - a.totalScore)
-
-  const n = sorted.length
-  const perBand = Math.max(1, Math.ceil(n / bandCount))
-  sorted.forEach((r, i) => {
-    r.band = Math.min(bandCount, Math.floor(i / perBand) + 1)
-  })
-
-  const maxBand = Math.max(...sorted.map((r) => r.band))
-  for (let b = 1; b <= maxBand; b++) {
-    const inBand = sorted.filter((x) => x.band === b)
-    const validInBand = filterOutliers
-      ? inBand.filter((x) => x.nValid > 0)
-      : inBand
-    const medianVals = validInBand.map((x) => Number(x.medianTotalSalary) || 0)
-    const bandMedian = median(medianVals)
-    inBand.forEach((r) => {
-      r.bandMedianSalary = bandMedian
-      const val = Number(r.medianTotalSalary) || 0
-      r.deviationFromBandMedianPct = bandMedian ? ((val - bandMedian) / bandMedian) * 100 : 0
-    })
-  }
-
-  for (const r of sorted) {
-    if (r.people && r.people.length > 1) {
-      const roleMedian = r.medianTotalSalary || 1
-      r.people.forEach((p) => {
-        p.deviationFromRoleAvgPct = roleMedian ? ((p.totalSalary - roleMedian) / roleMedian) * 100 : 0
-      })
+    return {
+      ...b,
+      overallMedian,
+      deviationFromOverallMedianPct: deviationPct,
+      people,
     }
-  }
-
-  return sorted
+  })
 }

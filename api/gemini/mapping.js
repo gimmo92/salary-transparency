@@ -1,4 +1,15 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+
+function extractJson(text) {
+  const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
+  try { return JSON.parse(cleaned) } catch {}
+  const start = cleaned.search(/[\[{]/)
+  const end = Math.max(cleaned.lastIndexOf(']'), cleaned.lastIndexOf('}'))
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(cleaned.slice(start, end + 1)) } catch {}
+  }
+  throw new Error('Could not parse JSON from Gemini response')
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -42,7 +53,7 @@ JSON:`
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1 },
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
       }),
     })
 
@@ -53,8 +64,7 @@ JSON:`
 
     const data = await geminiRes.json()
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-    const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
-    const mapping = JSON.parse(cleaned)
+    const mapping = extractJson(text)
 
     return res.status(200).json(mapping)
   } catch (err) {
