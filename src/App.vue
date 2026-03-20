@@ -798,7 +798,7 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Livello', 'Sotto-fascia Hay', 'Resp.', 'Prob.', 'Comp.', 'Cond.', 'Totale', 'N', 'Media Retrib.']]
+  const head = [['Livello', 'CCNL', 'Fascia Hay', 'Resp.', 'Prob.', 'Comp.', 'Cond.', 'Totale', 'N', 'Media Retrib.']]
   const body = jobResults.value.flatMap((b) =>
     (b.hayBands || []).map((sub) => [
       b.band,
@@ -906,7 +906,7 @@ function exportJobGradingPdf() {
         </div>
         <div class="settings-panel">
           <h3 class="settings-title">Metodo di analisi</h3>
-          <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello forma una fascia e ne viene calcolata la retribuzione media e la deviazione.</p>
+          <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello viene analizzato con retribuzione media e deviazione.</p>
         </div>
 
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
@@ -1149,28 +1149,15 @@ function exportJobGradingPdf() {
           <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
 
           <div v-for="band in jobResults" :key="band.band" class="band-section">
-            <h3 class="band-title">Fascia {{ band.band }} – {{ band.level }}</h3>
+            <h3 class="band-title">Livello {{ band.band }} – {{ band.level }}</h3>
             <div class="band-summary">
               <span><strong>{{ band.n }}</strong> dipendenti ({{ band.nValid }} validi)</span>
               <span>Media retrib.: <strong>{{ formatNum(band.avgTotalSalary) }}</strong></span>
               <span>Media RAL: <strong>{{ formatNum(band.avgBaseSalary) }}</strong></span>
-              <span :class="{ 'gap-alert': isGapAlert(band.deviationFromOverallMeanPct) }">
-                Dev. dalla media globale: <strong>{{ formatPct(band.deviationFromOverallMeanPct) }}</strong>
-                <button
-                  v-if="isGapAlert(band.deviationFromOverallMeanPct)"
-                  class="btn-justify"
-                  :class="{ 'has-note': justifications[band.level] }"
-                  title="Aggiungi giustificativo"
-                  @click.stop="openJustify(band.level)"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
-                </button>
-              </span>
-              <span v-if="band.roles.length">Ruoli: {{ band.roles.join(', ') }}</span>
             </div>
             <div class="job-table" v-if="band.hayBands && band.hayBands.length">
               <div class="job-row header hay-row">
-                <span>Sotto-fascia</span><span>Range score</span><span>Resp.</span><span>Problem solving</span><span>Competenze</span><span>Condizioni</span><span>Totale Hay</span><span>N ruoli</span><span>Media retrib.</span>
+                <span>Fascia</span><span>Range score</span><span>Resp.</span><span>Problem solving</span><span>Competenze</span><span>Condizioni</span><span>Totale Hay</span><span>N ruoli</span><span>Media retrib.</span>
               </div>
               <div
                 v-for="sub in band.hayBands"
@@ -1216,7 +1203,7 @@ function exportJobGradingPdf() {
                       class="people-detail"
                     >
                       <div class="people-header hay-person-header">
-                        <span>#</span><span>Persona</span><span>Retrib. base</span><span>Comp. variabile</span><span>Retrib. totale</span><span>Dev. da media sotto-fascia</span>
+                        <span>#</span><span>Persona</span><span>Retrib. base</span><span>Comp. variabile</span><span>Retrib. totale</span><span>Dev. da media fascia</span>
                       </div>
                       <div
                         v-for="p in rb.people"
@@ -1279,7 +1266,7 @@ function exportJobGradingPdf() {
         <div v-if="justifyingPerson != null" class="justify-overlay" @click.self="cancelPersonJustify">
           <div class="justify-modal">
             <h3>Giustificativo persona – {{ justifyingPerson.label }}</h3>
-            <p class="justify-hint">Inserisci un giustificativo per lo scostamento dalla media della sotto-fascia.</p>
+            <p class="justify-hint">Inserisci un giustificativo per lo scostamento dalla media della fascia.</p>
             <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
             <div class="justify-actions">
               <span style="flex:1"></span>

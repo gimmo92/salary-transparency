@@ -304,6 +304,15 @@ export function groupByLevel(normalizedData) {
             : 0,
         }))
 
+        const peopleByIndex = new Map(people.map((p) => [p.index, p]))
+        const roles = hb.roles.map((r) => ({
+          ...r,
+          people: r.people.map((p) => ({
+            ...p,
+            ...(peopleByIndex.get(p.index) || {}),
+          })),
+        }))
+
         return {
           id: `H${idx + 1}`,
           label: `${hb.min}-${hb.max}`,
@@ -312,7 +321,7 @@ export function groupByLevel(normalizedData) {
           n: people.length,
           nValid: valid.length,
           nRoles: hb.roles.length,
-          roles: hb.roles,
+          roles,
           avgTotalSalary: avgBandSalary,
           avgHayResponsibility: mean(hb.roles.map((r) => r.avgHayResponsibility)),
           avgHayProblemSolving: mean(hb.roles.map((r) => r.avgHayProblemSolving)),
