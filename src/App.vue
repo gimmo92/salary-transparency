@@ -151,14 +151,13 @@ function isGapAlert(pct) {
 }
 
 function hasHayBandDisparity(hayBand) {
-  const roles = hayBand?.roles || []
-  for (const role of roles) {
-    const people = role?.people || []
-    for (const p of people) {
-      if (isGapAlert(p?.deviationFromHayBandMeanPct)) return true
-    }
-  }
-  return false
+  return isGapAlert(hayBand?.genderPayGapPct)
+}
+
+function personGenderClass(gender) {
+  if (gender === 'M') return 'gender-male'
+  if (gender === 'F') return 'gender-female'
+  return 'gender-unknown'
 }
 
 const expandedHayBands = ref(new Set())
@@ -1042,7 +1041,12 @@ function exportJobGradingPdf() {
                       <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
                     </svg>
                   </span>
-                  <span>{{ sub.label }}</span>
+                  <span>
+                    {{ sub.label }}
+                    <span v-if="sub.genderPayGapPct != null" class="hay-band-gap-pill" :class="{ 'gap-alert': hasHayBandDisparity(sub) }">
+                      Gap M/F: {{ formatPct(sub.genderPayGapPct) }}
+                    </span>
+                  </span>
                   <span>{{ formatNum(sub.avgHayResponsibility) }}</span>
                   <span>{{ formatNum(sub.avgHayProblemSolving) }}</span>
                   <span>{{ formatNum(sub.avgHayRequiredSkills) }}</span>
@@ -1094,17 +1098,51 @@ function exportJobGradingPdf() {
                         class="people-row hay-person-row"
                       >
                         <span>{{ p.index }}</span>
-                        <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg>{{ p.name || '–' }}</span>
+                        <span>
+                          <svg
+                            v-if="p.gender === 'M'"
+                            class="inline-icon"
+                            :class="personGenderClass(p.gender)"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            width="13"
+                            height="13"
+                          ><circle cx="9" cy="15" r="5"/><path d="M13 11l7-7"/><path d="M15 4h5v5"/></svg>
+                          <svg
+                            v-else-if="p.gender === 'F'"
+                            class="inline-icon"
+                            :class="personGenderClass(p.gender)"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            width="13"
+                            height="13"
+                          ><circle cx="12" cy="9" r="5"/><path d="M12 14v7"/><path d="M9 18h6"/></svg>
+                          <svg
+                            v-else
+                            class="inline-icon gender-unknown"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            width="13"
+                            height="13"
+                          ><circle cx="12" cy="12" r="9"/><path d="M9 9h.01"/><path d="M15 9h.01"/><path d="M8 15c1.2 1.2 2.6 1.8 4 1.8s2.8-.6 4-1.8"/></svg>
+                          {{ p.name || '–' }}
+                        </span>
                         <span>{{ formatNum(p.baseSalary) }}</span>
                         <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
-                        <span :class="{ 'gap-alert': isGapAlert(p.deviationFromHayBandMeanPct) }">
+                        <span>
                           {{ formatPct(p.deviationFromHayBandMeanPct) }}
                           <button
-                            v-if="isGapAlert(p.deviationFromHayBandMeanPct)"
+                            v-if="hasHayBandDisparity(sub)"
                             class="btn-justify"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
-                            title="Aggiungi giustificativo persona"
+                            title="Aggiungi giustificativo persona (fascia con gap M/F)"
                             @click.stop="openPersonJustify(p, `${rb.role} · ${p.name || ('#' + p.index)}`)"
                           >
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
@@ -2737,6 +2775,17 @@ function exportJobGradingPdf() {
   flex: 0 0 auto;
 }
 
+.hay-band-gap-pill {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.14);
+}
+
 .people-header,
 .people-row {
   display: grid;
@@ -2793,6 +2842,18 @@ function exportJobGradingPdf() {
   vertical-align: -2px;
   margin-right: 0.25rem;
   color: var(--text-secondary);
+}
+
+.inline-icon.gender-male {
+  color: #2563eb;
+}
+
+.inline-icon.gender-female {
+  color: #db2777;
+}
+
+.inline-icon.gender-unknown {
+  color: #64748b;
 }
 
 .role-cell-main {
