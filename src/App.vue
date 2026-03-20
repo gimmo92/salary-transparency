@@ -190,16 +190,21 @@ function roleBreakdown(people = []) {
   }
   const mean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
   return Array.from(map.values())
-    .map((r) => ({
-      role: r.role,
-      n: r.n,
-      avgSalary: mean(r.salaries),
-      avgMen: mean(r.men),
-      avgWomen: mean(r.women),
-      gapPct: r.men.length && r.avgMen ? ((r.avgMen - mean(r.women)) / r.avgMen) * 100 : 0,
-      nMen: r.men.length,
-      nWomen: r.women.length,
-    }))
+    .map((r) => {
+      const avgSalary = mean(r.salaries)
+      const avgMen = mean(r.men)
+      const avgWomen = mean(r.women)
+      return {
+        role: r.role,
+        n: r.n,
+        avgSalary,
+        avgMen,
+        avgWomen,
+        gapPct: r.men.length && avgMen ? ((avgMen - avgWomen) / avgMen) * 100 : 0,
+        nMen: r.men.length,
+        nWomen: r.women.length,
+      }
+    })
     .sort((a, b) => b.avgSalary - a.avgSalary)
 }
 
@@ -1203,22 +1208,23 @@ function exportJobGradingPdf() {
                 <span>{{ formatNum(sub.avgSalaryWomen) }} <small class="muted">(n={{ sub.nWomen }})</small></span>
                 <span :class="{ 'gap-alert': isGapAlert(sub.genderPayGapPct) }">{{ formatPct(sub.genderPayGapPct) }}</span>
               </div>
-              <div
-                v-for="sub in band.hayBands"
-                v-if="isHayBandExpanded(band.level, sub.label)"
-                :key="`${band.level}-${sub.label}-roles`"
-                class="people-detail"
-              >
-                <div class="people-header"><span>Ruolo</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span></div>
-                <div v-for="rb in roleBreakdown(sub.people)" :key="`${band.level}-${sub.label}-${rb.role}`" class="people-row">
-                  <span>{{ rb.role }}</span>
-                  <span>{{ rb.n }}</span>
-                  <span>{{ formatNum(rb.avgSalary) }}</span>
-                  <span>{{ formatNum(rb.avgMen) }} <small class="muted">(n={{ rb.nMen }})</small></span>
-                  <span>{{ formatNum(rb.avgWomen) }} <small class="muted">(n={{ rb.nWomen }})</small></span>
-                  <span :class="{ 'gap-alert': isGapAlert(rb.gapPct) }">{{ formatPct(rb.gapPct) }}</span>
+              <template v-for="sub in band.hayBands" :key="`${band.level}-${sub.label}-roles-wrap`">
+                <div
+                  v-if="isHayBandExpanded(band.level, sub.label)"
+                  :key="`${band.level}-${sub.label}-roles`"
+                  class="people-detail"
+                >
+                  <div class="people-header"><span>Ruolo</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span></div>
+                  <div v-for="rb in roleBreakdown(sub.people)" :key="`${band.level}-${sub.label}-${rb.role}`" class="people-row">
+                    <span>{{ rb.role }}</span>
+                    <span>{{ rb.n }}</span>
+                    <span>{{ formatNum(rb.avgSalary) }}</span>
+                    <span>{{ formatNum(rb.avgMen) }} <small class="muted">(n={{ rb.nMen }})</small></span>
+                    <span>{{ formatNum(rb.avgWomen) }} <small class="muted">(n={{ rb.nWomen }})</small></span>
+                    <span :class="{ 'gap-alert': isGapAlert(rb.gapPct) }">{{ formatPct(rb.gapPct) }}</span>
+                  </div>
                 </div>
-              </div>
+              </template>
             </div>
           </div>
           <div class="mapping-actions" style="margin-top: 1.5rem;">
