@@ -150,8 +150,26 @@ function isGapAlert(pct) {
   return pct != null && Math.abs(pct) > 5
 }
 
+function isPersonJustified(person) {
+  const key = String(person?.index || '')
+  if (!key) return false
+  const note = personJustifications.value[key]
+  return typeof note === 'string' && note.trim().length > 0
+}
+
+function hayBandAdjustedGapPct(hayBand) {
+  const people = (hayBand?.people || []).filter((p) => Number.isFinite(p?.totalSalary) && p.totalSalary > 0 && !isPersonJustified(p))
+  const men = people.filter((p) => p.gender === 'M').map((p) => p.totalSalary)
+  const women = people.filter((p) => p.gender === 'F').map((p) => p.totalSalary)
+  if (!men.length || !women.length) return null
+  const menAvg = men.reduce((s, v) => s + v, 0) / men.length
+  const womenAvg = women.reduce((s, v) => s + v, 0) / women.length
+  if (!menAvg) return null
+  return ((menAvg - womenAvg) / menAvg) * 100
+}
+
 function hasHayBandDisparity(hayBand) {
-  return isGapAlert(hayBand?.genderPayGapPct)
+  return isGapAlert(hayBandAdjustedGapPct(hayBand))
 }
 
 function personGenderClass(gender) {
@@ -1043,8 +1061,8 @@ function exportJobGradingPdf() {
                   </span>
                   <span>
                     {{ sub.label }}
-                    <span v-if="sub.genderPayGapPct != null" class="hay-band-gap-pill" :class="{ 'gap-alert': hasHayBandDisparity(sub) }">
-                      Gap M/F: {{ formatPct(sub.genderPayGapPct) }}
+                    <span v-if="hayBandAdjustedGapPct(sub) != null" class="hay-band-gap-pill" :class="{ 'gap-alert': hasHayBandDisparity(sub) }">
+                      Gap rett.: {{ formatPct(hayBandAdjustedGapPct(sub)) }}
                     </span>
                   </span>
                   <span>{{ sub.nMen ?? 0 }}</span>
@@ -1136,7 +1154,7 @@ function exportJobGradingPdf() {
                         <span>
                           {{ formatPct(p.deviationFromHayBandMeanPct) }}
                           <button
-                            v-if="hasHayBandDisparity(sub)"
+                            v-if="hasHayBandDisparity(sub) || personJustifications[String(p.index)]"
                             class="btn-justify"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
                             title="Aggiungi giustificativo persona (fascia con gap M/F)"
