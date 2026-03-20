@@ -228,22 +228,67 @@ export function groupByLevel(normalizedData) {
     const avgSalary = mean(totalSals)
     const roles = [...new Set(g.people.map((p) => p.role).filter(Boolean))]
 
-    const hayMap = new Map()
+    // 1) Build Hay analysis at ROLE level inside each CCNL level
+    const roleMap = new Map()
     for (const p of g.people) {
-      const bucket = haySubBandFromScore(p.hayTotalScore)
-      if (!hayMap.has(bucket.key)) {
-        hayMap.set(bucket.key, {
-          ...bucket,
+      const roleKey = p.role || 'N/D'
+      if (!roleMap.has(roleKey)) {
+        roleMap.set(roleKey, {
+          role: roleKey,
           people: [],
         })
       }
-      hayMap.get(bucket.key).people.push(p)
+      roleMap.get(roleKey).people.push(p)
+    }
+
+    const roleProfiles = Array.from(roleMap.values()).map((r) => {
+      const people = r.people
+      const validPeople = people.filter(isValidSalary)
+      const maleSalaries = validPeople.filter((p) => p.gender === 'M').map((p) => p.totalSalary)
+      const femaleSalaries = validPeople.filter((p) => p.gender === 'F').map((p) => p.totalSalary)
+      const avgMen = mean(maleSalaries)
+      const avgWomen = mean(femaleSalaries)
+      const roleHayTotal = mean(people.map((p) => p.hayTotalScore))
+
+      return {
+        role: r.role,
+        people,
+        n: people.length,
+        nValid: validPeople.length,
+        avgTotalSalary: mean(validPeople.map((p) => p.totalSalary)),
+        avgHayResponsibility: mean(people.map((p) => p.hayResponsibility)),
+        avgHayProblemSolving: mean(people.map((p) => p.hayProblemSolving)),
+        avgHayRequiredSkills: mean(people.map((p) => p.hayRequiredSkills)),
+        avgHayWorkingConditions: mean(people.map((p) => p.hayWorkingConditions)),
+        avgHayTotalScore: roleHayTotal,
+        avgSalaryMen: avgMen,
+        avgSalaryWomen: avgWomen,
+        nMen: maleSalaries.length,
+        nWomen: femaleSalaries.length,
+        genderPayGapPct: (maleSalaries.length > 0 && femaleSalaries.length > 0)
+          ? pctGap(avgMen, avgWomen)
+          : null,
+      }
+    })
+
+    // 2) Group ROLES by Hay interval (20 points)
+    const hayMap = new Map()
+    for (const roleProfile of roleProfiles) {
+      const bucket = haySubBandFromScore(roleProfile.avgHayTotalScore)
+      if (!hayMap.has(bucket.key)) {
+        hayMap.set(bucket.key, {
+          ...bucket,
+          roles: [],
+        })
+      }
+      hayMap.get(bucket.key).roles.push(roleProfile)
     }
 
     const hayBands = Array.from(hayMap.values())
       .sort((a, b) => b.min - a.min)
       .map((hb, idx) => {
-        const valid = hb.people.filter(isValidSalary)
+        const allPeople = hb.roles.flatMap((r) => r.people)
+        const valid = allPeople.filter(isValidSalary)
         const salaries = valid.map((p) => p.totalSalary)
         const avgBandSalary = mean(salaries)
         const maleSalaries = valid.filter((p) => p.gender === 'M').map((p) => p.totalSalary)
@@ -251,7 +296,7 @@ export function groupByLevel(normalizedData) {
         const maleAvg = mean(maleSalaries)
         const femaleAvg = mean(femaleSalaries)
 
-        const people = hb.people.map((p) => ({
+        const people = allPeople.map((p) => ({
           ...p,
           haySubBand: hb.key,
           deviationFromHayBandMeanPct: avgBandSalary
@@ -264,15 +309,19 @@ export function groupByLevel(normalizedData) {
           label: `${hb.min}-${hb.max}`,
           minScore: hb.min,
           maxScore: hb.max,
-          n: hb.people.length,
+          n: people.length,
           nValid: valid.length,
+          nRoles: hb.roles.length,
+          roles: hb.roles,
           avgTotalSalary: avgBandSalary,
-          avgHayResponsibility: mean(hb.people.map((p) => p.hayResponsibility)),
-          avgHayProblemSolving: mean(hb.people.map((p) => p.hayProblemSolving)),
-          avgHayRequiredSkills: mean(hb.people.map((p) => p.hayRequiredSkills)),
-          avgHayWorkingConditions: mean(hb.people.map((p) => p.hayWorkingConditions)),
-          avgHayTotalScore: mean(hb.people.map((p) => p.hayTotalScore)),
-          genderPayGapPct: pctGap(maleAvg, femaleAvg),
+          avgHayResponsibility: mean(hb.roles.map((r) => r.avgHayResponsibility)),
+          avgHayProblemSolving: mean(hb.roles.map((r) => r.avgHayProblemSolving)),
+          avgHayRequiredSkills: mean(hb.roles.map((r) => r.avgHayRequiredSkills)),
+          avgHayWorkingConditions: mean(hb.roles.map((r) => r.avgHayWorkingConditions)),
+          avgHayTotalScore: mean(hb.roles.map((r) => r.avgHayTotalScore)),
+          genderPayGapPct: (maleSalaries.length > 0 && femaleSalaries.length > 0)
+            ? pctGap(maleAvg, femaleAvg)
+            : null,
           avgSalaryMen: maleAvg,
           avgSalaryWomen: femaleAvg,
           nMen: maleSalaries.length,
