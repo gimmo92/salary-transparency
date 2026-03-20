@@ -509,6 +509,72 @@ function cancelPersonJustify() {
   justifyText.value = ''
 }
 
+/** Suggerimenti strutturati per il giustificativo persona (click per inserire nel testo) */
+const PERSON_JUSTIFY_SUGGESTION_CATEGORIES = [
+  {
+    id: 'temporal',
+    title: '1. Esperienza e anzianità (criteri temporali)',
+    intro: 'Tra i più facili da documentare e i più comuni.',
+    highRisk: false,
+    items: [
+      { label: 'Anzianità di servizio', snippet: 'Anzianità di servizio: anni trascorsi in azienda o nello specifico ruolo, con riferimento a scatti di anzianità o progressioni automatiche documentate.' },
+      { label: 'Esperienza pregressa pertinente', snippet: 'Esperienza pregressa pertinente: anni di esperienza in ruoli simili prima dell\'assunzione, che giustificano una RAL di ingresso più elevata.' },
+      { label: 'Curva di apprendimento', snippet: 'Curva di apprendimento: differenza tra un neo-assunto e un dipendente che ricopre il ruolo da tempo, fino a quando la produttività non si allinea.' },
+    ],
+  },
+  {
+    id: 'skills',
+    title: '2. Competenze e formazione (criteri qualitativi)',
+    intro: 'Il bagaglio che il dipendente porta nel ruolo.',
+    highRisk: false,
+    items: [
+      { label: 'Istruzione / titoli di studio', snippet: 'Livello di istruzione e titoli di studio: possesso di master, dottorato o lauree specifiche non strettamente obbligatorie ma a valore aggiunto documentabile.' },
+      { label: 'Certificazioni tecniche', snippet: 'Certificazioni tecniche: possesso di certificazioni rare o di alto livello (es. certificazioni cloud, legali, linguistiche avanzate).' },
+      { label: 'Soft skills certificate', snippet: 'Soft skills certificate: competenze di leadership o negoziazione verificate tramite assessment oggettivi.' },
+    ],
+  },
+  {
+    id: 'performance',
+    title: '3. Performance e merito (criteri di risultato)',
+    intro: 'Richiedono un sistema di valutazione delle prestazioni solido e documentazione.',
+    highRisk: false,
+    items: [
+      { label: 'Raggiungimento KPI', snippet: 'Raggiungimento dei KPI: storico dei risultati individuali documentato (es. superamento target di vendita o obiettivi tecnici).' },
+      { label: 'Valutazione del potenziale', snippet: 'Valutazione del potenziale: risultati di assessment interni che identificano il dipendente come high potential.' },
+      { label: 'Premi e bonus storici', snippet: 'Premi e bonus storici: componenti variabili una tantum legate a progetti specifici conclusi con successo.' },
+    ],
+  },
+  {
+    id: 'conditions',
+    title: '4. Caratteristiche del lavoro (criteri di condizione)',
+    intro: 'Differenze legate a come e dove si svolge il lavoro.',
+    highRisk: false,
+    items: [
+      { label: 'Turni / notturno', snippet: 'Lavoro a turni o notturno: maggiorazioni legate a orari disagiati o rischiosi, documentate in busta paga / accordi.' },
+      { label: 'Trasferta / sede', snippet: 'Indennità di trasferta o sede: differenze legate al costo della vita tra sedi o alla disponibilità costante a viaggiare.' },
+      { label: 'Responsabilità aggiuntive', snippet: 'Responsabilità aggiuntive: incarichi temporanei o ad interim che non modificano il grado Hay ma comportano un incremento retributivo documentato.' },
+    ],
+  },
+  {
+    id: 'market',
+    title: '5. Fattori di mercato (criteri esterni)',
+    intro: 'Possono essere sensibili in sede di audit: documentare con evidenze solide.',
+    highRisk: true,
+    items: [
+      { label: 'Scarsità di talenti (shortage)', snippet: '[ALTO RISCHIO AUDIT] Scarsità di talenti sul mercato: difficoltà documentata nel reperire la specifica figura professionale, con evidenze di mercato e processo di recruiting.' },
+      { label: 'Retention / controfferta', snippet: '[ALTO RISCHIO AUDIT] Retention: controfferta formulata per evitare dimissioni di dipendente chiave, con documentazione della minaccia competitiva e dell\'approvazione interna.' },
+    ],
+  },
+]
+
+function appendPersonJustifySnippet(snippet) {
+  const s = String(snippet || '').trim()
+  if (!s) return
+  const cur = justifyText.value.trim()
+  if (cur.includes(s)) return
+  justifyText.value = cur ? `${cur}\n\n• ${s}` : `• ${s}`
+}
+
 // Gender gap dashboard
 const genderViewMode = ref('media') // 'media' | 'mediana'
 const bandGenderGaps = ref([])
@@ -1206,13 +1272,42 @@ function exportJobGradingPdf() {
           </div>
         </div>
         <div v-if="justifyingPerson != null" class="justify-overlay" @click.self="cancelPersonJustify">
-          <div class="justify-modal">
+          <div class="justify-modal justify-modal-person">
             <h3>Giustificativo persona – {{ justifyingPerson.label }}</h3>
             <p v-if="justifyingPerson.seniority" class="justify-hint justify-seniority-box">
               <strong>Anzianità (da file Excel):</strong> {{ justifyingPerson.seniority }}
             </p>
             <p class="justify-hint">Inserisci un giustificativo (puoi richiamare l'anzianità di servizio come elemento oggettivo, se coerente con i dati caricati).</p>
-            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
+
+            <div class="person-justify-suggestions">
+              <p class="person-justify-suggestions-title">Suggerimenti — clic per aggiungere al testo</p>
+              <details
+                v-for="cat in PERSON_JUSTIFY_SUGGESTION_CATEGORIES"
+                :key="cat.id"
+                class="person-justify-cat"
+                :class="{ 'person-justify-cat--risk': cat.highRisk }"
+              >
+                <summary class="person-justify-cat-summary">{{ cat.title }}</summary>
+                <p v-if="cat.intro" class="person-justify-cat-intro">{{ cat.intro }}</p>
+                <p v-if="cat.highRisk" class="person-justify-risk-banner">
+                  Attenzione: motivazioni legate al mercato o alla retention sono spesso oggetto di verifiche approfondite. Allegare evidenze e approvazioni interne.
+                </p>
+                <div class="person-justify-chips">
+                  <button
+                    v-for="(item, i) in cat.items"
+                    :key="`${cat.id}-${i}`"
+                    type="button"
+                    class="person-justify-chip"
+                    @click="appendPersonJustifySnippet(item.snippet)"
+                  >
+                    {{ item.label }}
+                  </button>
+                </div>
+              </details>
+            </div>
+
+            <label class="person-justify-textarea-label">Testo del giustificativo</label>
+            <textarea v-model="justifyText" class="justify-textarea" rows="6" placeholder="Motivo..."></textarea>
             <div class="justify-actions">
               <span style="flex:1"></span>
               <button class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
@@ -3280,6 +3375,12 @@ function exportJobGradingPdf() {
   padding: 1.75rem 2rem;
   width: 90%;
   max-width: 520px;
+  max-height: min(92vh, 900px);
+  overflow-y: auto;
+}
+
+.justify-modal-person {
+  max-width: 640px;
 }
 
 .justify-modal h3 {
@@ -3320,6 +3421,107 @@ function exportJobGradingPdf() {
   align-items: center;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+
+.person-justify-suggestions {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.85rem;
+  background: var(--bg-page);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.person-justify-suggestions-title {
+  margin: 0 0 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.person-justify-cat {
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.person-justify-cat--risk {
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.person-justify-cat-summary {
+  cursor: pointer;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  list-style: none;
+}
+
+.person-justify-cat-summary::-webkit-details-marker {
+  display: none;
+}
+
+.person-justify-cat-summary::before {
+  content: '▸ ';
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.person-justify-cat[open] .person-justify-cat-summary::before {
+  content: '▾ ';
+}
+
+.person-justify-cat-intro {
+  margin: 0 0.65rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.person-justify-risk-banner {
+  margin: 0 0.65rem 0.5rem;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #991b1b;
+  background: rgba(220, 38, 38, 0.1);
+  border-radius: 6px;
+}
+
+.person-justify-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 0.65rem 0.65rem;
+}
+
+.person-justify-chip {
+  font-size: 0.72rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.person-justify-chip:hover {
+  border-color: var(--accent-blue);
+  background: rgba(10, 108, 210, 0.06);
+}
+
+.person-justify-textarea-label {
+  display: block;
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 .btn-ai {
   padding: 0.4rem 0.9rem;
