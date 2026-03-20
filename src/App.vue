@@ -152,10 +152,67 @@ function isGapAlert(pct) {
   return pct != null && Math.abs(pct) > 5
 }
 
+const expandedHayBands = ref(new Set())
+
+function hayBandKey(level, label) {
+  return `${level}::${label}`
+}
+
+function toggleHayBand(level, label) {
+  const key = hayBandKey(level, label)
+  if (expandedHayBands.value.has(key)) expandedHayBands.value.delete(key)
+  else expandedHayBands.value.add(key)
+  expandedHayBands.value = new Set(expandedHayBands.value)
+}
+
+function isHayBandExpanded(level, label) {
+  return expandedHayBands.value.has(hayBandKey(level, label))
+}
+
+function roleBreakdown(people = []) {
+  const map = new Map()
+  for (const p of people) {
+    const role = p.role || 'N/D'
+    if (!map.has(role)) {
+      map.set(role, {
+        role,
+        n: 0,
+        salaries: [],
+        men: [],
+        women: [],
+      })
+    }
+    const row = map.get(role)
+    row.n += 1
+    row.salaries.push(Number(p.totalSalary) || 0)
+    if (p.gender === 'M') row.men.push(Number(p.totalSalary) || 0)
+    if (p.gender === 'F') row.women.push(Number(p.totalSalary) || 0)
+  }
+  const mean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+  return Array.from(map.values())
+    .map((r) => ({
+      role: r.role,
+      n: r.n,
+      avgSalary: mean(r.salaries),
+      avgMen: mean(r.men),
+      avgWomen: mean(r.women),
+      gapPct: r.men.length && r.avgMen ? ((r.avgMen - mean(r.women)) / r.avgMen) * 100 : 0,
+      nMen: r.men.length,
+      nWomen: r.women.length,
+    }))
+    .sort((a, b) => b.avgSalary - a.avgSalary)
+}
+
 function runJobGrading() {
   const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
+  const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+  const genderByIndex = new Map(normalizedGender.map((x) => [x.index, x.gender]))
+  const enrichedJob = normalizedJob.map((p) => ({
+    ...p,
+    gender: p.gender || genderByIndex.get(p.index) || null,
+  }))
   if (normalizedJob.length > 0) {
-    const grouped = groupByLevel(normalizedJob)
+    const grouped = groupByLevel(enrichedJob)
     jobResults.value = enrichWithDeviation(grouped)
   } else {
     jobResults.value = []
@@ -1130,9 +1187,10 @@ function exportJobGradingPdf() {
               <div
                 v-for="sub in band.hayBands"
                 :key="`${band.level}-${sub.label}`"
-                class="job-row hay-row"
+                class="job-row hay-row clickable"
+                @click="toggleHayBand(band.level, sub.label)"
               >
-                <span><strong>{{ sub.id }}</strong></span>
+                <span><strong>{{ isHayBandExpanded(band.level, sub.label) ? '▾' : '▸' }} {{ sub.id }}</strong></span>
                 <span>{{ sub.label }}</span>
                 <span>{{ formatNum(sub.avgHayResponsibility) }}</span>
                 <span>{{ formatNum(sub.avgHayProblemSolving) }}</span>
@@ -1144,6 +1202,22 @@ function exportJobGradingPdf() {
                 <span>{{ formatNum(sub.avgSalaryMen) }} <small class="muted">(n={{ sub.nMen }})</small></span>
                 <span>{{ formatNum(sub.avgSalaryWomen) }} <small class="muted">(n={{ sub.nWomen }})</small></span>
                 <span :class="{ 'gap-alert': isGapAlert(sub.genderPayGapPct) }">{{ formatPct(sub.genderPayGapPct) }}</span>
+              </div>
+              <div
+                v-for="sub in band.hayBands"
+                v-if="isHayBandExpanded(band.level, sub.label)"
+                :key="`${band.level}-${sub.label}-roles`"
+                class="people-detail"
+              >
+                <div class="people-header"><span>Ruolo</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span></div>
+                <div v-for="rb in roleBreakdown(sub.people)" :key="`${band.level}-${sub.label}-${rb.role}`" class="people-row">
+                  <span>{{ rb.role }}</span>
+                  <span>{{ rb.n }}</span>
+                  <span>{{ formatNum(rb.avgSalary) }}</span>
+                  <span>{{ formatNum(rb.avgMen) }} <small class="muted">(n={{ rb.nMen }})</small></span>
+                  <span>{{ formatNum(rb.avgWomen) }} <small class="muted">(n={{ rb.nWomen }})</small></span>
+                  <span :class="{ 'gap-alert': isGapAlert(rb.gapPct) }">{{ formatPct(rb.gapPct) }}</span>
+                </div>
               </div>
             </div>
           </div>
