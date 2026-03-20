@@ -240,8 +240,42 @@ async function confirmMapping() {
         try {
           const aiIndicators = await computeIndicatorsWithGemini(normalizedGender)
           indicatorsResult.value = {
+            ...localIndicators,
             ...aiIndicators,
-            h_divarioRetribuzioneBase: aiIndicators?.h_divarioRetribuzioneBase ?? localIndicators.h_divarioRetribuzioneBase,
+            a_divarioRetributivoGenere: {
+              ...localIndicators.a_divarioRetributivoGenere,
+              ...(aiIndicators?.a_divarioRetributivoGenere || {}),
+            },
+            b_divarioComponentiVariabili: {
+              ...localIndicators.b_divarioComponentiVariabili,
+              ...(aiIndicators?.b_divarioComponentiVariabili || {}),
+            },
+            c_divarioMedianoGenere: {
+              ...localIndicators.c_divarioMedianoGenere,
+              ...(aiIndicators?.c_divarioMedianoGenere || {}),
+            },
+            d_divarioMedianoComponentiVariabili: {
+              ...localIndicators.d_divarioMedianoComponentiVariabili,
+              ...(aiIndicators?.d_divarioMedianoComponentiVariabili || {}),
+            },
+            e_percentualeConComponentiVariabili: {
+              ...localIndicators.e_percentualeConComponentiVariabili,
+              ...(aiIndicators?.e_percentualeConComponentiVariabili || {}),
+            },
+            f_percentualePerQuartile: {
+              ...localIndicators.f_percentualePerQuartile,
+              ...(aiIndicators?.f_percentualePerQuartile || {}),
+              quartili: aiIndicators?.f_percentualePerQuartile?.quartili || localIndicators.f_percentualePerQuartile.quartili,
+            },
+            g_divarioPerCategoria: {
+              ...localIndicators.g_divarioPerCategoria,
+              ...(aiIndicators?.g_divarioPerCategoria || {}),
+              perCategoria: aiIndicators?.g_divarioPerCategoria?.perCategoria || localIndicators.g_divarioPerCategoria.perCategoria,
+            },
+            h_divarioRetribuzioneBase: {
+              ...localIndicators.h_divarioRetribuzioneBase,
+              ...(aiIndicators?.h_divarioRetribuzioneBase || {}),
+            },
           }
           indicatorsSource.value = 'ai'
         } catch (aiErr) {
