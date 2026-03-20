@@ -1,14 +1,44 @@
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 function extractJson(text) {
-  const cleaned = text.replace(/```json\s*/g, '').replace(/```/g, '').trim()
-  try { return JSON.parse(cleaned) } catch {}
-  const start = cleaned.search(/[\[{]/)
-  const end = Math.max(cleaned.lastIndexOf(']'), cleaned.lastIndexOf('}'))
-  if (start !== -1 && end > start) {
-    try { return JSON.parse(cleaned.slice(start, end + 1)) } catch {}
+  const cleaned = String(text || '').replace(/```json\s*/gi, '').replace(/```/g, '').replace(/^\uFEFF/, '').trim()
+  try {
+    return JSON.parse(cleaned)
+  } catch {}
+
+  const starts = []
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === '{' || cleaned[i] === '[') starts.push(i)
   }
-  throw new Error('Could not parse JSON from Gemini response')
+
+  for (const start of starts) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') {
+        inString = true
+        continue
+      }
+      if (ch === '{' || ch === '[') depth++
+      if (ch === '}' || ch === ']') depth--
+      if (depth === 0) {
+        const candidate = cleaned.slice(start, i + 1)
+        try {
+          return JSON.parse(candidate)
+        } catch {}
+      }
+    }
+  }
+
+  throw new Error(`Could not parse JSON from Gemini response: ${cleaned.slice(0, 220)}`)
 }
 
 export default async function handler(req, res) {
@@ -111,7 +141,8 @@ JSON:`
     }
 
     const data = await geminiRes.json()
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    const parts = data.candidates?.[0]?.content?.parts || []
+    const text = parts.map((p) => p?.text || '').join('\n').trim()
     const indicators = extractJson(text)
 
     return res.status(200).json(indicators)
