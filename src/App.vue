@@ -20,7 +20,7 @@ import {
 } from './lib/jobGrading.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
-import 'jspdf-autotable'
+import autoTable from 'jspdf-autotable'
 
 const activeSection = ref('salaryReview')
 
@@ -862,78 +862,69 @@ onMounted(async () => {
 
 // PDF export job grading
 function exportJobGradingPdf() {
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
-  const pageWidth = doc.internal.pageSize.getWidth()
-  let y = 18
+  try {
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+    const pageWidth = doc.internal.pageSize.getWidth()
+    let y = 18
 
-  doc.setFontSize(16)
-  doc.setFont('helvetica', 'bold')
-  doc.text('Valutazione dei Lavori di Pari Valore – Job Grading', pageWidth / 2, y, { align: 'center' })
-  y += 8
-  doc.setFontSize(9)
-  doc.setFont('helvetica', 'normal')
-  doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}`, pageWidth / 2, y, { align: 'center' })
-  y += 10
+    doc.setFontSize(16)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Valutazione dei Lavori di Pari Valore - Job Grading', pageWidth / 2, y, { align: 'center' })
+    y += 8
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}`, pageWidth / 2, y, { align: 'center' })
+    y += 10
 
-  doc.setFontSize(11)
-  doc.setFont('helvetica', 'bold')
-  doc.text('Metodologia di Valutazione', 14, y)
-  y += 6
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Riepilogo fasce', 14, y)
+    y += 6
 
-  doc.setFontSize(9)
-  doc.setFont('helvetica', 'normal')
-  const regText = [
-    'I dipendenti sono raggruppati per livello di inquadramento CCNL.',
-    'All interno di ogni livello vengono create sotto-fasce Hay con ampiezza 20 punti.',
-    'I punteggi Hay sono basati su: responsabilita, problem solving, competenze richieste e condizioni di lavoro.',
-    'La deviazione e calcolata sulla media salariale complessiva per livello.',
-    'Scostamenti superiori al +/-5% richiedono un giustificativo documentato.',
-  ]
-  regText.forEach((line) => {
-    doc.text(line, 14, y)
-    y += 4.2
-  })
-  y += 4
+    const head = [['Livello', 'CCNL', 'Fascia', 'N U', 'N D', 'N Ruoli', 'Gap', 'Media Retrib.']]
+    const body = jobResults.value.flatMap((b) =>
+      (b.hayBands || []).map((sub) => {
+        const gap = hayBandAdjustedGapPct(sub)
+        const gapLabel = gap == null
+          ? 'n/d'
+          : `${hayBandHasJustifications(sub) ? 'rett. ' : ''}${formatPct(gap)}`
+        return [
+          b.band,
+          b.level || '-',
+          sub.label,
+          sub.nMen ?? 0,
+          sub.nWomen ?? 0,
+          sub.nRoles ?? 0,
+          gapLabel,
+          formatNum(sub.avgTotalSalary),
+        ]
+      }),
+    )
 
-  const head = [['Livello', 'CCNL', 'Fascia Hay', 'Resp.', 'Prob.', 'Comp.', 'Cond.', 'Totale', 'N', 'Media Retrib.']]
-  const body = jobResults.value.flatMap((b) =>
-    (b.hayBands || []).map((sub) => [
-      b.band,
-      b.level || '–',
-      sub.label,
-      formatNum(sub.avgHayResponsibility),
-      formatNum(sub.avgHayProblemSolving),
-      formatNum(sub.avgHayRequiredSkills),
-      formatNum(sub.avgHayWorkingConditions),
-      formatNum(sub.avgHayTotalScore),
-      sub.n,
-      formatNum(sub.avgTotalSalary),
-    ]),
-  )
+    autoTable(doc, {
+      startY: y,
+      head,
+      body,
+      theme: 'grid',
+      headStyles: { fillColor: [10, 108, 210], fontSize: 7.5, halign: 'center' },
+      bodyStyles: { fontSize: 7.5 },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 14 },
+        1: { halign: 'center', cellWidth: 20 },
+        2: { halign: 'center', cellWidth: 22 },
+        3: { halign: 'center', cellWidth: 14 },
+        4: { halign: 'center', cellWidth: 14 },
+        5: { halign: 'center', cellWidth: 16 },
+        6: { halign: 'center', cellWidth: 20 },
+        7: { halign: 'right' },
+      },
+      margin: { left: 14, right: 14 },
+    })
 
-  doc.autoTable({
-    startY: y,
-    head,
-    body,
-    theme: 'grid',
-    headStyles: { fillColor: [10, 108, 210], fontSize: 7.5, halign: 'center' },
-    bodyStyles: { fontSize: 7.5 },
-    columnStyles: {
-      0: { halign: 'center', cellWidth: 14 },
-      1: { halign: 'center', cellWidth: 18 },
-      2: { halign: 'center', cellWidth: 18 },
-      3: { halign: 'center' },
-      4: { halign: 'center' },
-      5: { halign: 'center' },
-      6: { halign: 'center' },
-      7: { halign: 'center' },
-      8: { halign: 'center' },
-      9: { halign: 'right' },
-    },
-    margin: { left: 14, right: 14 },
-  })
-
-  doc.save('job-grading-report.pdf')
+    doc.save('job-grading-report.pdf')
+  } catch (err) {
+    uploadError.value = 'Esportazione PDF non riuscita: ' + (err?.message || String(err))
+  }
 }
 </script>
 
