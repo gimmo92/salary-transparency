@@ -168,6 +168,10 @@ function hayBandAdjustedGapPct(hayBand) {
   return ((menAvg - womenAvg) / menAvg) * 100
 }
 
+function hayBandHasJustifications(hayBand) {
+  return (hayBand?.people || []).some((p) => isPersonJustified(p))
+}
+
 function hasHayBandDisparity(hayBand) {
   return isGapAlert(hayBandAdjustedGapPct(hayBand))
 }
@@ -1062,7 +1066,7 @@ function exportJobGradingPdf() {
                   <span>
                     {{ sub.label }}
                     <span v-if="hayBandAdjustedGapPct(sub) != null" class="hay-band-gap-pill" :class="{ 'gap-alert': hasHayBandDisparity(sub) }">
-                      Gap rett.: {{ formatPct(hayBandAdjustedGapPct(sub)) }}
+                      {{ hayBandHasJustifications(sub) ? 'Gap rett.' : 'Gap M/F' }}: {{ formatPct(hayBandAdjustedGapPct(sub)) }}
                     </span>
                   </span>
                   <span>{{ sub.nMen ?? 0 }}</span>
