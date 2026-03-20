@@ -153,6 +153,7 @@ function isGapAlert(pct) {
 }
 
 const expandedHayBands = ref(new Set())
+const expandedRoleDetails = ref(new Set())
 
 function hayBandKey(level, label) {
   return `${level}::${label}`
@@ -167,6 +168,21 @@ function toggleHayBand(level, label) {
 
 function isHayBandExpanded(level, label) {
   return expandedHayBands.value.has(hayBandKey(level, label))
+}
+
+function roleDetailKey(level, subLabel, role) {
+  return `${level}::${subLabel}::${role}`
+}
+
+function toggleRoleDetail(level, subLabel, role) {
+  const key = roleDetailKey(level, subLabel, role)
+  if (expandedRoleDetails.value.has(key)) expandedRoleDetails.value.delete(key)
+  else expandedRoleDetails.value.add(key)
+  expandedRoleDetails.value = new Set(expandedRoleDetails.value)
+}
+
+function isRoleDetailExpanded(level, subLabel, role) {
+  return expandedRoleDetails.value.has(roleDetailKey(level, subLabel, role))
 }
 
 function runJobGrading() {
@@ -1175,16 +1191,50 @@ function exportJobGradingPdf() {
                   :key="`${band.level}-${sub.label}-roles`"
                   class="people-detail"
                 >
-                  <div class="people-header"><span>Ruolo</span><span>Hay totale</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span></div>
-                  <div v-for="rb in sub.roles" :key="`${band.level}-${sub.label}-${rb.role}`" class="people-row">
-                    <span>{{ rb.role }}</span>
-                    <span>{{ formatNum(rb.avgHayTotalScore) }}</span>
-                    <span>{{ rb.n }}</span>
-                    <span>{{ formatNum(rb.avgTotalSalary) }}</span>
-                    <span>{{ formatNum(rb.avgSalaryMen) }} <small class="muted">(n={{ rb.nMen }})</small></span>
-                    <span>{{ formatNum(rb.avgSalaryWomen) }} <small class="muted">(n={{ rb.nWomen }})</small></span>
-                    <span :class="{ 'gap-alert': isGapAlert(rb.genderPayGapPct) }">{{ formatPct(rb.genderPayGapPct) }}</span>
+                  <div class="people-header">
+                    <span>Ruolo</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Hay totale</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span>
                   </div>
+                  <template v-for="rb in sub.roles" :key="`${band.level}-${sub.label}-${rb.role}`">
+                    <div
+                      class="people-row clickable"
+                      @click="toggleRoleDetail(band.level, sub.label, rb.role)"
+                    >
+                      <span>{{ isRoleDetailExpanded(band.level, sub.label, rb.role) ? '▾' : '▸' }} {{ rb.role }}</span>
+                      <span>{{ formatNum(rb.avgHayResponsibility) }}</span>
+                      <span>{{ formatNum(rb.avgHayProblemSolving) }}</span>
+                      <span>{{ formatNum(rb.avgHayRequiredSkills) }}</span>
+                      <span>{{ formatNum(rb.avgHayWorkingConditions) }}</span>
+                      <span>{{ formatNum(rb.avgHayTotalScore) }}</span>
+                      <span>{{ rb.n }}</span>
+                      <span>{{ formatNum(rb.avgTotalSalary) }}</span>
+                      <span>{{ formatNum(rb.avgSalaryMen) }} <small class="muted">(n={{ rb.nMen }})</small></span>
+                      <span>{{ formatNum(rb.avgSalaryWomen) }} <small class="muted">(n={{ rb.nWomen }})</small></span>
+                      <span :class="{ 'gap-alert': isGapAlert(rb.genderPayGapPct) }">{{ formatPct(rb.genderPayGapPct) }}</span>
+                    </div>
+                    <div
+                      v-if="isRoleDetailExpanded(band.level, sub.label, rb.role)"
+                      class="people-detail"
+                    >
+                      <div class="people-header">
+                        <span>#</span><span>Persona</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Hay totale</span><span>Retrib. totale</span><span>Dev. da media sotto-fascia</span>
+                      </div>
+                      <div
+                        v-for="p in rb.people"
+                        :key="`${band.level}-${sub.label}-${rb.role}-${p.index}`"
+                        class="people-row"
+                      >
+                        <span>{{ p.index }}</span>
+                        <span>{{ p.name || '–' }}</span>
+                        <span>{{ formatNum(p.hayResponsibility) }}</span>
+                        <span>{{ formatNum(p.hayProblemSolving) }}</span>
+                        <span>{{ formatNum(p.hayRequiredSkills) }}</span>
+                        <span>{{ formatNum(p.hayWorkingConditions) }}</span>
+                        <span>{{ formatNum(p.hayTotalScore) }}</span>
+                        <span>{{ formatNum(p.totalSalary) }}</span>
+                        <span :class="{ 'gap-alert': isGapAlert(p.deviationFromHayBandMeanPct) }">{{ formatPct(p.deviationFromHayBandMeanPct) }}</span>
+                      </div>
+                    </div>
+                  </template>
                 </div>
               </template>
             </div>
