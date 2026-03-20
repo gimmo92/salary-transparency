@@ -1016,7 +1016,7 @@ function exportJobGradingPdf() {
             </div>
             <div class="job-table" v-if="band.hayBands && band.hayBands.length">
               <div class="job-row header hay-row">
-                <span>Fascia</span><span>Range score</span><span>Resp.</span><span>Problem solving</span><span>Competenze</span><span>Condizioni</span><span>Totale Hay</span><span>N ruoli</span><span>Media retrib.</span>
+                <span>Fascia</span><span>Range score</span><span>N uomini</span><span>N donne</span><span>N ruoli</span><span>Media retrib.</span>
               </div>
               <template v-for="sub in band.hayBands" :key="`${band.level}-${sub.label}`">
                 <div
@@ -1047,11 +1047,8 @@ function exportJobGradingPdf() {
                       Gap M/F: {{ formatPct(sub.genderPayGapPct) }}
                     </span>
                   </span>
-                  <span>{{ formatNum(sub.avgHayResponsibility) }}</span>
-                  <span>{{ formatNum(sub.avgHayProblemSolving) }}</span>
-                  <span>{{ formatNum(sub.avgHayRequiredSkills) }}</span>
-                  <span>{{ formatNum(sub.avgHayWorkingConditions) }}</span>
-                  <span><strong>{{ formatNum(sub.avgHayTotalScore) }}</strong></span>
+                  <span>{{ sub.nMen ?? 0 }}</span>
+                  <span>{{ sub.nWomen ?? 0 }}</span>
                   <span>{{ sub.nRoles }}</span>
                   <span>{{ formatNum(sub.avgTotalSalary) }}</span>
                 </div>
@@ -2727,7 +2724,7 @@ function exportJobGradingPdf() {
 }
 
 .job-row.hay-row {
-  grid-template-columns: 0.9fr 1fr repeat(4, 0.9fr) 1fr 0.8fr 1.2fr;
+  grid-template-columns: 1fr 1.4fr 0.8fr 0.8fr 0.8fr 1.2fr;
 }
 
 .job-row.clickable {
