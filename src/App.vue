@@ -111,7 +111,6 @@ async function viewAnalysis(id) {
 
     const jg = results.jobGrading || []
     jobResults.value = jg
-    expandedLevels.value = new Set()
     justifications.value = {}
 
     excelUrl.value = record.source_url || ''
@@ -151,15 +150,6 @@ function analysisTypeLabel(t) {
 
 function isGapAlert(pct) {
   return pct != null && Math.abs(pct) > 5
-}
-
-// Job grading helpers
-const expandedLevels = ref(new Set())
-
-function toggleLevelExpand(level) {
-  if (expandedLevels.value.has(level)) expandedLevels.value.delete(level)
-  else expandedLevels.value.add(level)
-  expandedLevels.value = new Set(expandedLevels.value)
 }
 
 function runJobGrading() {
@@ -736,7 +726,8 @@ function exportJobGradingPdf() {
   doc.setFont('helvetica', 'normal')
   const regText = [
     'I dipendenti sono raggruppati per livello di inquadramento CCNL.',
-    'Ogni livello costituisce una fascia retributiva omogenea.',
+    'All interno di ogni livello vengono create sotto-fasce Hay con ampiezza 20 punti.',
+    'I punteggi Hay sono basati su: responsabilita, problem solving, competenze richieste e condizioni di lavoro.',
     'La deviazione e calcolata sulla media salariale complessiva per livello.',
     'Scostamenti superiori al +/-5% richiedono un giustificativo documentato.',
   ]
@@ -746,18 +737,24 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Livello CCNL', 'N Dipendenti', 'N Validi', 'Media RAL', 'Media Retrib.', 'Dev. da media globale', 'Ruoli', 'Giustificativo']]
-  const body = jobResults.value.map((b) => [
-    b.band,
-    b.level || '–',
-    b.n,
-    b.nValid,
-    formatNum(b.avgBaseSalary),
-    formatNum(b.avgTotalSalary),
-    formatPct(b.deviationFromOverallMeanPct),
-    b.roles.join(', ') || '–',
-    justifications.value[b.level] || '',
-  ])
+  const head = [['Fascia', 'Livello', 'Sotto-fascia Hay', 'Resp.', 'Prob.', 'Comp.', 'Cond.', 'Totale', 'N', 'Media Retrib.', 'Media U', 'Media D', 'Gap U-D']]
+  const body = jobResults.value.flatMap((b) =>
+    (b.hayBands || []).map((sub) => [
+      b.band,
+      b.level || '–',
+      sub.label,
+      formatNum(sub.avgHayResponsibility),
+      formatNum(sub.avgHayProblemSolving),
+      formatNum(sub.avgHayRequiredSkills),
+      formatNum(sub.avgHayWorkingConditions),
+      formatNum(sub.avgHayTotalScore),
+      sub.n,
+      formatNum(sub.avgTotalSalary),
+      formatNum(sub.avgSalaryMen),
+      formatNum(sub.avgSalaryWomen),
+      formatPct(sub.genderPayGapPct),
+    ]),
+  )
 
   doc.autoTable({
     startY: y,
@@ -768,15 +765,21 @@ function exportJobGradingPdf() {
     bodyStyles: { fontSize: 7.5 },
     columnStyles: {
       0: { halign: 'center', cellWidth: 14 },
-      2: { halign: 'center' },
+      1: { halign: 'center', cellWidth: 18 },
+      2: { halign: 'center', cellWidth: 18 },
       3: { halign: 'center' },
-      4: { halign: 'right' },
-      5: { halign: 'right' },
+      4: { halign: 'center' },
+      5: { halign: 'center' },
       6: { halign: 'center' },
-      8: { cellWidth: 45 },
+      7: { halign: 'center' },
+      8: { halign: 'center' },
+      9: { halign: 'right' },
+      10: { halign: 'right' },
+      11: { halign: 'right' },
+      12: { halign: 'center' },
     },
     didParseCell(data) {
-      if (data.section === 'body' && data.column.index === 6) {
+      if (data.section === 'body' && data.column.index === 12) {
         const raw = data.cell.raw
         const num = typeof raw === 'string' ? parseFloat(raw) : raw
         if (Number.isFinite(num) && Math.abs(num) > 5) {
@@ -1120,23 +1123,28 @@ function exportJobGradingPdf() {
               </span>
               <span v-if="band.roles.length">Ruoli: {{ band.roles.join(', ') }}</span>
             </div>
-            <div class="people-detail" v-if="band.people.length > 0">
-              <div class="people-header clickable" @click="toggleLevelExpand(band.level)">
-                <span class="expand-icon">{{ expandedLevels.has(band.level) ? '▾' : '▸' }}</span>
-                <span>Mostra {{ band.people.length }} dipendenti</span>
+            <div class="job-table" v-if="band.hayBands && band.hayBands.length">
+              <div class="job-row header hay-row">
+                <span>Sotto-fascia</span><span>Range score</span><span>Resp.</span><span>Problem solving</span><span>Competenze</span><span>Condizioni</span><span>Totale Hay</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span>
               </div>
-              <template v-if="expandedLevels.has(band.level)">
-                <div class="people-header"><span>#</span><span>Dipendente</span><span>Ruolo</span><span>Retrib. Base</span><span>Comp. Variabile</span><span>Retrib. Totale</span><span>Dev. da media livello</span></div>
-                <div v-for="p in band.people" :key="p.index" class="people-row">
-                  <span>{{ p.index }}</span>
-                  <span>{{ p.name || '–' }}</span>
-                  <span>{{ p.role || '–' }}</span>
-                  <span>{{ formatNum(p.baseSalary) }}</span>
-                  <span>{{ formatNum(p.variableComponents) }}</span>
-                  <span>{{ formatNum(p.totalSalary) }}</span>
-                    <span :class="{ 'gap-alert': isGapAlert(p.deviationFromLevelMeanPct) }">{{ formatPct(p.deviationFromLevelMeanPct) }}</span>
-                </div>
-              </template>
+              <div
+                v-for="sub in band.hayBands"
+                :key="`${band.level}-${sub.label}`"
+                class="job-row hay-row"
+              >
+                <span><strong>{{ sub.id }}</strong></span>
+                <span>{{ sub.label }}</span>
+                <span>{{ formatNum(sub.avgHayResponsibility) }}</span>
+                <span>{{ formatNum(sub.avgHayProblemSolving) }}</span>
+                <span>{{ formatNum(sub.avgHayRequiredSkills) }}</span>
+                <span>{{ formatNum(sub.avgHayWorkingConditions) }}</span>
+                <span><strong>{{ formatNum(sub.avgHayTotalScore) }}</strong></span>
+                <span>{{ sub.n }}</span>
+                <span>{{ formatNum(sub.avgTotalSalary) }}</span>
+                <span>{{ formatNum(sub.avgSalaryMen) }} <small class="muted">(n={{ sub.nMen }})</small></span>
+                <span>{{ formatNum(sub.avgSalaryWomen) }} <small class="muted">(n={{ sub.nWomen }})</small></span>
+                <span :class="{ 'gap-alert': isGapAlert(sub.genderPayGapPct) }">{{ formatPct(sub.genderPayGapPct) }}</span>
+              </div>
             </div>
           </div>
           <div class="mapping-actions" style="margin-top: 1.5rem;">
@@ -2664,6 +2672,10 @@ function exportJobGradingPdf() {
   border-bottom: 1px solid var(--border-light);
   align-items: center;
   font-size: 0.82rem;
+}
+
+.job-row.hay-row {
+  grid-template-columns: 0.8fr 0.9fr repeat(4, 0.8fr) 0.9fr 0.6fr 1fr 1fr 1fr 0.8fr;
 }
 
 .job-row.clickable {
