@@ -47,7 +47,6 @@ const indicatorsSource = ref('locale')
 
 const jobResults = ref([])
 
-const resultsTab = ref('genere') // 'genere' | 'pari_valore'
 
 const geminiEnabled = ref(false)
 
@@ -125,7 +124,6 @@ async function viewAnalysis(id) {
     recomputeBandGenderGaps()
     recomputeAdjustedGap()
 
-    resultsTab.value = indicatorsResult.value ? 'genere' : 'pari_valore'
     analisiStep.value = 'results'
     activeSection.value = 'analisi'
   } catch (err) {
@@ -220,7 +218,6 @@ function startNuovaAnalisi() {
   indicatorsResult.value = null
   jobResults.value = []
   saveStatus.value = ''
-  resultsTab.value = 'genere'
   justifications.value = {}
   justifyingLevel.value = null
   genderViewMode.value = 'media'
@@ -335,7 +332,7 @@ async function confirmMapping() {
     runJobGrading()
 
     if (!indicatorsResult.value && jobResults.value.length === 0) {
-      uploadError.value = 'Nessun dato valido. Verifica il mapping delle colonne (Genere per analisi di genere, Ruolo per job grading).'
+      uploadError.value = 'Nessun dato valido. Verifica il mapping delle colonne per il job grading.'
       return
     }
 
@@ -361,19 +358,87 @@ async function confirmMapping() {
       saveStatus.value = `Analisi non salvata: ${saveErr.message || String(saveErr)}`
     }
 
-    resultsTab.value = indicatorsResult.value ? 'genere' : 'pari_valore'
     analisiStep.value = 'results'
   } finally { analysisLoading.value = false }
 }
 
 function formatPct(n) { return n == null ? '–' : n.toFixed(2) + '%' }
 function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 }) }
+function clampScoreInput(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 1
+  return Math.max(1, Math.min(100, Math.round(n)))
+}
+function meanLocal(values) {
+  if (!values?.length) return 0
+  return values.reduce((sum, v) => sum + Number(v || 0), 0) / values.length
+}
 // Giustificativi per livelli fuori soglia
 const justifications = ref({})
 const justifyingLevel = ref(null)
 const justifyText = ref('')
 const personJustifications = ref({})
 const justifyingPerson = ref(null)
+const editingRoleParams = ref(null)
+const roleParamsForm = ref({
+  responsibility: 50,
+  problemSolving: 50,
+  requiredSkills: 50,
+  workingConditions: 50,
+})
+
+function openRoleParamsModal(level, subLabel, roleName) {
+  const band = jobResults.value.find((b) => b.level === level)
+  const sub = band?.hayBands?.find((h) => h.label === subLabel)
+  const role = sub?.roles?.find((r) => r.role === roleName)
+  if (!role) return
+
+  editingRoleParams.value = { level, subLabel, roleName }
+  roleParamsForm.value = {
+    responsibility: clampScoreInput(role.avgHayResponsibility),
+    problemSolving: clampScoreInput(role.avgHayProblemSolving),
+    requiredSkills: clampScoreInput(role.avgHayRequiredSkills),
+    workingConditions: clampScoreInput(role.avgHayWorkingConditions),
+  }
+}
+
+function cancelRoleParamsModal() {
+  editingRoleParams.value = null
+}
+
+function saveRoleParams() {
+  const ctx = editingRoleParams.value
+  if (!ctx) return
+
+  const band = jobResults.value.find((b) => b.level === ctx.level)
+  const sub = band?.hayBands?.find((h) => h.label === ctx.subLabel)
+  const role = sub?.roles?.find((r) => r.role === ctx.roleName)
+  if (!role || !sub) {
+    editingRoleParams.value = null
+    return
+  }
+
+  const responsibility = clampScoreInput(roleParamsForm.value.responsibility)
+  const problemSolving = clampScoreInput(roleParamsForm.value.problemSolving)
+  const requiredSkills = clampScoreInput(roleParamsForm.value.requiredSkills)
+  const workingConditions = clampScoreInput(roleParamsForm.value.workingConditions)
+  const total = responsibility + problemSolving + requiredSkills + workingConditions
+
+  role.avgHayResponsibility = responsibility
+  role.avgHayProblemSolving = problemSolving
+  role.avgHayRequiredSkills = requiredSkills
+  role.avgHayWorkingConditions = workingConditions
+  role.avgHayTotalScore = total
+
+  sub.avgHayResponsibility = meanLocal(sub.roles.map((r) => r.avgHayResponsibility))
+  sub.avgHayProblemSolving = meanLocal(sub.roles.map((r) => r.avgHayProblemSolving))
+  sub.avgHayRequiredSkills = meanLocal(sub.roles.map((r) => r.avgHayRequiredSkills))
+  sub.avgHayWorkingConditions = meanLocal(sub.roles.map((r) => r.avgHayWorkingConditions))
+  sub.avgHayTotalScore = meanLocal(sub.roles.map((r) => r.avgHayTotalScore))
+
+  jobResults.value = [...jobResults.value]
+  editingRoleParams.value = null
+}
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -879,12 +944,12 @@ function exportJobGradingPdf() {
       </button>
     </header>
 
-    <!-- Flusso unificato: Upload → Mapping → Risultati (2 sub-tab) -->
+    <!-- Flusso unificato: Upload → Mapping → Risultati -->
     <template v-if="showAnalisiFlow">
       <!-- Step 1: Link Excel -->
       <div v-if="analisiStep === 'upload'" class="analisi-content">
         <h2 class="analisi-title">Collegamento al file Excel</h2>
-        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud. L'app mapperà automaticamente le colonne per l'analisi di genere e la valutazione dei lavori di pari valore (job grading).</p>
+        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud. L'app mapperà automaticamente le colonne per la valutazione dei lavori di pari valore (job grading).</p>
         <div class="url-input-wrap">
           <input v-model="excelUrl" type="url" class="url-input" placeholder="https://... file.xlsx" :disabled="uploadLoading || geminiLoading" @keydown.enter="onLoadFromUrl" />
           <button type="button" class="btn-primary" :disabled="uploadLoading || geminiLoading || !excelUrl.trim()" @click="onLoadFromUrl">
@@ -925,7 +990,7 @@ function exportJobGradingPdf() {
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
           <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
             <span v-if="analysisLoading">Generazione analisi...</span>
-            <span v-else>Esegui analisi completa</span>
+            <span v-else>Esegui analisi</span>
           </button>
         </div>
         <div v-if="analysisLoading" class="analysis-loader">
@@ -940,223 +1005,7 @@ function exportJobGradingPdf() {
         <p v-if="saveStatus" class="save-status">{{ saveStatus }}</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
 
-        <div class="results-subtabs">
-          <button class="subtab" :class="{ active: resultsTab === 'genere' }" @click="resultsTab = 'genere'">Analisi di genere</button>
-          <button class="subtab" :class="{ active: resultsTab === 'pari_valore' }" :disabled="jobResults.length === 0" @click="resultsTab = 'pari_valore'">Lavori di pari valore</button>
-        </div>
-
-        <!-- Sub-tab: Analisi di genere -->
-        <div v-if="resultsTab === 'genere' && indicatorsResult">
-          <p class="result-source">Calcolo: <strong>{{ indicatorsSource === 'ai' ? 'Gemini (AI)' : 'Motore locale' }}</strong></p>
-          <div class="indicator-cards">
-            <section class="indicator-card">
-              <h3>(a) Divario retributivo di genere</h3>
-              <p class="indicator-desc">{{ indicatorsResult.a_divarioRetributivoGenere.descrizione }}</p>
-              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.a_divarioRetributivoGenere.percentuale) }">{{ formatPct(indicatorsResult.a_divarioRetributivoGenere.percentuale) }}</div>
-              <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.a_divarioRetributivoGenere.mediaFemminile) }}</p>
-              <p class="indicator-detail">N maschi: {{ indicatorsResult.a_divarioRetributivoGenere.nMaschi }} · N femmine: {{ indicatorsResult.a_divarioRetributivoGenere.nFemmine }}</p>
-            </section>
-            <section class="indicator-card">
-              <h3>(b) Divario nelle componenti variabili</h3>
-              <p class="indicator-desc">{{ indicatorsResult.b_divarioComponentiVariabili.descrizione }}</p>
-              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.b_divarioComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.b_divarioComponentiVariabili.percentuale) }}</div>
-              <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.b_divarioComponentiVariabili.mediaFemminile) }}</p>
-            </section>
-            <section class="indicator-card">
-              <h3>Divario retribuzione base</h3>
-              <p class="indicator-desc">{{ indicatorsResult.h_divarioRetribuzioneBase?.descrizione || 'Divario retributivo di genere sulla retribuzione base' }}</p>
-              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }">{{ formatPct(indicatorsResult.h_divarioRetribuzioneBase?.percentuale) }}</div>
-              <p class="indicator-detail">Media M: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaMaschile) }} · Media F: {{ formatNum(indicatorsResult.h_divarioRetribuzioneBase?.mediaFemminile) }}</p>
-            </section>
-            <section class="indicator-card">
-              <h3>(c) Divario mediano di genere</h3>
-              <p class="indicator-desc">{{ indicatorsResult.c_divarioMedianoGenere.descrizione }}</p>
-              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.c_divarioMedianoGenere.percentuale) }">{{ formatPct(indicatorsResult.c_divarioMedianoGenere.percentuale) }}</div>
-              <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.c_divarioMedianoGenere.medianaFemminile) }}</p>
-            </section>
-            <section class="indicator-card">
-              <h3>(d) Divario mediano nelle componenti variabili</h3>
-              <p class="indicator-desc">{{ indicatorsResult.d_divarioMedianoComponentiVariabili.descrizione }}</p>
-              <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }">{{ formatPct(indicatorsResult.d_divarioMedianoComponentiVariabili.percentuale) }}</div>
-              <p class="indicator-detail">Mediana M: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaMaschile) }} · Mediana F: {{ formatNum(indicatorsResult.d_divarioMedianoComponentiVariabili.medianaFemminile) }}</p>
-            </section>
-            <section class="indicator-card wide">
-              <h3>(e) Percentuale lavoratori con componenti variabili</h3>
-              <p class="indicator-desc">{{ indicatorsResult.e_percentualeConComponentiVariabili.descrizione }}</p>
-              <div class="indicator-row">
-                <div><strong>Femminile:</strong> {{ formatPct(indicatorsResult.e_percentualeConComponentiVariabili.femminile) }} <span class="muted">(n={{ indicatorsResult.e_percentualeConComponentiVariabili.nFemmine }})</span></div>
-                <div><strong>Maschile:</strong> {{ formatPct(indicatorsResult.e_percentualeConComponentiVariabili.maschile) }} <span class="muted">(n={{ indicatorsResult.e_percentualeConComponentiVariabili.nMaschi }})</span></div>
-              </div>
-            </section>
-            <section class="indicator-card wide">
-              <h3>(f) Percentuale per quartile retributivo</h3>
-              <p class="indicator-desc">{{ indicatorsResult.f_percentualePerQuartile.descrizione }}</p>
-              <div class="quartile-table">
-                <div class="quartile-row header"><span>Quartile</span><span>% Femminile</span><span>% Maschile</span><span>Totale</span></div>
-                <div v-for="q in indicatorsResult.f_percentualePerQuartile.quartili" :key="q.quartile" class="quartile-row">
-                  <span>Q{{ q.quartile }}</span><span>{{ formatPct(q.femminile) }}</span><span>{{ formatPct(q.maschile) }}</span><span>{{ q.totale }}</span>
-                </div>
-              </div>
-            </section>
-            <section class="indicator-card wide">
-              <h3>(g) Divario per categoria (base e variabile)</h3>
-              <p class="indicator-desc">{{ indicatorsResult.g_divarioPerCategoria.descrizione }}</p>
-              <div class="category-table">
-                <div class="category-row header"><span>Categoria</span><span>N</span><span>Divario base %</span><span>Divario variabile %</span></div>
-                <div v-for="cat in indicatorsResult.g_divarioPerCategoria.perCategoria" :key="cat.categoria" class="category-row">
-                  <span>{{ cat.categoria }}</span><span>{{ cat.n }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(cat.divarioBase) }">{{ formatPct(cat.divarioBase) }}</span>
-                  <span :class="{ 'gap-alert': isGapAlert(cat.divarioVariabile) }">{{ formatPct(cat.divarioVariabile) }}</span>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <!-- Toggle Media / Mediana -->
-          <div class="gender-dashboard-toggle">
-            <span class="toggle-label">Visualizzazione divario:</span>
-            <button :class="['toggle-btn', { active: genderViewMode === 'media' }]" @click="genderViewMode = 'media'">Media</button>
-            <button :class="['toggle-btn', { active: genderViewMode === 'mediana' }]" @click="genderViewMode = 'mediana'">Mediana</button>
-            <span v-if="genderViewMode === 'mediana' && indicatorsResult && Math.abs(indicatorsResult.c_divarioMedianoGenere.percentuale) < 5" class="eu-compliant-msg">
-              Il divario mediano è conforme ai limiti della Direttiva UE (&lt; 5%)
-            </span>
-          </div>
-
-          <!-- Divario di genere per Band (Equal Value Gap) -->
-          <section v-if="bandGenderGaps.length > 0" class="indicator-card wide band-gender-section">
-            <h3>Divario di genere per Band (Equal Value Gap)</h3>
-            <p class="indicator-desc">Gender Pay Gap calcolato per ogni Band di Job Grading.</p>
-            <div class="band-gender-table">
-              <div class="band-gender-row header">
-                <span>Band</span>
-                <span>N Uomini</span>
-                <span>N Donne</span>
-                <span>Gap {{ genderViewMode === 'media' ? 'Media' : 'Mediana' }}</span>
-                <span>Stato</span>
-                <span>Giustificazione</span>
-              </div>
-              <template v-for="bg in bandGenderGaps" :key="bg.band">
-                <div class="band-gender-row" :class="{ 'gap-over': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5, 'gap-ok': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5 }">
-                  <span>{{ bg.band }}</span>
-                  <span>{{ bg.nM }}</span>
-                  <span>{{ bg.nF }}</span>
-                  <span class="gap-value" :class="{ 'gap-alert': Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5 }">
-                    {{ formatPct(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) }}
-                  </span>
-                  <span>
-                    <span v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) <= 5" class="status-badge compliant">Conforme</span>
-                    <span v-else class="status-badge non-compliant">Gap &gt; 5%</span>
-                  </span>
-                  <span>
-                    <template v-if="Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5">
-                      <button v-if="!hasBandJustification(bg.band)" class="btn-justify-open" @click="toggleJustifyBand(bg.band)">
-                        {{ expandedJustifyBand === bg.band ? '▾ Chiudi' : '+ Inserisci Giustificazione' }}
-                      </button>
-                      <span v-else class="band-justify-summary" @click="toggleJustifyBand(bg.band)">
-                        {{ bandJustifySummary(bg.band) }}
-                        <button class="btn-link-sm" @click.stop="clearBandJustification(bg.band)">✕</button>
-                      </span>
-                    </template>
-                    <span v-else class="muted">—</span>
-                  </span>
-                </div>
-                <!-- Pannello giustificativi espanso -->
-                <div v-if="expandedJustifyBand === bg.band && Math.abs(genderViewMode === 'media' ? bg.gapMedia : bg.gapMediana) > 5" class="band-justify-panel">
-                  <div class="bjp-header">
-                    <strong>Giustificativi per Band {{ bg.band }}</strong>
-                    <span class="muted">Seleziona uno o più motivi oggettivi</span>
-                  </div>
-                  <div class="bjp-reasons">
-                    <button
-                      v-for="reason in BAND_JUSTIFY_REASONS"
-                      :key="reason.id"
-                      :class="['bjp-reason-btn', { active: bandGenderJustifications[bg.band]?.reasons?.includes(reason.id) }]"
-                      @click="toggleBandReason(bg.band, reason.id)"
-                    >
-                      <span class="bjp-reason-icon">{{ reason.icon }}</span>
-                      <span class="bjp-reason-label">{{ reason.label }}</span>
-                      <span class="bjp-reason-desc">{{ reason.desc }}</span>
-                      <span class="bjp-reason-check">{{ bandGenderJustifications[bg.band]?.reasons?.includes(reason.id) ? '✓' : '' }}</span>
-                    </button>
-                  </div>
-                  <div class="bjp-note">
-                    <label class="bjp-note-label">Note aggiuntive</label>
-                    <textarea
-                      class="bjp-note-input"
-                      rows="2"
-                      placeholder="Aggiungi dettagli a supporto della giustificazione..."
-                      :value="bandGenderJustifications[bg.band]?.note || ''"
-                      @input="updateBandNote(bg.band, $event.target.value)"
-                    ></textarea>
-                  </div>
-                  <div class="bjp-files">
-                    <label class="bjp-note-label">Documenti allegati</label>
-                    <div class="bjp-file-list" v-if="bandGenderJustifications[bg.band]?.files?.length">
-                      <div v-for="(f, fi) in bandGenderJustifications[bg.band].files" :key="fi" class="bjp-file-item">
-                        <span class="bjp-file-icon">📄</span>
-                        <span class="bjp-file-name">{{ f.name }}</span>
-                        <span class="bjp-file-size">{{ formatFileSize(f.size) }}</span>
-                        <button class="btn-link-sm" @click="removeBandFile(bg.band, fi)">✕</button>
-                      </div>
-                    </div>
-                    <label class="bjp-upload-btn">
-                      📎 Carica documento
-                      <input type="file" multiple hidden @change="onBandFileUpload(bg.band, $event)" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" />
-                    </label>
-                  </div>
-                  <div class="bjp-actions">
-                    <button class="btn-primary btn-sm" @click="expandedJustifyBand = null">Conferma</button>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </section>
-
-          <!-- Gap Rettificato (escludendo Top Earners) -->
-          <section v-if="adjustedGapResult" class="indicator-card wide adjusted-gap-section">
-            <h3>Divario Rettificato (escl. Top 5% stipendi)</h3>
-            <p class="indicator-desc">Ricalcolo del divario globale escludendo i "Top Earners" (top 5% degli stipendi) per mostrare quanto i ruoli apicali pesano sul risultato.</p>
-            <div class="adjusted-gap-grid">
-              <div class="adjusted-gap-box">
-                <div class="adjusted-gap-label">Gap Rettificato (Media)</div>
-                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(adjustedGapResult.gapMedia) }">{{ formatPct(adjustedGapResult.gapMedia) }}</div>
-              </div>
-              <div class="adjusted-gap-box">
-                <div class="adjusted-gap-label">Gap Rettificato (Mediana)</div>
-                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(adjustedGapResult.gapMediana) }">{{ formatPct(adjustedGapResult.gapMediana) }}</div>
-              </div>
-              <div class="adjusted-gap-box">
-                <div class="adjusted-gap-label">Gap Originale ({{ genderViewMode === 'media' ? 'Media' : 'Mediana' }})</div>
-                <div class="indicator-value" :class="{ 'gap-alert': isGapAlert(genderViewMode === 'media' ? indicatorsResult.a_divarioRetributivoGenere.percentuale : indicatorsResult.c_divarioMedianoGenere.percentuale) }">
-                  {{ formatPct(genderViewMode === 'media' ? indicatorsResult.a_divarioRetributivoGenere.percentuale : indicatorsResult.c_divarioMedianoGenere.percentuale) }}
-                </div>
-              </div>
-              <div class="adjusted-gap-box">
-                <div class="adjusted-gap-label">Esclusi</div>
-                <div class="indicator-value plain">{{ adjustedGapResult.excluded }} / {{ adjustedGapResult.total }}</div>
-              </div>
-            </div>
-            <p v-if="adjustedGapResult && indicatorsResult" class="adjusted-gap-note">
-              <template v-if="Math.abs(adjustedGapResult.gapMedia) < Math.abs(indicatorsResult.a_divarioRetributivoGenere.percentuale)">
-                Escludendo i top earners il divario si riduce di {{ formatPct(Math.abs(indicatorsResult.a_divarioRetributivoGenere.percentuale) - Math.abs(adjustedGapResult.gapMedia)) }}, indicando un impatto significativo dei ruoli apicali sul gap complessivo.
-              </template>
-              <template v-else>
-                Il gap rettificato è pari o superiore a quello originale: i ruoli apicali non incidono significativamente sul divario.
-              </template>
-            </p>
-          </section>
-
-        </div>
-        <div v-else-if="resultsTab === 'genere' && !indicatorsResult" class="no-data-msg">
-          <strong>Analisi di genere non disponibile.</strong><br/>
-          Per attivarla, verifica che nel file Excel sia presente una colonna <strong>Genere</strong> (con valori M/F, Maschio/Femmina, Uomo/Donna)
-          e che sia mappata correttamente nel passo "Verifica assegnazione colonne".
-          <br/><br/>
-          <button class="btn-secondary" @click="analisiStep = 'mapping'">Torna al mapping colonne</button>
-        </div>
-
-        <!-- Sub-tab: Lavori di pari valore -->
-        <div v-if="resultsTab === 'pari_valore' && jobResults.length > 0">
+        <div v-if="jobResults.length > 0">
           <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
 
           <div v-for="band in jobResults" :key="band.band" class="band-section">
@@ -1214,7 +1063,16 @@ function exportJobGradingPdf() {
                       class="people-row hay-role-row clickable"
                       @click="toggleRoleDetail(band.level, sub.label, rb.role)"
                     >
-                      <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg>{{ isRoleDetailExpanded(band.level, sub.label, rb.role) ? '▾' : '▸' }} {{ rb.role }}</span>
+                      <span class="role-cell-main">
+                        <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg>{{ isRoleDetailExpanded(band.level, sub.label, rb.role) ? '▾' : '▸' }} {{ rb.role }}</span>
+                        <button
+                          class="role-settings-btn"
+                          title="Modifica parametri Job Grading del ruolo"
+                          @click.stop="openRoleParamsModal(band.level, sub.label, rb.role)"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .33-1.82 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.82.33h0A1.7 1.7 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+                        </button>
+                      </span>
                       <span>{{ formatNum(rb.avgHayResponsibility) }}</span>
                       <span>{{ formatNum(rb.avgHayProblemSolving) }}</span>
                       <span>{{ formatNum(rb.avgHayRequiredSkills) }}</span>
@@ -1266,7 +1124,7 @@ function exportJobGradingPdf() {
             </button>
           </div>
         </div>
-        <div v-else-if="resultsTab === 'pari_valore' && jobResults.length === 0" class="no-data-msg">
+        <div v-else class="no-data-msg">
           Dati job grading non disponibili. Verifica che la colonna <strong>Livello</strong> sia mappata correttamente.
         </div>
 
@@ -1297,6 +1155,38 @@ function exportJobGradingPdf() {
               <span style="flex:1"></span>
               <button class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
               <button class="btn-primary" @click="savePersonJustify">Salva</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="editingRoleParams != null" class="justify-overlay" @click.self="cancelRoleParamsModal">
+          <div class="justify-modal">
+            <h3>Parametri Job Grading – {{ editingRoleParams.roleName }}</h3>
+            <p class="justify-hint">Modifica i punteggi del ruolo (scala 1-100 per fattore).</p>
+            <div class="role-params-grid">
+              <label class="role-param-field">
+                <span>Responsabilita</span>
+                <input v-model.number="roleParamsForm.responsibility" type="number" min="1" max="100" class="mapping-select" />
+              </label>
+              <label class="role-param-field">
+                <span>Problem solving</span>
+                <input v-model.number="roleParamsForm.problemSolving" type="number" min="1" max="100" class="mapping-select" />
+              </label>
+              <label class="role-param-field">
+                <span>Competenze</span>
+                <input v-model.number="roleParamsForm.requiredSkills" type="number" min="1" max="100" class="mapping-select" />
+              </label>
+              <label class="role-param-field">
+                <span>Condizioni</span>
+                <input v-model.number="roleParamsForm.workingConditions" type="number" min="1" max="100" class="mapping-select" />
+              </label>
+            </div>
+            <p class="role-params-total">
+              Totale Hay: <strong>{{ clampScoreInput(roleParamsForm.responsibility) + clampScoreInput(roleParamsForm.problemSolving) + clampScoreInput(roleParamsForm.requiredSkills) + clampScoreInput(roleParamsForm.workingConditions) }}</strong>
+            </p>
+            <div class="justify-actions">
+              <span style="flex:1"></span>
+              <button class="btn-secondary" @click="cancelRoleParamsModal">Annulla</button>
+              <button class="btn-primary" @click="saveRoleParams">Salva parametri</button>
             </div>
           </div>
         </div>
@@ -2903,6 +2793,50 @@ function exportJobGradingPdf() {
   vertical-align: -2px;
   margin-right: 0.25rem;
   color: var(--text-secondary);
+}
+
+.role-cell-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.role-settings-btn {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.role-settings-btn:hover {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+  background: rgba(10, 108, 210, 0.06);
+}
+
+.role-params-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.role-param-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.role-params-total {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 0.85rem;
 }
 
 .score-input {
