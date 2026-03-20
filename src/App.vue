@@ -361,6 +361,8 @@ function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-
 const justifications = ref({})
 const justifyingLevel = ref(null)
 const justifyText = ref('')
+const personJustifications = ref({})
+const justifyingPerson = ref(null)
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -377,6 +379,26 @@ function saveJustify() {
 
 function cancelJustify() {
   justifyingLevel.value = null
+  justifyText.value = ''
+}
+
+function openPersonJustify(person, contextLabel) {
+  const key = String(person?.index || '')
+  if (!key) return
+  justifyingPerson.value = { key, label: contextLabel || `Persona #${key}` }
+  justifyText.value = personJustifications.value[key] || ''
+}
+
+function savePersonJustify() {
+  if (justifyingPerson.value?.key) {
+    personJustifications.value[justifyingPerson.value.key] = justifyText.value
+  }
+  justifyingPerson.value = null
+  justifyText.value = ''
+}
+
+function cancelPersonJustify() {
+  justifyingPerson.value = null
   justifyText.value = ''
 }
 
@@ -776,7 +798,7 @@ function exportJobGradingPdf() {
   })
   y += 4
 
-  const head = [['Fascia', 'Livello', 'Sotto-fascia Hay', 'Resp.', 'Prob.', 'Comp.', 'Cond.', 'Totale', 'N', 'Media Retrib.', 'Media U', 'Media D', 'Gap U-D']]
+  const head = [['Fascia', 'Livello', 'Sotto-fascia Hay', 'Resp.', 'Prob.', 'Comp.', 'Cond.', 'Totale', 'N', 'Media Retrib.']]
   const body = jobResults.value.flatMap((b) =>
     (b.hayBands || []).map((sub) => [
       b.band,
@@ -789,9 +811,6 @@ function exportJobGradingPdf() {
       formatNum(sub.avgHayTotalScore),
       sub.n,
       formatNum(sub.avgTotalSalary),
-      formatNum(sub.avgSalaryMen),
-      formatNum(sub.avgSalaryWomen),
-      formatPct(sub.genderPayGapPct),
     ]),
   )
 
@@ -813,19 +832,6 @@ function exportJobGradingPdf() {
       7: { halign: 'center' },
       8: { halign: 'center' },
       9: { halign: 'right' },
-      10: { halign: 'right' },
-      11: { halign: 'right' },
-      12: { halign: 'center' },
-    },
-    didParseCell(data) {
-      if (data.section === 'body' && data.column.index === 12) {
-        const raw = data.cell.raw
-        const num = typeof raw === 'string' ? parseFloat(raw) : raw
-        if (Number.isFinite(num) && Math.abs(num) > 5) {
-          data.cell.styles.textColor = [220, 38, 38]
-          data.cell.styles.fontStyle = 'bold'
-        }
-      }
     },
     margin: { left: 14, right: 14 },
   })
@@ -1164,7 +1170,7 @@ function exportJobGradingPdf() {
             </div>
             <div class="job-table" v-if="band.hayBands && band.hayBands.length">
               <div class="job-row header hay-row">
-                <span>Sotto-fascia</span><span>Range score</span><span>Resp.</span><span>Problem solving</span><span>Competenze</span><span>Condizioni</span><span>Totale Hay</span><span>N ruoli</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span>
+                <span>Sotto-fascia</span><span>Range score</span><span>Resp.</span><span>Problem solving</span><span>Competenze</span><span>Condizioni</span><span>Totale Hay</span><span>N ruoli</span><span>Media retrib.</span>
               </div>
               <div
                 v-for="sub in band.hayBands"
@@ -1181,9 +1187,6 @@ function exportJobGradingPdf() {
                 <span><strong>{{ formatNum(sub.avgHayTotalScore) }}</strong></span>
                 <span>{{ sub.nRoles }}</span>
                 <span>{{ formatNum(sub.avgTotalSalary) }}</span>
-                <span>{{ formatNum(sub.avgSalaryMen) }} <small class="muted">(n={{ sub.nMen }})</small></span>
-                <span>{{ formatNum(sub.avgSalaryWomen) }} <small class="muted">(n={{ sub.nWomen }})</small></span>
-                <span :class="{ 'gap-alert': isGapAlert(sub.genderPayGapPct) }">{{ formatPct(sub.genderPayGapPct) }}</span>
               </div>
               <template v-for="sub in band.hayBands" :key="`${band.level}-${sub.label}-roles-wrap`">
                 <div
@@ -1191,12 +1194,12 @@ function exportJobGradingPdf() {
                   :key="`${band.level}-${sub.label}-roles`"
                   class="people-detail"
                 >
-                  <div class="people-header">
-                    <span>Ruolo</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Hay totale</span><span>N</span><span>Media retrib.</span><span>Media U</span><span>Media D</span><span>Gap U-D</span>
+                  <div class="people-header hay-role-header">
+                    <span>Ruolo</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Hay totale</span><span>N</span><span>Media retrib.</span>
                   </div>
                   <template v-for="rb in sub.roles" :key="`${band.level}-${sub.label}-${rb.role}`">
                     <div
-                      class="people-row clickable"
+                      class="people-row hay-role-row clickable"
                       @click="toggleRoleDetail(band.level, sub.label, rb.role)"
                     >
                       <span>{{ isRoleDetailExpanded(band.level, sub.label, rb.role) ? '▾' : '▸' }} {{ rb.role }}</span>
@@ -1207,31 +1210,36 @@ function exportJobGradingPdf() {
                       <span>{{ formatNum(rb.avgHayTotalScore) }}</span>
                       <span>{{ rb.n }}</span>
                       <span>{{ formatNum(rb.avgTotalSalary) }}</span>
-                      <span>{{ formatNum(rb.avgSalaryMen) }} <small class="muted">(n={{ rb.nMen }})</small></span>
-                      <span>{{ formatNum(rb.avgSalaryWomen) }} <small class="muted">(n={{ rb.nWomen }})</small></span>
-                      <span :class="{ 'gap-alert': isGapAlert(rb.genderPayGapPct) }">{{ formatPct(rb.genderPayGapPct) }}</span>
                     </div>
                     <div
                       v-if="isRoleDetailExpanded(band.level, sub.label, rb.role)"
                       class="people-detail"
                     >
-                      <div class="people-header">
-                        <span>#</span><span>Persona</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Hay totale</span><span>Retrib. totale</span><span>Dev. da media sotto-fascia</span>
+                      <div class="people-header hay-person-header">
+                        <span>#</span><span>Persona</span><span>Retrib. base</span><span>Comp. variabile</span><span>Retrib. totale</span><span>Dev. da media sotto-fascia</span>
                       </div>
                       <div
                         v-for="p in rb.people"
                         :key="`${band.level}-${sub.label}-${rb.role}-${p.index}`"
-                        class="people-row"
+                        class="people-row hay-person-row"
                       >
                         <span>{{ p.index }}</span>
                         <span>{{ p.name || '–' }}</span>
-                        <span>{{ formatNum(p.hayResponsibility) }}</span>
-                        <span>{{ formatNum(p.hayProblemSolving) }}</span>
-                        <span>{{ formatNum(p.hayRequiredSkills) }}</span>
-                        <span>{{ formatNum(p.hayWorkingConditions) }}</span>
-                        <span>{{ formatNum(p.hayTotalScore) }}</span>
+                        <span>{{ formatNum(p.baseSalary) }}</span>
+                        <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
-                        <span :class="{ 'gap-alert': isGapAlert(p.deviationFromHayBandMeanPct) }">{{ formatPct(p.deviationFromHayBandMeanPct) }}</span>
+                        <span :class="{ 'gap-alert': isGapAlert(p.deviationFromHayBandMeanPct) }">
+                          {{ formatPct(p.deviationFromHayBandMeanPct) }}
+                          <button
+                            v-if="isGapAlert(p.deviationFromHayBandMeanPct)"
+                            class="btn-justify"
+                            :class="{ 'has-note': personJustifications[String(p.index)] }"
+                            title="Aggiungi giustificativo persona"
+                            @click.stop="openPersonJustify(p, `${rb.role} · ${p.name || ('#' + p.index)}`)"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                          </button>
+                        </span>
                       </div>
                     </div>
                   </template>
@@ -1265,6 +1273,18 @@ function exportJobGradingPdf() {
               <span style="flex:1"></span>
               <button class="btn-secondary" @click="cancelJustify">Annulla</button>
               <button class="btn-primary" @click="saveJustify">Salva</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="justifyingPerson != null" class="justify-overlay" @click.self="cancelPersonJustify">
+          <div class="justify-modal">
+            <h3>Giustificativo persona – {{ justifyingPerson.label }}</h3>
+            <p class="justify-hint">Inserisci un giustificativo per lo scostamento dalla media della sotto-fascia.</p>
+            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
+            <div class="justify-actions">
+              <span style="flex:1"></span>
+              <button class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
+              <button class="btn-primary" @click="savePersonJustify">Salva</button>
             </div>
           </div>
         </div>
@@ -2767,7 +2787,7 @@ function exportJobGradingPdf() {
 }
 
 .job-row.hay-row {
-  grid-template-columns: 0.8fr 0.9fr repeat(4, 0.8fr) 0.9fr 0.6fr 1fr 1fr 1fr 0.8fr;
+  grid-template-columns: 0.9fr 1fr repeat(4, 0.9fr) 1fr 0.8fr 1.2fr;
 }
 
 .job-row.clickable {
@@ -2823,6 +2843,30 @@ function exportJobGradingPdf() {
 
 .people-row:last-child {
   border-bottom: none;
+}
+
+.hay-role-header,
+.hay-role-row {
+  grid-template-columns: 2.4fr 0.8fr 0.9fr 0.8fr 0.8fr 0.9fr 0.6fr 1.1fr;
+}
+
+.hay-person-header,
+.hay-person-row {
+  grid-template-columns: 0.4fr 1.8fr 1fr 1fr 1fr 1.3fr;
+}
+
+.hay-role-row span,
+.hay-person-row span,
+.hay-role-header span,
+.hay-person-header span {
+  white-space: nowrap;
+}
+
+.hay-role-row span:first-child,
+.hay-person-row span:nth-child(2),
+.hay-role-header span:first-child,
+.hay-person-header span:nth-child(2) {
+  white-space: normal;
 }
 
 .score-input {
