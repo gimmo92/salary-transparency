@@ -10,6 +10,8 @@ export const COLUMN_ROLES = {
   role: 'role',
   level: 'level',
   description: 'description',
+  /** Anni di servizio, data ingresso o simile (utile come giustificativo oggettivo) */
+  seniority: 'seniority',
 }
 
 export function getRoleLabel(role) {
@@ -23,6 +25,7 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.role]: 'Ruolo',
     [COLUMN_ROLES.level]: 'Livello contrattuale (es. Q, B1, C3)',
     [COLUMN_ROLES.description]: 'Descrizione ruolo',
+    [COLUMN_ROLES.seniority]: 'Anzianità (anni, data ingresso o simile)',
   }
   return labels[role] ?? role
 }
@@ -99,6 +102,9 @@ export function detectColumnRoles(headers, rows) {
 
   const descIdx = find('descrizione', 'description', 'mansione')
   if (descIdx >= 0) result[COLUMN_ROLES.description] = descIdx
+
+  const senIdx = find('anzian', 'anzianit', 'seniority', 'anz. servizio', 'data assunzione', 'data ingresso', 'anni servizio')
+  if (senIdx >= 0) result[COLUMN_ROLES.seniority] = senIdx
 
   return result
 }

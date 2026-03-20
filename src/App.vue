@@ -61,6 +61,7 @@ const allRoleKeys = [
   COLUMN_ROLES.role,
   COLUMN_ROLES.level,
   COLUMN_ROLES.description,
+  COLUMN_ROLES.seniority,
 ]
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
@@ -482,8 +483,17 @@ function cancelJustify() {
 function openPersonJustify(person, contextLabel) {
   const key = String(person?.index || '')
   if (!key) return
-  justifyingPerson.value = { key, label: contextLabel || `Persona #${key}` }
+  justifyingPerson.value = {
+    key,
+    label: contextLabel || `Persona #${key}`,
+    seniority: person?.seniority || null,
+  }
   justifyText.value = personJustifications.value[key] || ''
+}
+
+function formatSeniorityDisplay(s) {
+  if (s == null || String(s).trim() === '') return '–'
+  return String(s).trim()
 }
 
 function savePersonJustify() {
@@ -1100,7 +1110,7 @@ function exportJobGradingPdf() {
                       class="people-detail"
                     >
                       <div class="people-header hay-person-header">
-                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span>Retrib. base</span><span>Comp. variabile</span><span>Retrib. totale</span><span>Dev. da media fascia</span>
+                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span>Anzianità</span><span>Retrib. base</span><span>Comp. variabile</span><span>Retrib. totale</span><span>Dev. da media fascia</span>
                       </div>
                       <div
                         v-for="p in rb.people"
@@ -1143,6 +1153,7 @@ function exportJobGradingPdf() {
                           ><circle cx="12" cy="12" r="9"/><path d="M9 9h.01"/><path d="M15 9h.01"/><path d="M8 15c1.2 1.2 2.6 1.8 4 1.8s2.8-.6 4-1.8"/></svg>
                           {{ p.name || '–' }}
                         </span>
+                        <span class="hay-seniority-cell" :title="formatSeniorityDisplay(p.seniority)">{{ formatSeniorityDisplay(p.seniority) }}</span>
                         <span>{{ formatNum(p.baseSalary) }}</span>
                         <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
@@ -1197,7 +1208,10 @@ function exportJobGradingPdf() {
         <div v-if="justifyingPerson != null" class="justify-overlay" @click.self="cancelPersonJustify">
           <div class="justify-modal">
             <h3>Giustificativo persona – {{ justifyingPerson.label }}</h3>
-            <p class="justify-hint">Inserisci un giustificativo per lo scostamento dalla media della fascia.</p>
+            <p v-if="justifyingPerson.seniority" class="justify-hint justify-seniority-box">
+              <strong>Anzianità (da file Excel):</strong> {{ justifyingPerson.seniority }}
+            </p>
+            <p class="justify-hint">Inserisci un giustificativo (puoi richiamare l'anzianità di servizio come elemento oggettivo, se coerente con i dati caricati).</p>
             <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
             <div class="justify-actions">
               <span style="flex:1"></span>
@@ -2830,7 +2844,7 @@ function exportJobGradingPdf() {
 
 .hay-person-header,
 .hay-person-row {
-  grid-template-columns: 0.4fr 1.8fr 1fr 1fr 1fr 1.3fr;
+  grid-template-columns: 0.4fr 1.55fr 0.95fr 1fr 1fr 1fr 1.35fr;
 }
 
 .hay-role-row span,
@@ -2845,6 +2859,21 @@ function exportJobGradingPdf() {
 .hay-role-header span:first-child,
 .hay-person-header span:nth-child(2) {
   white-space: normal;
+}
+
+.hay-seniority-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.justify-seniority-box {
+  background: rgba(10, 108, 210, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.65rem;
+  margin-bottom: 0.35rem;
 }
 
 .inline-icon {

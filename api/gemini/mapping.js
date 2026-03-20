@@ -68,8 +68,9 @@ Available roles (use these exact keys):
 - totalSalary: Total annual compensation
 - category: Job category / classification
 - role: Job title / position
-- level: Level / seniority / grade
+- level: Level / grade (CCNL)
 - description: Job description
+- seniority: Seniority / years of service / hire date (for documented pay justification)
 
 Column headers: ${JSON.stringify(headers)}
 Sample data rows: ${JSON.stringify(sampleRows)}

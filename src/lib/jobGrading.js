@@ -1,3 +1,5 @@
+import { COLUMN_ROLES } from './excel.js'
+
 // --- CCNL Level hierarchy (higher number = higher band) ---
 
 const LEVEL_ORDER = {
@@ -144,21 +146,31 @@ function isValidSalary(person) {
 
 // --- Core: parse Excel rows into normalized records ---
 
+function parseSeniorityDisplay(value) {
+  if (value == null || value === '') return null
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  const s = String(value).trim()
+  return s || null
+}
+
 export function buildNormalizedJobGradingData(rows, headers, mapping) {
   if (!rows?.length || !headers?.length || !mapping) return []
 
   const idx = (key) =>
     Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : undefined
 
-  const roleIdx = idx('role')
-  const levelIdx = idx('level')
-  const descIdx = idx('description')
-  const categoryIdx = idx('category')
-  const genderIdx = idx('gender')
-  const baseIdx = idx('baseSalary')
-  const varIdx = idx('variableComponents')
-  const nameIdx = idx('employeeName')
-  const totalIdx = idx('totalSalary')
+  const roleIdx = idx(COLUMN_ROLES.role)
+  const levelIdx = idx(COLUMN_ROLES.level)
+  const descIdx = idx(COLUMN_ROLES.description)
+  const categoryIdx = idx(COLUMN_ROLES.category)
+  const genderIdx = idx(COLUMN_ROLES.gender)
+  const baseIdx = idx(COLUMN_ROLES.baseSalary)
+  const varIdx = idx(COLUMN_ROLES.variableComponents)
+  const nameIdx = idx(COLUMN_ROLES.employeeName)
+  const totalIdx = idx(COLUMN_ROLES.totalSalary)
+  const seniorityIdx = idx(COLUMN_ROLES.seniority)
 
   const parseNumber = (value) => {
     if (value == null || value === '' || value === 'N/D') return 0
@@ -185,6 +197,7 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       description: descIdx != null ? row[descIdx] : null,
       category: categoryIdx != null ? row[categoryIdx] : null,
       gender: genderIdx != null ? normalizeGender(row[genderIdx]) : null,
+      seniority: seniorityIdx != null ? parseSeniorityDisplay(row[seniorityIdx]) : null,
       baseSalary: base,
       variableComponents: variable,
       totalSalary: total,
@@ -314,7 +327,7 @@ export function groupByLevel(normalizedData) {
         }))
 
         return {
-          id: `H${idx + 1}`,
+          id: `Fascia ${idx + 1}`,
           label: `${hb.min}-${hb.max}`,
           minScore: hb.min,
           maxScore: hb.max,
