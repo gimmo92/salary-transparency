@@ -1,17 +1,17 @@
-function mean(values) {
+export function mean(values) {
   const arr = values.filter((v) => Number.isFinite(v))
   if (!arr.length) return 0
   return arr.reduce((s, v) => s + v, 0) / arr.length
 }
 
-function median(values) {
+export function median(values) {
   const arr = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b)
   if (!arr.length) return 0
   const mid = Math.floor(arr.length / 2)
   return arr.length % 2 === 0 ? (arr[mid - 1] + arr[mid]) / 2 : arr[mid]
 }
 
-function pctGap(male, female) {
+export function pctGap(male, female) {
   if (!Number.isFinite(male) || male === 0) return 0
   return ((male - female) / male) * 100
 }

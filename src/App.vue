@@ -18,6 +18,11 @@ import {
   groupByLevel,
   enrichWithDeviation,
 } from './lib/jobGrading.js'
+import {
+  computeEuGenderDashboard,
+  gapSeverityClass as euGapSeverityClass,
+  EU_GAP_THRESHOLD_PCT,
+} from './lib/euGenderDashboard.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -47,6 +52,10 @@ const indicatorsSource = ref('locale')
 
 const jobResults = ref([])
 
+/** Risultati analisi: dashboard UE genere (default) | job grading */
+const resultsTab = ref('eu_dashboard')
+/** Retribuzione per KPI dashboard: base o totale */
+const euDashboardSalaryMode = ref('total')
 
 const geminiEnabled = ref(false)
 
@@ -126,6 +135,7 @@ async function viewAnalysis(id) {
     recomputeAdjustedGap()
 
     analisiStep.value = 'results'
+    resultsTab.value = 'eu_dashboard'
     activeSection.value = 'analisi'
   } catch (err) {
     storicoError.value = 'Impossibile caricare l\'analisi: ' + (err.message || String(err))
@@ -247,6 +257,8 @@ function startNuovaAnalisi() {
   adjustedGapResult.value = null
   genderNormalizedCache.value = []
   bandGenderJustifications.value = {}
+  resultsTab.value = 'eu_dashboard'
+  euDashboardSalaryMode.value = 'total'
 }
 
 function goToUpload() {
@@ -380,6 +392,7 @@ async function confirmMapping() {
       saveStatus.value = `Analisi non salvata: ${saveErr.message || String(saveErr)}`
     }
 
+    resultsTab.value = 'eu_dashboard'
     analisiStep.value = 'results'
   } finally { analysisLoading.value = false }
 }
@@ -590,6 +603,14 @@ const adjustedGapResult = ref(null)
 const genderNormalizedCache = ref([])
 const bandGenderJustifications = ref({})
 const expandedJustifyBand = ref(null)
+
+const euDashboard = computed(() =>
+  computeEuGenderDashboard(
+    genderNormalizedCache.value,
+    jobResults.value,
+    euDashboardSalaryMode.value,
+  ),
+)
 
 const BAND_JUSTIFY_REASONS = [
   { id: 'seniority', label: 'Anzianità di servizio', icon: '⏳', desc: 'Differenza significativa nell\'anzianità media tra i generi nella band' },
@@ -1103,13 +1124,162 @@ function exportJobGradingPdf() {
         <p v-if="saveStatus" class="save-status">{{ saveStatus }}</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
 
-        <div v-if="jobResults.length > 0">
+        <div class="results-subtabs eu-results-tabs">
+          <button
+            type="button"
+            class="subtab"
+            :class="{ active: resultsTab === 'eu_dashboard' }"
+            @click="resultsTab = 'eu_dashboard'"
+          >
+            Dashboard trasparenza genere (UE)
+          </button>
+          <button
+            type="button"
+            class="subtab"
+            :class="{ active: resultsTab === 'job_grading' }"
+            :disabled="jobResults.length === 0"
+            @click="resultsTab = 'job_grading'"
+          >
+            Lavori di pari valore
+          </button>
+        </div>
+
+        <!-- Global Gender Pay Transparency Dashboard — Direttiva UE 2023/970 -->
+        <div v-show="resultsTab === 'eu_dashboard'" class="eu-dashboard-wrap">
+          <div v-if="genderNormalizedCache.length === 0" class="no-data-msg">
+            Per la <strong>Global Gender Pay Transparency Dashboard</strong> (Direttiva UE 2023/970) è necessario mappare la colonna <strong>Genere</strong> e avere dipendenti con valori M/F nel file.
+          </div>
+          <template v-else>
+            <div class="eu-dash-header">
+              <h3 class="eu-dash-title">Global Gender Pay Transparency Dashboard</h3>
+              <p class="eu-dash-sub">
+                Trasparenza retributiva di genere — riferimento <strong>Direttiva UE 2023/970</strong>. Panoramica prima del dettaglio Job Grading.
+              </p>
+              <div class="eu-salary-toggle">
+                <span class="eu-salary-toggle-label">Calcolo gap su:</span>
+                <button type="button" :class="['toggle-btn', { active: euDashboardSalaryMode === 'base' }]" @click="euDashboardSalaryMode = 'base'">Retribuzione base</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardSalaryMode === 'total' }]" @click="euDashboardSalaryMode = 'total'">Retribuzione totale</button>
+              </div>
+            </div>
+            <p class="eu-legend-line">
+              <span class="eu-leg eu-leg-green">■</span> |gap| &lt; 4% &nbsp;
+              <span class="eu-leg eu-leg-yellow">■</span> 4%–5% &nbsp;
+              <span class="eu-leg eu-leg-red">■</span> &gt; 5% (oltre soglia indicativa)
+            </p>
+
+            <div class="eu-kpi-grid">
+              <div class="eu-kpi-card">
+                <div class="eu-kpi-label">Gender pay gap medio (azienda)</div>
+                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMean)">{{ formatPct(euDashboard.gapMean) }}</div>
+              </div>
+              <div class="eu-kpi-card">
+                <div class="eu-kpi-label">Gender pay gap mediano (azienda)</div>
+                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMedian)">{{ formatPct(euDashboard.gapMedian) }}</div>
+              </div>
+              <div class="eu-kpi-card">
+                <div class="eu-kpi-label">% fasce (cluster) oltre 5%</div>
+                <div
+                  class="eu-kpi-value"
+                  :class="euDashboard.pctFasceSopraSoglia != null && euDashboard.pctFasceSopraSoglia > 0 ? 'gap-severity-red' : 'gap-severity-green'"
+                >
+                  {{ euDashboard.pctFasceSopraSoglia != null ? formatPct(euDashboard.pctFasceSopraSoglia) : '–' }}
+                </div>
+                <div class="eu-kpi-hint">{{ euDashboard.bandsAboveThreshold }} / {{ euDashboard.bandsComparable }} fasce con uomini e donne</div>
+              </div>
+              <div class="eu-kpi-card">
+                <div class="eu-kpi-label">Budget stimato correzione (annuo)</div>
+                <div class="eu-kpi-value">{{ formatNum(euDashboard.budgetEstimate) }}</div>
+                <div class="eu-kpi-hint">Stima: somma n<sub>donne</sub> × max(0; media M − media F) per fasce con |gap| &gt; 5%</div>
+              </div>
+              <div class="eu-kpi-card eu-kpi-span">
+                <div class="eu-kpi-label">Dipendenti analizzati</div>
+                <div class="eu-kpi-value-inline">
+                  <strong>Uomini:</strong> {{ euDashboard.nMaschi }}
+                  &nbsp;·&nbsp;
+                  <strong>Donne:</strong> {{ euDashboard.nFemmine }}
+                  &nbsp;·&nbsp;
+                  <span class="muted">Totale M/F: {{ euDashboard.nTotaleAnalizzati }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="eu-charts-row">
+              <div class="eu-panel">
+                <h4 class="eu-panel-title">Quartili retributivi</h4>
+                <p class="eu-panel-desc">Quattro gruppi uguali (dal 25% più basso al 25% più alto). Percentuali di uomini e donne <em>all’interno</em> di ciascun quartile.</p>
+                <div class="eu-quartile-chart">
+                  <div v-for="q in euDashboard.quartiles" :key="q.quartile" class="eu-quartile-col">
+                    <div class="eu-q-label">Q{{ q.quartile }}</div>
+                    <div class="eu-q-pair">
+                      <div class="eu-q-bar-col">
+                        <div class="eu-q-bar-bg">
+                          <div class="eu-q-bar eu-q-bar-m" :style="{ height: (q.totale ? q.maschilePct : 0) + '%' }"></div>
+                        </div>
+                        <span class="eu-q-pct">M {{ (q.totale ? q.maschilePct : 0).toFixed(0) }}%</span>
+                      </div>
+                      <div class="eu-q-bar-col">
+                        <div class="eu-q-bar-bg">
+                          <div class="eu-q-bar eu-q-bar-f" :style="{ height: (q.totale ? q.femminilePct : 0) + '%' }"></div>
+                        </div>
+                        <span class="eu-q-pct">F {{ (q.totale ? q.femminilePct : 0).toFixed(0) }}%</span>
+                      </div>
+                    </div>
+                    <div class="eu-q-meta">n = {{ q.totale }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="eu-panel">
+                <h4 class="eu-panel-title">Gap medio per livello CCNL</h4>
+                <p class="eu-panel-desc">Confronto media M vs F per livello ({{ euDashboardSalaryMode === 'base' ? 'retribuzione base' : 'retribuzione totale' }}).</p>
+                <div class="eu-level-list">
+                  <div v-for="row in euDashboard.levelRows" :key="'lv-' + row.band + '-' + row.levelLabel" class="eu-level-row">
+                    <div class="eu-level-head">
+                      <span class="eu-level-name">Livello {{ row.band }} — {{ row.levelLabel }}</span>
+                      <span v-if="row.segregation" class="eu-segregation-msg">{{ row.segregationMsg }}</span>
+                      <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ formatPct(row.gap) }}</span>
+                    </div>
+                    <div v-if="!row.segregation && row.gap != null" class="eu-level-track">
+                      <div
+                        class="eu-level-fill"
+                        :class="euGapSeverityClass(row.gap)"
+                        :style="{ width: Math.min(100, Math.abs(row.gap) * 1.5) + '%' }"
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="eu-panel eu-alert-panel">
+              <h4 class="eu-panel-title">Top 3 criticità (fasce / cluster)</h4>
+              <ul v-if="euDashboard.criticalAlerts.length" class="eu-alert-list">
+                <li v-for="(a, idx) in euDashboard.criticalAlerts" :key="idx" class="eu-alert-item">
+                  <strong>Livello {{ a.band }}</strong> — {{ a.levelLabel }}, <strong>{{ a.fasciaId }}</strong> (range {{ a.fasciaLabel }}):
+                  gap <span class="gap-alert">{{ formatPct(a.gap) }}</span>
+                </li>
+              </ul>
+              <p v-else class="muted">Nessuna fascia con |gap| &gt; 5% tra quelle confrontabili, oppure dati insufficienti.</p>
+            </div>
+
+            <div v-if="euDashboard.segregationWarnings.length" class="eu-panel eu-seg-panel">
+              <h4 class="eu-panel-title">Segregazione occupazionale (fasce)</h4>
+              <ul class="eu-seg-list">
+                <li v-for="(w, idx) in euDashboard.segregationWarnings" :key="idx">
+                  Livello {{ w.band }} — {{ w.fasciaId }} ({{ w.fasciaLabel }}): {{ w.segregationMsg }}
+                </li>
+              </ul>
+            </div>
+          </template>
+        </div>
+
+        <div v-show="resultsTab === 'job_grading'">
+          <template v-if="jobResults.length > 0">
           <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
 
           <div v-for="band in jobResults" :key="band.band" class="band-section">
             <h3 class="band-title">Livello {{ band.band }} – {{ band.level }}</h3>
             <div class="band-summary">
-              <span><strong>{{ band.n }}</strong> dipendenti ({{ band.nValid }} validi)</span>
               <span>Media retrib.: <strong>{{ formatNum(band.avgTotalSalary) }}</strong></span>
               <span>Media RAL: <strong>{{ formatNum(band.avgBaseSalary) }}</strong></span>
             </div>
@@ -1261,9 +1431,10 @@ function exportJobGradingPdf() {
               Esporta PDF
             </button>
           </div>
-        </div>
-        <div v-else class="no-data-msg">
-          Dati job grading non disponibili. Verifica che la colonna <strong>Livello</strong> sia mappata correttamente.
+          </template>
+          <div v-else class="no-data-msg">
+            Dati job grading non disponibili. Verifica che la colonna <strong>Livello</strong> sia mappata correttamente.
+          </div>
         </div>
 
         <div class="mapping-actions">
@@ -2691,6 +2862,285 @@ function exportJobGradingPdf() {
 .subtab:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* EU 2023/970 — Global Gender Pay Transparency Dashboard */
+.eu-results-tabs {
+  margin-top: 0.25rem;
+}
+.eu-dashboard-wrap {
+  margin-bottom: 2rem;
+}
+.eu-dash-header {
+  margin-bottom: 1rem;
+}
+.eu-dash-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.eu-dash-sub {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.eu-salary-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.eu-salary-toggle-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 0.25rem;
+}
+.eu-legend-line {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin: 0 0 1rem;
+}
+.eu-leg {
+  font-size: 0.9rem;
+  margin-right: 0.15rem;
+}
+.eu-leg-green {
+  color: #16a34a;
+}
+.eu-leg-yellow {
+  color: #ca8a04;
+}
+.eu-leg-red {
+  color: #dc2626;
+}
+.gap-severity-green {
+  color: #15803d;
+}
+.gap-severity-yellow {
+  color: #b45309;
+}
+.gap-severity-red {
+  color: #b91c1c;
+}
+.gap-severity-na {
+  color: var(--text-secondary);
+}
+.eu-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.eu-kpi-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  box-shadow: var(--shadow-soft);
+}
+.eu-kpi-span {
+  grid-column: 1 / -1;
+}
+@media (min-width: 720px) {
+  .eu-kpi-span {
+    grid-column: span 2;
+  }
+}
+.eu-kpi-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 0.35rem;
+}
+.eu-kpi-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.eu-kpi-value-inline {
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+.eu-kpi-hint {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+.eu-charts-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+@media (min-width: 900px) {
+  .eu-charts-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.eu-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 1rem 1.15rem;
+  box-shadow: var(--shadow-soft);
+}
+.eu-panel-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.eu-panel-desc {
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.eu-quartile-chart {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 0.75rem;
+  min-height: 160px;
+}
+.eu-quartile-col {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+.eu-q-label {
+  font-weight: 700;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.eu-q-pair {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: center;
+  align-items: flex-end;
+}
+.eu-q-bar-col {
+  flex: 1;
+  max-width: 48px;
+}
+.eu-q-bar-bg {
+  height: 100px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: var(--bg-page);
+  border-radius: 6px 6px 0 0;
+  border: 1px solid var(--border-light);
+  border-bottom: none;
+  overflow: hidden;
+}
+.eu-q-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  transition: height 0.2s ease;
+}
+.eu-q-bar-m {
+  background: linear-gradient(180deg, #3b82f6, #1d4ed8);
+}
+.eu-q-bar-f {
+  background: linear-gradient(180deg, #ec4899, #be185d);
+}
+.eu-q-pct {
+  display: block;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+  line-height: 1.2;
+}
+.eu-q-meta {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin-top: 0.35rem;
+}
+.eu-level-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.eu-level-row {
+  font-size: 0.82rem;
+}
+.eu-level-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  margin-bottom: 0.2rem;
+}
+.eu-level-name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 140px;
+}
+.eu-level-gap {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.eu-segregation-msg {
+  font-size: 0.78rem;
+  color: #b45309;
+  font-weight: 600;
+  background: rgba(202, 138, 4, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+}
+.eu-level-track {
+  height: 6px;
+  background: var(--bg-page);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.eu-level-fill {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px;
+}
+.eu-level-fill.gap-severity-green {
+  background: #22c55e;
+}
+.eu-level-fill.gap-severity-yellow {
+  background: #eab308;
+}
+.eu-level-fill.gap-severity-red {
+  background: #ef4444;
+}
+.eu-level-fill.gap-severity-na {
+  background: var(--border);
+}
+.eu-alert-panel {
+  margin-bottom: 1rem;
+}
+.eu-alert-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.eu-alert-item {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.eu-seg-panel {
+  border-color: rgba(202, 138, 4, 0.35);
+  background: rgba(254, 252, 232, 0.35);
+}
+.eu-seg-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .no-data-msg {
