@@ -496,6 +496,14 @@ function formatSeniorityDisplay(s) {
   return String(s).trim()
 }
 
+function formatHayBandAvgMen(sub) {
+  return (sub?.nMen ?? 0) > 0 ? formatNum(sub.avgSalaryMen) : '–'
+}
+
+function formatHayBandAvgWomen(sub) {
+  return (sub?.nWomen ?? 0) > 0 ? formatNum(sub.avgSalaryWomen) : '–'
+}
+
 function savePersonJustify() {
   if (justifyingPerson.value?.key) {
     personJustifications.value[justifyingPerson.value.key] = justifyText.value
@@ -957,7 +965,7 @@ function exportJobGradingPdf() {
     doc.text('Riepilogo fasce', 14, y)
     y += 6
 
-    const head = [['Livello', 'CCNL', 'Fascia', 'N U', 'N D', 'N Ruoli', 'Gap', 'Media Retrib.']]
+    const head = [['Livello', 'CCNL', 'Fascia', 'N U', 'N D', 'N Ruoli', 'Gap', 'Med. M', 'Med. F']]
     const body = jobResults.value.flatMap((b) =>
       (b.hayBands || []).map((sub) => {
         const gap = hayBandAdjustedGapPct(sub)
@@ -972,7 +980,8 @@ function exportJobGradingPdf() {
           sub.nWomen ?? 0,
           sub.nRoles ?? 0,
           gapLabel,
-          formatNum(sub.avgTotalSalary),
+          formatHayBandAvgMen(sub),
+          formatHayBandAvgWomen(sub),
         ]
       }),
     )
@@ -985,14 +994,15 @@ function exportJobGradingPdf() {
       headStyles: { fillColor: [10, 108, 210], fontSize: 7.5, halign: 'center' },
       bodyStyles: { fontSize: 7.5 },
       columnStyles: {
-        0: { halign: 'center', cellWidth: 14 },
-        1: { halign: 'center', cellWidth: 20 },
-        2: { halign: 'center', cellWidth: 22 },
-        3: { halign: 'center', cellWidth: 14 },
-        4: { halign: 'center', cellWidth: 14 },
-        5: { halign: 'center', cellWidth: 16 },
-        6: { halign: 'center', cellWidth: 20 },
-        7: { halign: 'right' },
+        0: { halign: 'center', cellWidth: 12 },
+        1: { halign: 'center', cellWidth: 18 },
+        2: { halign: 'center', cellWidth: 20 },
+        3: { halign: 'center', cellWidth: 12 },
+        4: { halign: 'center', cellWidth: 12 },
+        5: { halign: 'center', cellWidth: 14 },
+        6: { halign: 'center', cellWidth: 18 },
+        7: { halign: 'right', cellWidth: 22 },
+        8: { halign: 'right', cellWidth: 22 },
       },
       margin: { left: 14, right: 14 },
     })
@@ -1105,7 +1115,7 @@ function exportJobGradingPdf() {
             </div>
             <div class="job-table" v-if="band.hayBands && band.hayBands.length">
               <div class="job-row header hay-row">
-                <span>Fascia</span><span>Range score</span><span>N uomini</span><span>N donne</span><span>N ruoli</span><span>Media retrib.</span>
+                <span>Fascia</span><span>Range score</span><span>N uomini</span><span>N donne</span><span>N ruoli</span><span>Media retrib. M</span><span>Media retrib. F</span>
               </div>
               <template v-for="sub in band.hayBands" :key="`${band.level}-${sub.label}`">
                 <div
@@ -1139,7 +1149,8 @@ function exportJobGradingPdf() {
                   <span>{{ sub.nMen ?? 0 }}</span>
                   <span>{{ sub.nWomen ?? 0 }}</span>
                   <span>{{ sub.nRoles }}</span>
-                  <span>{{ formatNum(sub.avgTotalSalary) }}</span>
+                  <span>{{ formatHayBandAvgMen(sub) }}</span>
+                  <span>{{ formatHayBandAvgWomen(sub) }}</span>
                 </div>
                 <div
                   v-if="isHayBandExpanded(band.level, sub.label)"
@@ -1176,7 +1187,7 @@ function exportJobGradingPdf() {
                       class="people-detail"
                     >
                       <div class="people-header hay-person-header">
-                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span>Anzianità</span><span>Retrib. base</span><span>Comp. variabile</span><span>Retrib. totale</span><span>Dev. da media fascia</span>
+                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span>Anzianità</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
                       </div>
                       <div
                         v-for="p in rb.people"
@@ -1223,17 +1234,19 @@ function exportJobGradingPdf() {
                         <span>{{ formatNum(p.baseSalary) }}</span>
                         <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
-                        <span>
-                          {{ formatPct(p.deviationFromHayBandMeanPct) }}
+                        <span class="hay-person-justify-cell">
                           <button
                             v-if="hasHayBandDisparity(sub) || personJustifications[String(p.index)]"
-                            class="btn-justify"
+                            type="button"
+                            class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
-                            title="Aggiungi giustificativo persona (fascia con gap M/F)"
+                            title="Apri o modifica il giustificativo (gap M/F nella fascia)"
                             @click.stop="openPersonJustify(p, `${rb.role} · ${p.name || ('#' + p.index)}`)"
                           >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                            + Giustificativo
                           </button>
+                          <span v-else class="muted hay-person-no-justify">–</span>
                         </span>
                       </div>
                     </div>
@@ -1277,7 +1290,7 @@ function exportJobGradingPdf() {
             <p v-if="justifyingPerson.seniority" class="justify-hint justify-seniority-box">
               <strong>Anzianità (da file Excel):</strong> {{ justifyingPerson.seniority }}
             </p>
-            <p class="justify-hint">Inserisci un giustificativo (puoi richiamare l'anzianità di servizio come elemento oggettivo, se coerente con i dati caricati).</p>
+            <p class="justify-hint">Inserisci un giustificativo rispetto al gap retributivo M/F nella fascia (puoi richiamare l'anzianità di servizio come elemento oggettivo, se coerente con i dati caricati).</p>
 
             <div class="person-justify-suggestions">
               <p class="person-justify-suggestions-title">Suggerimenti — clic per aggiungere al testo</p>
@@ -2846,7 +2859,7 @@ function exportJobGradingPdf() {
 }
 
 .job-row.hay-row {
-  grid-template-columns: 1fr 1.4fr 0.8fr 0.8fr 0.8fr 1.2fr;
+  grid-template-columns: 1fr 1.35fr 0.72fr 0.72fr 0.65fr 1fr 1fr;
 }
 
 .job-row.clickable {
@@ -2939,7 +2952,7 @@ function exportJobGradingPdf() {
 
 .hay-person-header,
 .hay-person-row {
-  grid-template-columns: 0.4fr 1.55fr 0.95fr 1fr 1fr 1fr 1.35fr;
+  grid-template-columns: 0.4fr 1.5fr 0.9fr 1fr 1fr 1fr 1.15fr;
 }
 
 .hay-role-row span,
@@ -3327,32 +3340,50 @@ function exportJobGradingPdf() {
   border-bottom: 1px solid var(--border);
 }
 
-/* Pulsante giustificativo */
-.btn-justify {
+/* Pulsante giustificativo persona (testo esplicito) */
+.hay-person-justify-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.hay-person-no-justify {
+  font-size: 0.78rem;
+}
+
+.btn-justify-person {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: #f3f4f6;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 0;
-  margin-left: 4px;
-  vertical-align: middle;
-  transition: all 0.15s;
-}
-
-.btn-justify:hover {
-  background: #e5e7eb;
-  border-color: var(--text-muted);
+  gap: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-card);
   color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 
-.btn-justify.has-note {
-  background: rgba(10, 108, 210, 0.1);
+.btn-justify-person svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.btn-justify-person:hover {
+  background: rgba(10, 108, 210, 0.08);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.btn-justify-person:hover svg {
+  opacity: 1;
+}
+
+.btn-justify-person.has-note {
+  background: rgba(10, 108, 210, 0.12);
   border-color: var(--accent-blue);
   color: var(--accent-blue);
 }

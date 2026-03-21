@@ -54,7 +54,8 @@ export async function parseExcelFromUrl(url) {
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
 
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
+  // raw: false → valori formattati come in Excel (es. "16,1" per l'italiano) invece del solo float JS
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false })
   if (!rows.length) {
     return { rows: [], headers: [] }
   }

@@ -146,13 +146,76 @@ function isValidSalary(person) {
 
 // --- Core: parse Excel rows into normalized records ---
 
+/**
+ * Formatta un numero per visualizzazione italiana senza separatori migliaia (es. 16,1).
+ */
+function formatNumberItITNoGroup(n) {
+  return n.toLocaleString('it-IT', { useGrouping: false, maximumFractionDigits: 20 })
+}
+
+/**
+ * Interpreta stringhe numeriche in stile italiano: 16,1 · 1.234,56 · 16.1
+ * Ritorna null se non è un numero riconoscibile.
+ */
+function parseItalianDecimalString(compact) {
+  if (compact == null || compact === '') return null
+  const s = String(compact).trim().replace(/\s/g, '')
+  if (!s || !/^[-+]?\d[\d.,]*$/.test(s)) return null
+
+  const hasComma = s.includes(',')
+  const hasDot = s.includes('.')
+
+  let normalized
+  if (hasComma && hasDot) {
+    // Es. 1.234,56
+    normalized = s.replace(/\./g, '').replace(',', '.')
+  } else if (hasComma && !hasDot) {
+    // Es. 16,1 — virgola decimale
+    normalized = s.replace(',', '.')
+  } else if (hasDot && !hasComma) {
+    // Solo punti: 16.1 decimale vs 1.234 migliaia (ultimo gruppo ≤3 cifre → decimale)
+    const parts = s.split('.')
+    if (parts.length === 2 && parts[1].length <= 2 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
+      normalized = s
+    } else {
+      normalized = s.replace(/\./g, '')
+    }
+  } else {
+    normalized = s
+  }
+
+  const n = parseFloat(normalized)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Valore anzianità come da Excel italiano (virgola decimale preservata).
+ */
 function parseSeniorityDisplay(value) {
   if (value == null || value === '') return null
+
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return String(value)
+    return formatNumberItITNoGroup(value)
   }
-  const s = String(value).trim()
-  return s || null
+
+  const raw = String(value).trim()
+  if (!raw) return null
+
+  // Data o testo libero (es. "01/03/2010", "15 anni")
+  if (/\d\s*[/]\s*\d/.test(raw) || /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw
+  }
+  if (/[a-zA-Zàèéìòù]/.test(raw) && !/^[-+]?[\d.,]+$/.test(raw.replace(/\s/g, ''))) {
+    return raw
+  }
+
+  const compact = raw.replace(/\s/g, '')
+  const parsed = parseItalianDecimalString(compact)
+  if (parsed != null) {
+    return formatNumberItITNoGroup(parsed)
+  }
+
+  return raw
 }
 
 export function buildNormalizedJobGradingData(rows, headers, mapping) {
