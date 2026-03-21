@@ -1157,7 +1157,7 @@ function exportJobGradingPdf() {
                   class="people-detail hay-fascia-detail"
                 >
                   <div class="people-header hay-role-header">
-                    <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg> Ruolo</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Hay totale</span><span>N</span><span>Media retrib.</span>
+                    <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg> Ruolo</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Punteggio</span><span>N</span><span>Media retrib.</span>
                   </div>
                   <template v-for="rb in sub.roles" :key="`${band.level}-${sub.label}-${rb.role}`">
                     <div
@@ -1184,7 +1184,7 @@ function exportJobGradingPdf() {
                     </div>
                     <div
                       v-if="isRoleDetailExpanded(band.level, sub.label, rb.role)"
-                      class="people-detail"
+                      class="people-detail hay-person-detail"
                     >
                       <div class="people-header hay-person-header">
                         <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span>Anzianità</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
@@ -1351,7 +1351,7 @@ function exportJobGradingPdf() {
               </label>
             </div>
             <p class="role-params-total">
-              Totale Hay: <strong>{{ clampScoreInput(roleParamsForm.responsibility) + clampScoreInput(roleParamsForm.problemSolving) + clampScoreInput(roleParamsForm.requiredSkills) + clampScoreInput(roleParamsForm.workingConditions) }}</strong>
+              Punteggio: <strong>{{ clampScoreInput(roleParamsForm.responsibility) + clampScoreInput(roleParamsForm.problemSolving) + clampScoreInput(roleParamsForm.requiredSkills) + clampScoreInput(roleParamsForm.workingConditions) }}</strong>
             </p>
             <div class="justify-actions">
               <span style="flex:1"></span>
@@ -2953,6 +2953,29 @@ function exportJobGradingPdf() {
 .hay-person-header,
 .hay-person-row {
   grid-template-columns: 0.4fr 1.5fr 0.9fr 1fr 1fr 1fr 1.15fr;
+}
+
+/* Blocco persone: sfondo bianco (stacca dal grigio/azzurro di .people-detail) */
+.people-detail.hay-person-detail {
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 0.4rem 0.65rem 0.55rem;
+  margin: 0.2rem 0 0.35rem;
+}
+
+.people-detail.hay-person-detail .hay-person-header {
+  background: #fff;
+  border-bottom-color: #e5e7eb;
+}
+
+.people-detail.hay-person-detail .hay-person-row {
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.people-detail.hay-person-detail .hay-person-row:hover {
+  background: #fafafa;
 }
 
 .hay-role-row span,
