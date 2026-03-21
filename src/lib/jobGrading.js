@@ -195,6 +195,11 @@ function parseSeniorityDisplay(value) {
   if (value == null || value === '') return null
 
   if (typeof value === 'number' && Number.isFinite(value)) {
+    // Intero tipo 161 da export/celle male interpretate → 16,1
+    if (Number.isInteger(value) && value >= 101 && value <= 509) {
+      const recovered = parseSeniorityThreeDigitAmbiguous(String(value))
+      if (recovered != null) return formatNumberItITNoGroup(recovered)
+    }
     return formatNumberItITNoGroup(value)
   }
 
@@ -215,7 +220,26 @@ function parseSeniorityDisplay(value) {
     return formatNumberItITNoGroup(parsed)
   }
 
+  // Recupero virgola decimale persa: "161" da cella 16,1 letta male (anni con una cifra decimale)
+  const lostComma = parseSeniorityThreeDigitAmbiguous(compact)
+  if (lostComma != null) {
+    return formatNumberItITNoGroup(lostComma)
+  }
+
   return raw
+}
+
+/**
+ * Es. "161" → 16.1 se interpretabile come XX,Y con Y 1-9 e XX anni plausibili (0-50).
+ */
+function parseSeniorityThreeDigitAmbiguous(compact) {
+  if (!/^\d{3}$/.test(compact)) return null
+  const m = compact.match(/^(\d{2})([1-9])$/)
+  if (!m) return null
+  const whole = parseInt(m[1], 10)
+  if (whole < 0 || whole > 50) return null
+  const dec = parseInt(m[2], 10)
+  return whole + dec / 10
 }
 
 export function buildNormalizedJobGradingData(rows, headers, mapping) {
