@@ -494,14 +494,6 @@ function formatPctSigned(n) {
 function formatDeviationVsBandMean(p) {
   return formatPctSigned(p?.deviationFromHayBandMeanPct)
 }
-/** Testo del livello 1–5 per un fattore (comportamento valutato) */
-function transparencyLevelText(factorDef, score) {
-  const s = Number(score)
-  if (!factorDef?.levels?.length || !Number.isFinite(s)) return '–'
-  const idx = Math.max(0, Math.min(4, Math.round(s) - 1))
-  return factorDef.levels[idx] || '–'
-}
-
 /** Punteggio performance mock (40–100), deterministico per indice dipendente */
 function mockPerformanceScoreForPerson(personIndex) {
   const k = Number(personIndex) || 0
@@ -1786,11 +1778,6 @@ function exportJobGradingPdf() {
                       class="jg-role-expand-block"
                     >
                       <div class="jg-role-valuation-panel">
-                        <h4 class="jg-role-valuation-title">Dettaglio valutazione — {{ rb.role }}</h4>
-                        <p class="jg-role-valuation-lead muted">
-                          Pesi delle <strong>macro-categorie</strong> sul totale e dei <strong>fattori</strong> all’interno di ciascuna area.
-                          Per ogni fattore: punteggio assegnato (1–5) e <strong>comportamento</strong> corrispondente alla scala.
-                        </p>
                         <div class="jg-role-valuation-table-wrap">
                           <table class="jg-role-valuation-table">
                             <thead>
@@ -1798,7 +1785,6 @@ function exportJobGradingPdf() {
                                 <th>Macro-area (peso sul totale)</th>
                                 <th>Fattore (peso sull’area)</th>
                                 <th>Punteggio</th>
-                                <th>Comportamento valutato</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1813,14 +1799,13 @@ function exportJobGradingPdf() {
                                     <div class="jg-rv-w">{{ f.weightPct }}% · {{ f.description }}</div>
                                   </td>
                                   <td class="jg-rv-score">{{ roleTr(rb, f.id) ?? '–' }}</td>
-                                  <td class="jg-rv-beh">{{ transparencyLevelText(f, roleTr(rb, f.id)) }}</td>
                                 </tr>
                               </template>
                             </tbody>
                             <tfoot>
                               <tr class="jg-rv-foot">
                                 <td colspan="2"><strong>Punteggio pesato complessivo (scala 1–5)</strong></td>
-                                <td colspan="2" class="jg-rv-foot-score">
+                                <td class="jg-rv-foot-score">
                                   <strong>{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</strong>
                                   <span class="muted jg-rv-foot-hint">Σ (punteggio × peso fattore)</span>
                                 </td>
@@ -4341,19 +4326,8 @@ function exportJobGradingPdf() {
   background: #f8fafc;
   border: 1px solid var(--border-light);
   border-radius: 10px;
-  padding: 0.75rem 0.85rem 0.9rem;
+  padding: 0.65rem 0.85rem 0.75rem;
   margin-bottom: 0.65rem;
-}
-.jg-role-valuation-title {
-  margin: 0 0 0.35rem;
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.jg-role-valuation-lead {
-  margin: 0 0 0.65rem;
-  font-size: 0.78rem;
-  line-height: 1.45;
 }
 .jg-role-valuation-table-wrap {
   overflow-x: auto;
@@ -4408,11 +4382,6 @@ function exportJobGradingPdf() {
   font-variant-numeric: tabular-nums;
   width: 4rem;
   white-space: nowrap;
-}
-.jg-rv-beh {
-  font-size: 0.72rem;
-  color: var(--text-primary);
-  line-height: 1.4;
 }
 .jg-rv-foot td {
   background: rgba(33, 82, 255, 0.06);
