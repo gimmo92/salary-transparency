@@ -4,6 +4,7 @@ import {
   TRANSPARENCY_FACTOR_IDS,
   trFieldName,
   transparencyWeightsMap,
+  transparencyParametricPointsFromFactor,
 } from './transparencyCriteria.js'
 
 // --- CCNL Level hierarchy (higher number = higher band) ---
@@ -198,10 +199,14 @@ export function computeTransparencyScoresForPerson(person, { companyContext = ''
   }
 
   let weighted = 0
+  let parametric100 = 0
   for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    weighted += out[trFieldName(f.id)] * WEIGHTS[f.id]
+    const s = out[trFieldName(f.id)]
+    weighted += s * WEIGHTS[f.id]
+    parametric100 += transparencyParametricPointsFromFactor(s, f.weightPct)
   }
   out.trWeightedScore = Math.round(weighted * 100) / 100
+  out.trParametricScore100 = Math.round(parametric100 * 100) / 100
 
   return out
 }
@@ -221,10 +226,14 @@ export function meanTransparencyScores(people) {
     avg[trFieldName(id)] = Math.round((sums[id] / n) * 100) / 100
   }
   let w = 0
+  let p100 = 0
   for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    w += avg[trFieldName(f.id)] * WEIGHTS[f.id]
+    const s = avg[trFieldName(f.id)]
+    w += s * WEIGHTS[f.id]
+    p100 += transparencyParametricPointsFromFactor(s, f.weightPct)
   }
   avg.trWeightedScore = Math.round(w * 100) / 100
+  avg.trParametricScore100 = Math.round(p100 * 100) / 100
   return avg
 }
 

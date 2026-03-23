@@ -199,3 +199,15 @@ export function transparencyWeightsMap() {
   }
   return m
 }
+
+/**
+ * Punti parametrici su scala 100: voto 1–5 su un fattore con peso w% sul totale.
+ * Contributo = w × voto / 5. Esempio: voto 4/5 e peso 10% → 10 × 4 / 5 = 8 pt.
+ * La somma su tutti i fattori (pesi che sommano a 100) dà max 100 se tutti i voti sono 5.
+ */
+export function transparencyParametricPointsFromFactor(score1to5, weightPct) {
+  const s = Number(score1to5)
+  const w = Number(weightPct)
+  if (!Number.isFinite(s) || !Number.isFinite(w)) return 0
+  return (w * s) / 5
+}

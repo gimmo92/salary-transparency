@@ -23,6 +23,7 @@ import {
   TRANSPARENCY_MACRO_AREAS,
   TRANSPARENCY_FLAT_FACTORS,
   trFieldName,
+  transparencyParametricPointsFromFactor,
 } from './lib/transparencyCriteria.js'
 import {
   computeEuGenderDashboard,
@@ -554,22 +555,30 @@ function roleTr(role, factorId) {
   if (!role) return null
   return role[trFieldName(factorId)]
 }
-/** Media pesata 1–5 dei fattori della macro-area (pesi = % fattore sul totale globale, normalizzati nell’area). */
-function roleMacroAreaWeightedScore(role, area) {
+/** Punti parametrici 0–100 per macro-area: Σ (% peso fattore × voto 1–5 / 5). */
+function roleMacroAreaParametricPoints(role, area) {
   if (!role || !area?.factors?.length) return null
-  let num = 0
-  let den = 0
+  let pts = 0
+  let any = false
   for (const f of area.factors) {
     const s = roleTr(role, f.id)
     if (s == null || !Number.isFinite(Number(s))) continue
-    num += Number(s) * f.weightPct
-    den += f.weightPct
+    any = true
+    pts += transparencyParametricPointsFromFactor(Number(s), f.weightPct)
   }
-  if (den <= 0) return null
-  return Math.round((num / den) * 100) / 100
+  return any ? Math.round(pts * 100) / 100 : null
+}
+function macroAreaMaxParametricPoints(area) {
+  return area.factors.reduce((sum, f) => sum + f.weightPct, 0)
+}
+function macroAreaParametricTooltip(role, area) {
+  const pts = roleMacroAreaParametricPoints(role, area)
+  if (pts == null) return ''
+  const max = macroAreaMaxParametricPoints(area)
+  return `Punti parametrici (scala 0–100): Σ (% peso × voto / 5) per i fattori dell’area. Massimo ${max} se tutti i voti sono 5.`
 }
 function formatMacroAreaScore(role, area) {
-  const s = roleMacroAreaWeightedScore(role, area)
+  const s = roleMacroAreaParametricPoints(role, area)
   return s == null ? '–' : formatNum(s)
 }
 function previewRoleWeightedScore() {
@@ -579,6 +588,20 @@ function previewRoleWeightedScore() {
     w += clampTrScore(v) * (f.weightPct / 100)
   }
   return Math.round(w * 100) / 100
+}
+function previewRoleParametric100() {
+  let pts = 0
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    pts += transparencyParametricPointsFromFactor(clampTrScore(roleParamsForm.value[f.id]), f.weightPct)
+  }
+  return Math.round(pts * 100) / 100
+}
+/** Contributo singolo fattore su scala 100: % peso × voto / 5 */
+function formatFactorParametricContribution(role, factor) {
+  const s = roleTr(role, factor.id)
+  if (s == null || !Number.isFinite(Number(s))) return '–'
+  const v = transparencyParametricPointsFromFactor(Number(s), factor.weightPct)
+  return formatNum(v)
 }
 function meanLocal(values) {
   if (!values?.length) return 0
@@ -703,6 +726,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     gender: person.gender,
     roleScoresBlock: roleBlock,
     trWeightedScore: roleBlock.trWeightedScore,
+    trParametricScore100: roleBlock.trParametricScore100,
     gapFasciaPct: gapPct,
     gapFasciaFormatted:
       gapPct != null ? formatGapMforF(gapPct, hayBandHasJustifications(hayBand)) : '–',
@@ -732,7 +756,7 @@ async function suggestPersonJustifyAI() {
       role: j.roleName,
       level: j.levelLabel,
       band: j.fasciaId,
-      totalScore: j.trWeightedScore,
+      totalScore: j.trParametricScore100 ?? j.trWeightedScore,
       medianSalary: j.totalSalary,
       deviation: j.gapFasciaPct,
       jobFamily: j.levelLabel,
@@ -1723,7 +1747,7 @@ function exportJobGradingPdf() {
             </div>
           </div>
           <div class="job-grading-tab-head">
-            <p class="result-source job-grading-tab-head__text">Raggruppamento per <strong>Livello CCNL</strong> · punteggi 1–5 per fattore (trasparenza retributiva)</p>
+            <p class="result-source job-grading-tab-head__text">Raggruppamento per <strong>Livello CCNL</strong> · voto 1–5 per fattore; <strong>punteggio parametrico 0–100</strong> = Σ (% peso × voto / 5)</p>
             <button type="button" class="btn-jg-criteria" @click="jobGradingCriteriaModalOpen = true">Info analisi</button>
           </div>
 
@@ -1781,10 +1805,11 @@ function exportJobGradingPdf() {
                     <span
                       v-for="area in TRANSPARENCY_MACRO_AREAS"
                       :key="'h-' + area.id"
-                      class="jg-tr-col-head"
-                      :title="area.label + ' — media pesata sui fattori dell’area (' + area.weightPct + '% sul totale valutazione)'"
-                    >{{ area.shortLabel }}</span>
-                    <span class="jg-tr-col-head jg-tr-col-head-p" title="Punteggio pesato (1–5); pulsante «Dettaglio valutazione» per la tabella fattori">P</span>
+                      class="jg-tr-col-head jg-tr-col-area"
+                      :title="area.label + ' — punti parametrici (0–100) nell’area; peso area sul totale: ' + area.weightPct + '%'"
+                    >{{ area.label }}</span>
+                    <span class="jg-tr-col-head jg-tr-col-head-punteggio" title="Punteggio parametrico 0–100: Σ (% peso × voto 1–5 / 5) su tutti i fattori">Punteggio</span>
+                    <span class="jg-tr-col-head jg-tr-col-head-detail" title="Apri la scheda con macro-aree, fattori e punteggi 1–5">Dettaglio</span>
                     <span>N</span>
                     <span>Media retrib.</span>
                   </div>
@@ -1803,9 +1828,19 @@ function exportJobGradingPdf() {
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .33-1.82 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.82.33h0A1.7 1.7 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
                         </button>
                       </span>
-                      <span v-for="area in TRANSPARENCY_MACRO_AREAS" :key="rb.role + area.id" class="jg-tr-score-cell">{{ formatMacroAreaScore(rb, area) }}</span>
-                      <span class="jg-tr-p-with-detail">
-                        <span class="jg-tr-score-cell jg-tr-p">{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</span>
+                      <span
+                        v-for="area in TRANSPARENCY_MACRO_AREAS"
+                        :key="rb.role + area.id"
+                        class="jg-tr-score-cell"
+                        :title="macroAreaParametricTooltip(rb, area)"
+                      >{{ formatMacroAreaScore(rb, area) }}</span>
+                      <span class="jg-tr-score-cell jg-tr-p jg-tr-p-100">
+                        <template v-if="rb.trParametricScore100 != null">
+                          {{ formatNum(rb.trParametricScore100) }}<span class="muted jg-tr-p100-suffix">/100</span>
+                        </template>
+                        <template v-else>–</template>
+                      </span>
+                      <span class="jg-tr-detail-cell">
                         <button
                           type="button"
                           class="btn-jg-role-valuation"
@@ -1942,7 +1977,7 @@ function exportJobGradingPdf() {
                   <li v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id">
                     <strong>{{ f.label }}:</strong> {{ roleTr(justifyingPerson.roleScoresBlock, f.id) ?? '–' }}
                   </li>
-                  <li><strong>Punteggio pesato:</strong> {{ justifyingPerson.trWeightedScore != null ? formatNum(justifyingPerson.trWeightedScore) : '–' }}</li>
+                  <li><strong>Punteggio parametrico:</strong> {{ justifyingPerson.trParametricScore100 != null ? formatNum(justifyingPerson.trParametricScore100) + '/100' : '–' }} <span class="muted">(media 1–5: {{ justifyingPerson.trWeightedScore != null ? formatNum(justifyingPerson.trWeightedScore) : '–' }})</span></li>
                 </ul>
               </div>
             </div>
@@ -2098,7 +2133,8 @@ function exportJobGradingPdf() {
                     <tr>
                       <th>Macro-area (peso sul totale)</th>
                       <th>Fattore (peso sull’area)</th>
-                      <th>Punteggio</th>
+                      <th>Voto (1–5)</th>
+                      <th>Contributo (pt /100)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2113,15 +2149,24 @@ function exportJobGradingPdf() {
                           <div class="jg-rv-w">{{ f.weightPct }}% · {{ f.description }}</div>
                         </td>
                         <td class="jg-rv-score">{{ roleTr(roleValuationModalRb, f.id) ?? '–' }}</td>
+                        <td class="jg-rv-pt" title="% peso sul totale × voto / 5">{{ formatFactorParametricContribution(roleValuationModalRb, f) }}</td>
                       </tr>
                     </template>
                   </tbody>
                   <tfoot>
                     <tr class="jg-rv-foot">
-                      <td colspan="2"><strong>Punteggio pesato complessivo (scala 1–5)</strong></td>
+                      <td colspan="2"><strong>Punteggio parametrico (0–100)</strong></td>
+                      <td class="muted">—</td>
                       <td class="jg-rv-foot-score">
+                        <strong>{{ roleValuationModalRb.trParametricScore100 != null ? formatNum(roleValuationModalRb.trParametricScore100) : '–' }}</strong>
+                        <span class="muted jg-rv-foot-hint">Σ (% peso × voto / 5); es. 10% e voto 4 → 8 pt</span>
+                      </td>
+                    </tr>
+                    <tr class="jg-rv-foot jg-rv-foot--sub">
+                      <td colspan="2"><strong>Media pesata (scala 1–5)</strong></td>
+                      <td colspan="2" class="jg-rv-foot-score">
                         <strong>{{ roleValuationModalRb.trWeightedScore != null ? formatNum(roleValuationModalRb.trWeightedScore) : '–' }}</strong>
-                        <span class="muted jg-rv-foot-hint">Σ (punteggio × peso fattore)</span>
+                        <span class="muted jg-rv-foot-hint">Σ (voto × peso fattore)</span>
                       </td>
                     </tr>
                   </tfoot>
@@ -2146,7 +2191,11 @@ function exportJobGradingPdf() {
               </label>
             </div>
             <p class="role-params-total">
-              Punteggio pesato: <strong>{{ previewRoleWeightedScore() }}</strong> (scala 1–5)
+              Punteggio parametrico: <strong>{{ previewRoleParametric100() }}</strong><span class="muted">/100</span>
+              <span class="muted role-params-formula"> — Σ (% peso × voto / 5)</span>
+            </p>
+            <p class="role-params-total role-params-total--sub muted">
+              Media pesata (1–5): <strong>{{ previewRoleWeightedScore() }}</strong>
             </p>
             <div class="justify-actions">
               <span style="flex:1"></span>
@@ -4354,8 +4403,13 @@ function exportJobGradingPdf() {
 .hay-role-header.jg-tr-score-grid,
 .hay-role-row.jg-tr-score-grid {
   grid-template-columns:
-    minmax(10rem, 2.1fr) repeat(4, minmax(1.6rem, 0.55fr)) minmax(7.5rem, 1.25fr) minmax(1.15rem, 0.38fr) minmax(4.2rem, 1fr);
-  gap: 0.25rem 0.3rem;
+    minmax(10rem, 2.1fr)
+    repeat(4, minmax(5.25rem, 0.95fr))
+    minmax(3.5rem, 0.5fr)
+    minmax(7.5rem, 1.05fr)
+    minmax(1.15rem, 0.38fr)
+    minmax(4.2rem, 1fr);
+  gap: 0.25rem 0.35rem;
   font-size: 0.72rem;
 }
 .jg-tr-col-head {
@@ -4364,25 +4418,24 @@ function exportJobGradingPdf() {
   white-space: normal;
   font-size: 0.62rem;
 }
-.jg-tr-col-head-p {
-  max-width: 5.5rem;
-  justify-self: center;
+.hay-role-header.jg-tr-score-grid .jg-tr-col-area {
+  white-space: normal;
+  hyphens: auto;
+  word-break: break-word;
 }
-.jg-tr-p-with-detail {
+.jg-tr-col-head-punteggio,
+.jg-tr-col-head-detail {
+  font-size: 0.58rem;
+  line-height: 1.2;
+}
+.jg-tr-detail-cell {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.3rem;
   min-width: 0;
 }
-@media (min-width: 960px) {
-  .jg-tr-p-with-detail {
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: center;
-  }
+.hay-role-row.jg-tr-score-grid .jg-tr-detail-cell {
+  white-space: normal;
 }
 .btn-jg-role-valuation {
   font-size: 0.62rem;
@@ -4414,6 +4467,32 @@ function exportJobGradingPdf() {
 .jg-tr-p {
   font-weight: 700;
   color: var(--text-primary);
+}
+.jg-tr-p-100 {
+  white-space: nowrap;
+}
+.jg-tr-p100-suffix {
+  font-size: 0.78em;
+  font-weight: 600;
+  margin-left: 0.08rem;
+}
+.jg-rv-pt {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.jg-rv-foot--sub td {
+  background: rgba(33, 82, 255, 0.035);
+  border-top: 1px solid var(--border-light);
+}
+.role-params-total--sub {
+  margin-top: 0.2rem;
+  margin-bottom: 0;
+  font-size: 0.86rem;
+}
+.role-params-formula {
+  font-size: 0.9em;
 }
 .jg-role-expand-block {
   margin: 0.35rem 0 0.5rem 0.25rem;
