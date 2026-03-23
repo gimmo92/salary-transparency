@@ -93,7 +93,39 @@ export async function parseExcelFromUrl(url) {
   if (!response.ok) {
     throw new Error(`Download non riuscito (${response.status})`)
   }
+  const contentType = (response.headers.get('content-type') || '').toLowerCase()
   const arrayBuffer = await response.arrayBuffer()
+  const bytes = new Uint8Array(arrayBuffer)
+  const startsWithZip =
+    bytes.length >= 2 &&
+    bytes[0] === 0x50 && // P
+    bytes[1] === 0x4b // K
+  const asTextProbe = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 512)).trimStart().toLowerCase()
+  const looksLikeHtml = asTextProbe.startsWith('<!doctype html') || asTextProbe.startsWith('<html')
+  const looksLikeCsv = asTextProbe.includes(',') && (asTextProbe.includes('\n') || asTextProbe.includes('\r'))
+
+  // Se l'URL restituisce una pagina HTML (preview/login) SheetJS può leggere solo una tabella parziale
+  // (spesso 100 righe). In quel caso interrompiamo con messaggio esplicito.
+  if (looksLikeHtml || (!startsWithZip && contentType.includes('text/html'))) {
+    throw new Error(
+      'Il link non punta al file Excel diretto (restituisce HTML/preview). Usa un URL di download diretto del .xlsx.'
+    )
+  }
+
+  // Supporto CSV diretto (Google Sheets/BI export): evita il parsing "best effort" che può troncare dati.
+  if (!startsWithZip && (contentType.includes('text/csv') || looksLikeCsv)) {
+    const csvText = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+    const workbookFromCsv = XLSX.read(csvText, { type: 'string' })
+    const firstSheetName = workbookFromCsv.SheetNames[0]
+    const firstSheet = workbookFromCsv.Sheets[firstSheetName]
+    const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: null, raw: true })
+    if (!rows.length) return { rows: [], headers: [] }
+    const headerRowIndex = detectHeaderRow(rows)
+    const headers = (rows[headerRowIndex] || []).map((h) => String(h ?? '').trim())
+    const dataRows = rows.slice(headerRowIndex + 1)
+    return { headers, rows: dataRows }
+  }
+
   const workbook = XLSX.read(arrayBuffer, { type: 'array' })
   let best = { headers: [], rows: [], nonEmptyDataRows: -1 }
 
