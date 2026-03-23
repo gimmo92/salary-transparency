@@ -11,7 +11,6 @@ import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
-  checkGeminiAvailable,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
@@ -43,6 +42,8 @@ const excelHeaders = ref([])
 const columnMapping = ref({})
 const excelUrl = ref('')
 const uploadError = ref('')
+/** Avviso informativo (non errore) su mapping euristico / Gemini */
+const geminiInfoNotice = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
 const analysisLoading = ref(false)
@@ -59,6 +60,8 @@ const resultsTab = ref('eu_dashboard')
 const euDashboardSalaryMode = ref('total')
 
 const geminiEnabled = ref(false)
+/** true se /api/gemini/status non risponde (es. solo Vite senza server API) */
+const geminiApiUnreachable = ref(false)
 
 
 const allRoleKeys = [
@@ -282,6 +285,7 @@ function startNuovaAnalisi() {
   activeSection.value = 'analisi'
   analisiStep.value = 'upload'
   uploadError.value = ''
+  geminiInfoNotice.value = ''
   indicatorsResult.value = null
   jobResults.value = []
   saveStatus.value = ''
@@ -299,12 +303,14 @@ function startNuovaAnalisi() {
 function goToUpload() {
   analisiStep.value = 'upload'
   uploadError.value = ''
+  geminiInfoNotice.value = ''
 }
 
 async function onLoadFromUrl() {
   const url = (excelUrl.value || '').trim()
   if (!url) { uploadError.value = 'Inserisci il collegamento al file Excel.'; return }
   uploadError.value = ''
+  geminiInfoNotice.value = ''
   uploadLoading.value = true
   geminiLoading.value = false
   try {
@@ -323,7 +329,13 @@ async function onLoadFromUrl() {
         uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Usa il mapping manuale.'
       } finally { geminiLoading.value = false }
     } else {
-      uploadError.value = 'Gemini non attivo: API non configurata sul server. Uso mapping euristico.'
+      if (geminiApiUnreachable.value) {
+        geminiInfoNotice.value =
+          'Gemini non disponibile: in ambiente di sviluppo le route /api/gemini non sono servite da Vite. Usa il mapping euristico oppure avvia il progetto con `vercel dev` (con variabile GOOGLE_AI_API_KEY) oppure configura la chiave sul deploy. Vedi anche .env.example nella cartella del progetto.'
+      } else {
+        geminiInfoNotice.value =
+          'Gemini non attivo: imposta la variabile GOOGLE_AI_API_KEY (Google AI Studio) nel pannello Environment Variables del deploy (es. Vercel → Settings → Environment Variables). È attivo il mapping euristico delle colonne.'
+      }
     }
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
@@ -1104,7 +1116,20 @@ function cancelIncreaseEdit() {
 
 onMounted(async () => {
   loadRules()
-  geminiEnabled.value = await checkGeminiAvailable()
+  geminiApiUnreachable.value = false
+  try {
+    const res = await fetch('/api/gemini/status')
+    if (!res.ok) {
+      geminiApiUnreachable.value = true
+      geminiEnabled.value = false
+    } else {
+      const data = await res.json()
+      geminiEnabled.value = !!data.geminiEnabled
+    }
+  } catch {
+    geminiApiUnreachable.value = true
+    geminiEnabled.value = false
+  }
 })
 
 // PDF export job grading
@@ -1219,7 +1244,10 @@ function exportJobGradingPdf() {
             <span v-else>Carica e mappa colonne</span>
           </button>
         </div>
-        <p class="api-key-warn">Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong></p>
+        <p class="api-key-warn">
+          Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong>
+          <span v-if="geminiApiUnreachable" class="muted"> (API non raggiungibile in questo ambiente)</span>
+        </p>
         <p class="url-hint">Puoi incollare un link Google Sheets: verrà convertito in download .xlsx.</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       </div>
@@ -1246,6 +1274,7 @@ function exportJobGradingPdf() {
           <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello viene analizzato con retribuzione media e deviazione.</p>
         </div>
 
+        <p v-if="geminiInfoNotice" class="upload-info">{{ geminiInfoNotice }}</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         <div class="mapping-actions">
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
@@ -4096,6 +4125,17 @@ function exportJobGradingPdf() {
   margin: 1rem 0 0;
   color: #c53030;
   font-size: 0.875rem;
+}
+
+.upload-info {
+  margin: 1rem 0 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  background: rgba(59, 130, 246, 0.06);
+  color: #1e40af;
+  font-size: 0.875rem;
+  line-height: 1.45;
 }
 
 .mapping-table {
