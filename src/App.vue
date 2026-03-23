@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import {
   parseExcelFromUrl,
   detectColumnRoles,
@@ -11,6 +11,7 @@ import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
+  suggestJustificationWithGemini,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
@@ -65,6 +66,8 @@ const geminiEnabled = ref(false)
 /** true se /api/gemini/status non risponde (es. solo Vite senza server API) */
 const geminiApiUnreachable = ref(false)
 
+/** Area scroll principale (per scroll in alto aprendo giustificativo) */
+const mainWrapRef = ref(null)
 
 const allRoleKeys = [
   COLUMN_ROLES.gender,
@@ -507,6 +510,7 @@ const roleParamsForm = ref({
   requiredSkills: 50,
   workingConditions: 50,
 })
+const justifyAiLoading = ref(false)
 
 function openRoleParamsModal(level, subLabel, roleName) {
   const band = jobResults.value.find((b) => b.level === level)
@@ -648,6 +652,50 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
   resultsTabBeforeJustify.value = resultsTab.value
   resultsTab.value = 'person_justify'
   justifyText.value = personJustifications.value[key] || ''
+  nextTick(() => {
+    mainWrapRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  })
+}
+
+function canSuggestPersonJustifyAI() {
+  if (!justifyingPerson.value) return false
+  const s = justifyingPerson.value.seniorityPctVsFascia
+  const p = justifyingPerson.value.performancePctVsFascia
+  return (Number.isFinite(s) && s > 0) || (Number.isFinite(p) && p > 0)
+}
+
+async function suggestPersonJustifyAI() {
+  if (!justifyingPerson.value || justifyAiLoading.value) return
+  justifyAiLoading.value = true
+  try {
+    const j = justifyingPerson.value
+    const suggestion = await suggestJustificationWithGemini({
+      role: j.roleName,
+      level: j.levelLabel,
+      band: j.fasciaId,
+      totalScore: j.hayTotal,
+      medianSalary: j.totalSalary,
+      deviation: j.gapFasciaPct,
+      jobFamily: j.levelLabel,
+      nEmployees: 1,
+    })
+    const text = String(suggestion || '').trim()
+    if (text) {
+      const cur = justifyText.value.trim()
+      justifyText.value = cur ? `${cur}\n\n${text}` : text
+      await nextTick()
+      const box = mainWrapRef.value
+      if (box && typeof box.scrollTo === 'function') {
+        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' })
+      }
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
+    }
+  } catch (err) {
+    uploadError.value = `Suggerimento AI non riuscito: ${err?.message || String(err)}`
+  } finally {
+    justifyAiLoading.value = false
+  }
 }
 
 function formatSeniorityDisplay(s) {
@@ -775,7 +823,7 @@ const PERSON_JUSTIFY_SUGGESTION_CATEGORIES = [
     id: 'market',
     title: '5. Fattori di mercato (criteri esterni)',
     intro: 'Possono essere sensibili in sede di audit: documentare con evidenze solide.',
-    highRisk: true,
+    highRisk: false,
     items: [
       { label: 'Scarsità di talenti (shortage)', snippet: '[ALTO RISCHIO AUDIT] Scarsità di talenti sul mercato: difficoltà documentata nel reperire la specifica figura professionale, con evidenze di mercato e processo di recruiting.' },
       { label: 'Retention / controfferta', snippet: '[ALTO RISCHIO AUDIT] Retention: controfferta formulata per evitare dimissioni di dipendente chiave, con documentazione della minaccia competitiva e dell\'approvazione interna.' },
@@ -1263,7 +1311,7 @@ function exportJobGradingPdf() {
       </nav>
     </header>
 
-    <div class="main-wrap">
+    <div ref="mainWrapRef" class="main-wrap">
     <header class="main-header">
       <button class="btn-primary" @click="startNuovaAnalisi">
         <span>NUOVA ANALISI</span>
@@ -1455,7 +1503,7 @@ function exportJobGradingPdf() {
                 <div class="eu-level-list">
                   <div v-for="row in euDashboard.levelRows" :key="'lv-' + row.band + '-' + row.levelLabel" class="eu-level-row">
                     <div class="eu-level-head">
-                      <span class="eu-level-name">Livello {{ row.band }} — {{ row.levelLabel }}</span>
+                      <span class="eu-level-name">{{ row.levelLabel }}</span>
                       <span v-if="row.segregation" class="eu-segregation-msg">{{ row.segregationMsg }}</span>
                       <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ formatGapMforF(row.gap) }}</span>
                     </div>
@@ -1475,7 +1523,7 @@ function exportJobGradingPdf() {
               <h4 class="eu-panel-title">Top 3 criticità (fasce / cluster)</h4>
               <ul v-if="euDashboard.criticalAlerts.length" class="eu-alert-list">
                 <li v-for="(a, idx) in euDashboard.criticalAlerts" :key="idx" class="eu-alert-item">
-                  <strong>Livello {{ a.band }}</strong> — {{ a.levelLabel }}, <strong>{{ a.fasciaId }}</strong> (range {{ a.fasciaLabel }}):
+                  <strong>{{ a.levelLabel }}</strong>, <strong>{{ a.fasciaId }}</strong> (range {{ a.fasciaLabel }}):
                   <span class="gap-alert">{{ formatGapMforF(a.gap) }}</span>
                 </li>
               </ul>
@@ -1486,7 +1534,7 @@ function exportJobGradingPdf() {
               <h4 class="eu-panel-title">Segregazione occupazionale (fasce)</h4>
               <ul class="eu-seg-list">
                 <li v-for="(w, idx) in euDashboard.segregationWarnings" :key="idx">
-                  Livello {{ w.band }} — {{ w.fasciaId }} ({{ w.fasciaLabel }}): {{ w.segregationMsg }}
+                  {{ w.levelLabel }} — {{ w.fasciaId }} ({{ w.fasciaLabel }}): {{ w.segregationMsg }}
                 </li>
               </ul>
             </div>
@@ -1513,7 +1561,7 @@ function exportJobGradingPdf() {
           <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
 
           <div v-for="band in jobResults" :key="band.band" class="band-section">
-            <h3 class="band-title">Livello {{ band.band }} – {{ band.level }}</h3>
+            <h3 class="band-title">{{ band.level }}</h3>
             <div class="band-summary">
               <span>Media retrib.: <strong>{{ formatNum(band.avgTotalSalary) }}</strong></span>
               <span>Media RAL: <strong>{{ formatNum(band.avgBaseSalary) }}</strong></span>
@@ -1704,7 +1752,7 @@ function exportJobGradingPdf() {
                 </p>
               </div>
               <div class="person-justify-summary-card person-justify-summary-card--hay">
-                <h4 class="person-justify-summary-title">Punteggio ruolo (Hay)</h4>
+                <h4 class="person-justify-summary-title">Punteggio ruolo</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
                   <li><strong>Responsabilità:</strong> {{ formatNum(justifyingPerson.hayResp) }}</li>
                   <li><strong>Problem solving:</strong> {{ formatNum(justifyingPerson.hayProblem) }}</li>
@@ -1737,11 +1785,9 @@ function exportJobGradingPdf() {
                 </p>
               </div>
               <div class="justify-metric-card justify-metric-card--mock">
-                <div class="justify-metric-title">
-                  Performance <span class="justify-mock-badge">dati dimostrativi</span>
-                </div>
+                <div class="justify-metric-title">Performance</div>
                 <p class="justify-metric-line">
-                  <strong>Punteggio performance (mock):</strong>
+                  <strong>Punteggio performance:</strong>
                   {{ justifyingPerson.performanceScore ?? '–' }} / 100
                 </p>
                 <p class="justify-metric-line">
@@ -1754,12 +1800,59 @@ function exportJobGradingPdf() {
                     (media fascia: {{ justifyingPerson.fascAvgPerformance.toFixed(1) }})
                   </span>
                 </p>
-                <p class="justify-metric-note muted">
-                  Punteggio simulato per supporto redazionale; sostituire con dati reali da sistema HR.
-                </p>
+              </div>
+              <div class="justify-metric-card justify-metric-card--upload">
+                <div class="justify-metric-title">Carica documento</div>
+                <div class="justify-upload-toolbar">
+                  <input
+                    ref="personJustifyFileInput"
+                    type="file"
+                    class="person-justify-file-input"
+                    multiple
+                    accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,application/pdf,image/*"
+                    @change="onPersonJustifyFilesSelected"
+                  />
+                  <button type="button" class="btn-secondary justify-upload-btn" @click="triggerPersonJustifyFile">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Carica documento giustificativo
+                  </button>
+                  <div class="justify-doc-info-wrap">
+                    <button
+                      type="button"
+                      class="justify-info-trigger"
+                      aria-label="Informazioni sui documenti da allegare"
+                      aria-describedby="person-justify-doc-tooltip-tab"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    </button>
+                    <div id="person-justify-doc-tooltip-tab" class="justify-doc-tooltip" role="tooltip">
+                      <p class="justify-doc-tooltip-title">Documentazione utile per categoria</p>
+                      <p v-for="(sec, idx) in PERSON_JUSTIFY_DOC_INFO_SECTIONS" :key="idx" class="justify-doc-tooltip-p">
+                        <strong>{{ sec.title }}:</strong> {{ sec.body }}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <p class="justify-hint">Inserisci un giustificativo rispetto al gap retributivo M/F nella fascia (puoi richiamare anzianità e performance come elementi oggettivi, se coerenti con i dati).</p>
+            <div v-if="canSuggestPersonJustifyAI()" class="justify-ai-row">
+              <button
+                type="button"
+                class="btn-ai"
+                :disabled="justifyAiLoading || !geminiEnabled"
+                @click="suggestPersonJustifyAI"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true">
+                  <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z"/>
+                  <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14z"/>
+                  <path d="M5 14l.7 1.6L7.3 16l-1.6.7L5 18.3l-.7-1.6L2.7 16l1.6-.7L5 14z"/>
+                </svg>
+                <span v-if="justifyAiLoading">Elaboro frase con AI...</span>
+                <span v-else>Suggerisci giustificativo AI</span>
+              </button>
+              <span v-if="!geminiEnabled" class="muted justify-ai-note">Gemini non attivo in questo ambiente.</span>
+            </div>
 
             <div class="person-justify-suggestions">
               <p class="person-justify-suggestions-title">Suggerimenti — clic per aggiungere al testo</p>
@@ -1767,13 +1860,9 @@ function exportJobGradingPdf() {
                 v-for="cat in PERSON_JUSTIFY_SUGGESTION_CATEGORIES"
                 :key="cat.id"
                 class="person-justify-cat"
-                :class="{ 'person-justify-cat--risk': cat.highRisk }"
               >
                 <summary class="person-justify-cat-summary">{{ cat.title }}</summary>
                 <p v-if="cat.intro" class="person-justify-cat-intro">{{ cat.intro }}</p>
-                <p v-if="cat.highRisk" class="person-justify-risk-banner">
-                  Attenzione: motivazioni legate al mercato o alla retention sono spesso oggetto di verifiche approfondite. Allegare evidenze e approvazioni interne.
-                </p>
                 <div class="person-justify-chips">
                   <button
                     v-for="(item, i) in cat.items"
@@ -1786,37 +1875,6 @@ function exportJobGradingPdf() {
                   </button>
                 </div>
               </details>
-            </div>
-
-            <div class="justify-upload-toolbar">
-              <input
-                ref="personJustifyFileInput"
-                type="file"
-                class="person-justify-file-input"
-                multiple
-                accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,application/pdf,image/*"
-                @change="onPersonJustifyFilesSelected"
-              />
-              <button type="button" class="btn-secondary justify-upload-btn" @click="triggerPersonJustifyFile">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                Carica documento giustificativo
-              </button>
-              <div class="justify-doc-info-wrap">
-                <button
-                  type="button"
-                  class="justify-info-trigger"
-                  aria-label="Informazioni sui documenti da allegare"
-                  aria-describedby="person-justify-doc-tooltip-tab"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-                </button>
-                <div id="person-justify-doc-tooltip-tab" class="justify-doc-tooltip" role="tooltip">
-                  <p class="justify-doc-tooltip-title">Documentazione utile per categoria</p>
-                  <p v-for="(sec, idx) in PERSON_JUSTIFY_DOC_INFO_SECTIONS" :key="idx" class="justify-doc-tooltip-p">
-                    <strong>{{ sec.title }}:</strong> {{ sec.body }}
-                  </p>
-                </div>
-              </div>
             </div>
 
             <label class="person-justify-textarea-label">Testo del giustificativo</label>
@@ -3282,6 +3340,21 @@ function exportJobGradingPdf() {
   font-size: 0.95rem;
   font-weight: 700;
 }
+.justify-ai-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 0.9rem;
+  flex-wrap: wrap;
+}
+.justify-ai-row .btn-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.justify-ai-note {
+  font-size: 0.78rem;
+}
 .justify-actions-tab {
   display: flex;
   justify-content: flex-end;
@@ -3931,6 +4004,7 @@ function exportJobGradingPdf() {
 
 .justify-person-metrics {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.75rem;
   margin: 0 0 1rem;
 }
@@ -3945,6 +4019,9 @@ function exportJobGradingPdf() {
 .justify-metric-card--mock {
   background: rgba(234, 179, 8, 0.08);
   border-color: rgba(202, 138, 4, 0.35);
+}
+.justify-metric-card--upload {
+  background: rgba(10, 108, 210, 0.05);
 }
 .justify-metric-title {
   font-weight: 700;
@@ -4003,12 +4080,22 @@ function exportJobGradingPdf() {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 0.75rem;
-  margin: 0 0 0.75rem;
+  margin: 0;
 }
 .justify-upload-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+}
+.justify-metric-card--upload .justify-upload-toolbar {
+  flex-direction: column;
+  align-items: stretch;
+}
+.justify-metric-card--upload .justify-upload-btn {
+  justify-content: center;
+}
+.justify-metric-card--upload .justify-doc-info-wrap {
+  align-self: flex-start;
 }
 .justify-doc-info-wrap {
   position: relative;
