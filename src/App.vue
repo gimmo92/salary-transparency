@@ -64,6 +64,23 @@ const jobResults = ref([])
 /** Override punteggi 1–5 per ruolo: chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: number } */
 const transparencyRoleOverrides = ref({})
 const jobGradingCriteriaModalOpen = ref(false)
+/** Popup scheda punteggi fattori per ruolo: { level, subLabel, roleName } */
+const roleValuationModal = ref(null)
+
+const roleValuationModalRb = computed(() => {
+  const ctx = roleValuationModal.value
+  if (!ctx) return null
+  const band = jobResults.value.find((b) => b.level === ctx.level)
+  const sub = band?.hayBands?.find((h) => h.label === ctx.subLabel)
+  return sub?.roles?.find((r) => r.role === ctx.roleName) ?? null
+})
+
+function openRoleValuationModal(level, subLabel, roleName) {
+  roleValuationModal.value = { level, subLabel, roleName }
+}
+function closeRoleValuationModal() {
+  roleValuationModal.value = null
+}
 
 /** Risultati analisi: dashboard UE genere (default) | job grading | giustificativo persona */
 const resultsTab = ref('eu_dashboard')
@@ -536,6 +553,24 @@ function emptyRoleTransparencyForm() {
 function roleTr(role, factorId) {
   if (!role) return null
   return role[trFieldName(factorId)]
+}
+/** Media pesata 1–5 dei fattori della macro-area (pesi = % fattore sul totale globale, normalizzati nell’area). */
+function roleMacroAreaWeightedScore(role, area) {
+  if (!role || !area?.factors?.length) return null
+  let num = 0
+  let den = 0
+  for (const f of area.factors) {
+    const s = roleTr(role, f.id)
+    if (s == null || !Number.isFinite(Number(s))) continue
+    num += Number(s) * f.weightPct
+    den += f.weightPct
+  }
+  if (den <= 0) return null
+  return Math.round((num / den) * 100) / 100
+}
+function formatMacroAreaScore(role, area) {
+  const s = roleMacroAreaWeightedScore(role, area)
+  return s == null ? '–' : formatNum(s)
 }
 function previewRoleWeightedScore() {
   let w = 0
@@ -1744,12 +1779,12 @@ function exportJobGradingPdf() {
                   <div class="people-header hay-role-header jg-tr-score-grid">
                     <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg> Ruolo</span>
                     <span
-                      v-for="f in TRANSPARENCY_FLAT_FACTORS"
-                      :key="'h-' + f.id"
+                      v-for="area in TRANSPARENCY_MACRO_AREAS"
+                      :key="'h-' + area.id"
                       class="jg-tr-col-head"
-                      :title="f.label + ' (' + f.weightPct + '%)'"
-                    >{{ f.shortLabel }}</span>
-                    <span class="jg-tr-col-head" title="Punteggio pesato (1–5)">P</span>
+                      :title="area.label + ' — media pesata sui fattori dell’area (' + area.weightPct + '% sul totale valutazione)'"
+                    >{{ area.shortLabel }}</span>
+                    <span class="jg-tr-col-head jg-tr-col-head-p" title="Punteggio pesato (1–5); pulsante «Dettaglio valutazione» per la tabella fattori">P</span>
                     <span>N</span>
                     <span>Media retrib.</span>
                   </div>
@@ -1768,8 +1803,18 @@ function exportJobGradingPdf() {
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .33-1.82 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.82.33h0A1.7 1.7 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
                         </button>
                       </span>
-                      <span v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="rb.role + f.id" class="jg-tr-score-cell">{{ roleTr(rb, f.id) ?? '–' }}</span>
-                      <span class="jg-tr-score-cell jg-tr-p">{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</span>
+                      <span v-for="area in TRANSPARENCY_MACRO_AREAS" :key="rb.role + area.id" class="jg-tr-score-cell">{{ formatMacroAreaScore(rb, area) }}</span>
+                      <span class="jg-tr-p-with-detail">
+                        <span class="jg-tr-score-cell jg-tr-p">{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</span>
+                        <button
+                          type="button"
+                          class="btn-jg-role-valuation"
+                          title="Apri la tabella con macro-aree, fattori e punteggi"
+                          @click.stop="openRoleValuationModal(band.level, sub.label, rb.role)"
+                        >
+                          Dettaglio valutazione
+                        </button>
+                      </span>
                       <span>{{ rb.n }}</span>
                       <span>{{ formatNum(rb.avgTotalSalary) }}</span>
                     </div>
@@ -1777,43 +1822,6 @@ function exportJobGradingPdf() {
                       v-if="isRoleDetailExpanded(band.level, sub.label, rb.role)"
                       class="jg-role-expand-block"
                     >
-                      <div class="jg-role-valuation-panel">
-                        <div class="jg-role-valuation-table-wrap">
-                          <table class="jg-role-valuation-table">
-                            <thead>
-                              <tr>
-                                <th>Macro-area (peso sul totale)</th>
-                                <th>Fattore (peso sull’area)</th>
-                                <th>Punteggio</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <template v-for="area in TRANSPARENCY_MACRO_AREAS" :key="'v-' + area.id + '-' + rb.role">
-                                <tr v-for="(f, fi) in area.factors" :key="f.id">
-                                  <td v-if="fi === 0" :rowspan="area.factors.length" class="jg-rv-mac">
-                                    <strong>{{ area.label }}</strong>
-                                    <div class="jg-rv-w">{{ area.weightPct }}% sul totale valutazione</div>
-                                  </td>
-                                  <td class="jg-rv-fac">
-                                    <strong>{{ f.label }}</strong>
-                                    <div class="jg-rv-w">{{ f.weightPct }}% · {{ f.description }}</div>
-                                  </td>
-                                  <td class="jg-rv-score">{{ roleTr(rb, f.id) ?? '–' }}</td>
-                                </tr>
-                              </template>
-                            </tbody>
-                            <tfoot>
-                              <tr class="jg-rv-foot">
-                                <td colspan="2"><strong>Punteggio pesato complessivo (scala 1–5)</strong></td>
-                                <td class="jg-rv-foot-score">
-                                  <strong>{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</strong>
-                                  <span class="muted jg-rv-foot-hint">Σ (punteggio × peso fattore)</span>
-                                </td>
-                              </tr>
-                            </tfoot>
-                          </table>
-                        </div>
-                      </div>
                       <div class="people-detail hay-person-detail jg-role-persons-after-table">
                       <div class="people-header hay-person-header">
                         <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span class="hay-person-deviation-head" title="Scostamento % retribuzione totale rispetto alla media della fascia">Scost. vs media fascia</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
@@ -2077,6 +2085,53 @@ function exportJobGradingPdf() {
               <span style="flex:1"></span>
               <button class="btn-secondary" @click="cancelJustify">Annulla</button>
               <button class="btn-primary" @click="saveJustify">Salva</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="roleValuationModal != null" class="justify-overlay" @click.self="closeRoleValuationModal">
+          <div class="justify-modal justify-modal--wide jg-role-valuation-modal" role="dialog" aria-modal="true" aria-labelledby="jg-role-val-title">
+            <h3 id="jg-role-val-title">Dettaglio valutazione — {{ roleValuationModal.roleName }}</h3>
+            <template v-if="roleValuationModalRb">
+              <div class="jg-role-valuation-table-wrap">
+                <table class="jg-role-valuation-table">
+                  <thead>
+                    <tr>
+                      <th>Macro-area (peso sul totale)</th>
+                      <th>Fattore (peso sull’area)</th>
+                      <th>Punteggio</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template v-for="area in TRANSPARENCY_MACRO_AREAS" :key="'vm-' + area.id + '-' + roleValuationModalRb.role">
+                      <tr v-for="(f, fi) in area.factors" :key="f.id">
+                        <td v-if="fi === 0" :rowspan="area.factors.length" class="jg-rv-mac">
+                          <strong>{{ area.label }}</strong>
+                          <div class="jg-rv-w">{{ area.weightPct }}% sul totale valutazione</div>
+                        </td>
+                        <td class="jg-rv-fac">
+                          <strong>{{ f.label }}</strong>
+                          <div class="jg-rv-w">{{ f.weightPct }}% · {{ f.description }}</div>
+                        </td>
+                        <td class="jg-rv-score">{{ roleTr(roleValuationModalRb, f.id) ?? '–' }}</td>
+                      </tr>
+                    </template>
+                  </tbody>
+                  <tfoot>
+                    <tr class="jg-rv-foot">
+                      <td colspan="2"><strong>Punteggio pesato complessivo (scala 1–5)</strong></td>
+                      <td class="jg-rv-foot-score">
+                        <strong>{{ roleValuationModalRb.trWeightedScore != null ? formatNum(roleValuationModalRb.trWeightedScore) : '–' }}</strong>
+                        <span class="muted jg-rv-foot-hint">Σ (punteggio × peso fattore)</span>
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </template>
+            <p v-else class="muted jg-role-valuation-missing">Dati ruolo non disponibili.</p>
+            <div class="justify-actions">
+              <span style="flex: 1"></span>
+              <button type="button" class="btn-primary" @click="closeRoleValuationModal">Chiudi</button>
             </div>
           </div>
         </div>
@@ -4299,7 +4354,7 @@ function exportJobGradingPdf() {
 .hay-role-header.jg-tr-score-grid,
 .hay-role-row.jg-tr-score-grid {
   grid-template-columns:
-    minmax(10rem, 2.1fr) repeat(10, minmax(1.15rem, 0.42fr)) minmax(1.35rem, 0.4fr) minmax(1.15rem, 0.38fr) minmax(4.2rem, 1fr);
+    minmax(10rem, 2.1fr) repeat(4, minmax(1.6rem, 0.55fr)) minmax(7.5rem, 1.25fr) minmax(1.15rem, 0.38fr) minmax(4.2rem, 1fr);
   gap: 0.25rem 0.3rem;
   font-size: 0.72rem;
 }
@@ -4308,6 +4363,49 @@ function exportJobGradingPdf() {
   line-height: 1.15;
   white-space: normal;
   font-size: 0.62rem;
+}
+.jg-tr-col-head-p {
+  max-width: 5.5rem;
+  justify-self: center;
+}
+.jg-tr-p-with-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+@media (min-width: 960px) {
+  .jg-tr-p-with-detail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+  }
+}
+.btn-jg-role-valuation {
+  font-size: 0.62rem;
+  padding: 0.22rem 0.5rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  border: 1px solid rgba(10, 108, 210, 0.4);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.btn-jg-role-valuation:hover {
+  background: rgba(10, 108, 210, 0.1);
+}
+.jg-role-valuation-modal .jg-role-valuation-table-wrap {
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  margin-bottom: 0.5rem;
+}
+.jg-role-valuation-missing {
+  margin: 0.5rem 0 1rem;
 }
 .jg-tr-score-cell {
   text-align: center;

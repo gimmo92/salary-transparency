@@ -7,6 +7,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
   {
     id: 'competenze',
     label: 'Competenze',
+    shortLabel: 'Comp.',
     weightPct: 30,
     factors: [
       {
@@ -55,6 +56,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
   {
     id: 'responsabilita',
     label: 'Responsabilità',
+    shortLabel: 'Resp.',
     weightPct: 40,
     factors: [
       {
@@ -103,6 +105,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
   {
     id: 'impegno',
     label: 'Impegno',
+    shortLabel: 'Impeg.',
     weightPct: 20,
     factors: [
       {
@@ -137,6 +140,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
   {
     id: 'condizioni',
     label: 'Condizioni',
+    shortLabel: 'Cond.',
     weightPct: 10,
     factors: [
       {
