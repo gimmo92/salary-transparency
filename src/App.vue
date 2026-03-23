@@ -21,6 +21,7 @@ import {
 } from './lib/jobGrading.js'
 import {
   computeEuGenderDashboard,
+  computeQuartileOutliers,
   gapSeverityClass as euGapSeverityClass,
   EU_GAP_THRESHOLD_PCT,
 } from './lib/euGenderDashboard.js'
@@ -61,6 +62,14 @@ const resultsTab = ref('eu_dashboard')
 const resultsTabBeforeJustify = ref('job_grading')
 /** Retribuzione per KPI dashboard: base o totale */
 const euDashboardSalaryMode = ref('total')
+
+/** Giustificativi outlier quartile: chiave = index dipendente; testo non vuoto = escluso dall'analisi */
+const quartileOutlierJustifications = ref({})
+
+function isQuartileAnalysisExcluded(index) {
+  const t = quartileOutlierJustifications.value[String(index)]
+  return typeof t === 'string' && t.trim().length > 0
+}
 
 const geminiEnabled = ref(false)
 /** true se /api/gemini/status non risponde (es. solo Vite senza server API) */
@@ -140,8 +149,7 @@ async function viewAnalysis(id) {
     const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
     genderNormalizedCache.value = normalizedGender
     bandGenderJustifications.value = {}
-    recomputeBandGenderGaps()
-    recomputeAdjustedGap()
+    quartileOutlierJustifications.value = {}
 
     analisiStep.value = 'results'
     resultsTab.value = 'eu_dashboard'
@@ -179,7 +187,13 @@ function isPersonJustified(person) {
 }
 
 function hayBandAdjustedGapPct(hayBand) {
-  const people = (hayBand?.people || []).filter((p) => Number.isFinite(p?.totalSalary) && p.totalSalary > 0 && !isPersonJustified(p))
+  const people = (hayBand?.people || []).filter(
+    (p) =>
+      Number.isFinite(p?.totalSalary) &&
+      p.totalSalary > 0 &&
+      !isPersonJustified(p) &&
+      !isQuartileAnalysisExcluded(p?.index),
+  )
   const men = people.filter((p) => p.gender === 'M').map((p) => p.totalSalary)
   const women = people.filter((p) => p.gender === 'F').map((p) => p.totalSalary)
   if (!men.length || !women.length) return null
@@ -298,9 +312,8 @@ function startNuovaAnalisi() {
   justifications.value = {}
   justifyingLevel.value = null
   genderViewMode.value = 'media'
-  bandGenderGaps.value = []
-  adjustedGapResult.value = null
   genderNormalizedCache.value = []
+  quartileOutlierJustifications.value = {}
   bandGenderJustifications.value = {}
   resultsTab.value = 'eu_dashboard'
   euDashboardSalaryMode.value = 'total'
@@ -330,6 +343,7 @@ async function onLoadFromUrl() {
     const { rows, headers } = await parseExcelFromUrl(url)
     excelRows.value = rows
     excelHeaders.value = headers
+    quartileOutlierJustifications.value = {}
     const heuristic = detectColumnRoles(headers, rows)
     let suggested = { ...heuristic }
     if (geminiEnabled.value) {
@@ -434,8 +448,7 @@ async function confirmMapping() {
     // Gender gap per band & gap rettificato
     genderNormalizedCache.value = normalizedGender
     bandGenderJustifications.value = {}
-    recomputeBandGenderGaps()
-    recomputeAdjustedGap()
+    quartileOutlierJustifications.value = {}
 
     // Salvataggio DB
     try {
@@ -841,19 +854,78 @@ function appendPersonJustifySnippet(snippet) {
 
 // Gender gap dashboard
 const genderViewMode = ref('media') // 'media' | 'mediana'
-const bandGenderGaps = ref([])
-const adjustedGapResult = ref(null)
 const genderNormalizedCache = ref([])
+/** Dataset genere dopo esclusione outlier con giustificativo (dashboard, gap, quartili) */
+const genderNormalizedForAnalysis = computed(() =>
+  genderNormalizedCache.value.filter((r) => !isQuartileAnalysisExcluded(r.index)),
+)
+
+const bandGenderGaps = computed(() =>
+  computeBandGenderGaps(genderNormalizedForAnalysis.value, jobResults.value),
+)
+const adjustedGapResult = computed(() =>
+  computeAdjustedGap(genderNormalizedForAnalysis.value, 5),
+)
+
 const bandGenderJustifications = ref({})
 const expandedJustifyBand = ref(null)
 
 const euDashboard = computed(() =>
   computeEuGenderDashboard(
-    genderNormalizedCache.value,
+    genderNormalizedForAnalysis.value,
     jobResults.value,
     euDashboardSalaryMode.value,
   ),
 )
+
+const quartileOutlierRows = computed(() =>
+  computeQuartileOutliers(genderNormalizedForAnalysis.value, euDashboardSalaryMode.value),
+)
+
+const quartileExcludedEntries = computed(() => {
+  const cache = genderNormalizedCache.value
+  const out = []
+  for (const [key, text] of Object.entries(quartileOutlierJustifications.value)) {
+    const note = String(text || '').trim()
+    if (!note) continue
+    const idx = Number(key)
+    const person = cache.find((r) => r.index === idx)
+    if (person) out.push({ ...person, note })
+  }
+  return out.sort((a, b) => a.index - b.index)
+})
+
+const quartileOutlierModalOpen = ref(false)
+const quartileOutlierModalRow = ref(null)
+const quartileOutlierModalText = ref('')
+
+function openQuartileOutlierModal(row) {
+  quartileOutlierModalRow.value = row
+  quartileOutlierModalText.value = quartileOutlierJustifications.value[String(row.index)] || ''
+  quartileOutlierModalOpen.value = true
+}
+
+function closeQuartileOutlierModal() {
+  quartileOutlierModalOpen.value = false
+  quartileOutlierModalRow.value = null
+}
+
+function saveQuartileOutlierJustification() {
+  const row = quartileOutlierModalRow.value
+  if (!row) return
+  const text = quartileOutlierModalText.value.trim()
+  const next = { ...quartileOutlierJustifications.value }
+  if (text) next[String(row.index)] = text
+  else delete next[String(row.index)]
+  quartileOutlierJustifications.value = next
+  closeQuartileOutlierModal()
+}
+
+function clearQuartileOutlierExclusion(index) {
+  const next = { ...quartileOutlierJustifications.value }
+  delete next[String(index)]
+  quartileOutlierJustifications.value = next
+}
 
 const BAND_JUSTIFY_REASONS = [
   { id: 'seniority', label: 'Anzianità di servizio', icon: '⏳', desc: 'Differenza significativa nell\'anzianità media tra i generi nella band' },
@@ -940,14 +1012,6 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
-
-function recomputeBandGenderGaps() {
-  bandGenderGaps.value = computeBandGenderGaps(genderNormalizedCache.value, jobResults.value)
-}
-
-function recomputeAdjustedGap() {
-  adjustedGapResult.value = computeAdjustedGap(genderNormalizedCache.value, 5)
 }
 
 // Salary Review
@@ -1500,6 +1564,84 @@ function exportJobGradingPdf() {
                       ></div>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="eu-panel eu-outlier-panel">
+              <h4 class="eu-panel-title">Outlier per quartile (IQR)</h4>
+              <p class="eu-panel-desc">
+                Regola a scatola (IQR × 1,5) <strong>all’interno di ciascun quartile</strong> sulla
+                {{ euDashboardSalaryMode === 'base' ? 'retribuzione base' : 'retribuzione totale' }}.
+                Con un giustificativo testuale il dipendente viene <strong>escluso dall’analisi</strong> (KPI, quartili, gap per livello, fasce job grading).
+              </p>
+              <div v-if="quartileOutlierRows.length === 0" class="muted">
+                Nessun outlier rilevato (o dati insufficienti: servono almeno 8 persone con retribuzione valida).
+              </div>
+              <div v-else class="eu-outlier-table-wrap">
+                <table class="eu-outlier-table">
+                  <thead>
+                    <tr>
+                      <th>Q</th>
+                      <th>Nome</th>
+                      <th>Genere</th>
+                      <th class="eu-outlier-num">{{ euDashboardSalaryMode === 'base' ? 'Base' : 'Totale' }}</th>
+                      <th>Motivo</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in quartileOutlierRows" :key="'o-' + row.index">
+                      <td>Q{{ row.quartile }}</td>
+                      <td>{{ row.name || '—' }}</td>
+                      <td><span :class="personGenderClass(row.gender)">{{ row.gender }}</span></td>
+                      <td class="eu-outlier-num">{{ formatNum(row.salary) }}</td>
+                      <td class="eu-outlier-reason">{{ row.reason }}</td>
+                      <td>
+                        <button type="button" class="btn-eu-outlier" @click="openQuartileOutlierModal(row)">Giustificativo</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div v-if="quartileExcludedEntries.length" class="eu-outlier-excluded">
+                <h5 class="eu-outlier-excluded-title">Esclusi dall’analisi</h5>
+                <ul class="eu-outlier-excluded-list">
+                  <li v-for="ex in quartileExcludedEntries" :key="'ex-' + ex.index" class="eu-outlier-excluded-item">
+                    <div class="eu-outlier-ex-main">
+                      <span class="eu-outlier-ex-name">{{ ex.name || '—' }}</span>
+                      <span class="muted">#{{ ex.index }}</span>
+                    </div>
+                    <p class="eu-outlier-ex-note">{{ ex.note }}</p>
+                    <button type="button" class="btn-eu-outlier btn-eu-outlier-ghost" @click="clearQuartileOutlierExclusion(ex.index)">Ripristina in analisi</button>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div
+              v-if="quartileOutlierModalOpen"
+              class="eu-outlier-modal-backdrop"
+              @click.self="closeQuartileOutlierModal"
+            >
+              <div class="eu-outlier-modal" role="dialog" aria-modal="true" aria-labelledby="eu-outlier-modal-title">
+                <h4 id="eu-outlier-modal-title">Giustificativo outlier quartile</h4>
+                <p v-if="quartileOutlierModalRow" class="eu-outlier-modal-sub muted">
+                  {{ quartileOutlierModalRow.name || 'Dipendente' }} · Q{{ quartileOutlierModalRow.quartile }} ·
+                  {{ formatNum(quartileOutlierModalRow.salary) }}
+                </p>
+                <label class="eu-outlier-label" for="eu-outlier-ta">Motivazione (testo non vuoto = esclusione dall’analisi)</label>
+                <textarea
+                  id="eu-outlier-ta"
+                  v-model="quartileOutlierModalText"
+                  class="eu-outlier-textarea"
+                  rows="4"
+                  placeholder="Es. incarico straordinario, part-time, dati anomali, assenza storica, ecc."
+                ></textarea>
+                <div class="eu-outlier-modal-actions">
+                  <button type="button" class="btn-eu-outlier" @click="saveQuartileOutlierJustification">Salva ed escludi</button>
+                  <button type="button" class="btn-eu-outlier btn-eu-outlier-ghost" @click="closeQuartileOutlierModal">Annulla</button>
                 </div>
               </div>
             </div>
@@ -3472,6 +3614,150 @@ function exportJobGradingPdf() {
   font-size: 0.8rem;
   color: var(--text-secondary);
   line-height: 1.45;
+}
+.eu-outlier-panel {
+  margin-bottom: 1.25rem;
+}
+.eu-outlier-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+.eu-outlier-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.eu-outlier-table th,
+.eu-outlier-table td {
+  border-bottom: 1px solid var(--border-light);
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  vertical-align: middle;
+}
+.eu-outlier-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.eu-outlier-num {
+  text-align: right;
+  white-space: nowrap;
+}
+.eu-outlier-reason {
+  color: var(--text-secondary);
+  max-width: 14rem;
+}
+.btn-eu-outlier {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid #2152ff;
+  background: linear-gradient(310deg, #2152ff 0%, #21d4fd 100%);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-eu-outlier:hover {
+  filter: brightness(1.05);
+}
+.btn-eu-outlier-ghost {
+  background: transparent;
+  color: #2152ff;
+  border-color: var(--border-light);
+}
+.eu-outlier-excluded {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--border-light);
+}
+.eu-outlier-excluded-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.eu-outlier-excluded-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.eu-outlier-excluded-item {
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.eu-outlier-excluded-item:last-child {
+  border-bottom: none;
+}
+.eu-outlier-ex-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.eu-outlier-ex-name {
+  font-weight: 600;
+}
+.eu-outlier-ex-note {
+  margin: 0.35rem 0 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.eu-outlier-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.eu-outlier-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 1.25rem 1.35rem;
+  max-width: 28rem;
+  width: 100%;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.18);
+}
+.eu-outlier-modal h4 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.eu-outlier-modal-sub {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+}
+.eu-outlier-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: var(--text-secondary);
+}
+.eu-outlier-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-page);
+  color: inherit;
+  resize: vertical;
+  min-height: 5rem;
+  margin-bottom: 1rem;
+}
+.eu-outlier-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 .eu-quartile-chart {
   display: flex;

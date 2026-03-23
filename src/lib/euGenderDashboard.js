@@ -19,6 +19,64 @@ export function gapSeverityClass(pct) {
   return 'gap-severity-red'
 }
 
+function percentileSorted(sortedArr, p) {
+  const n = sortedArr.length
+  if (!n) return 0
+  const idx = (n - 1) * p
+  const lo = Math.floor(idx)
+  const hi = Math.ceil(idx)
+  if (lo === hi) return sortedArr[lo]
+  return sortedArr[lo] + (sortedArr[hi] - sortedArr[lo]) * (idx - lo)
+}
+
+/**
+ * Outlier per quartile retributivo (stessa suddivisione della dashboard):
+ * dentro ogni quartile si applica la regola box-plot IQR (1.5×) sulle retribuzioni.
+ * @returns {Array<{ index: number, name: unknown, gender: string, salary: number, quartile: number, reason: string }>}
+ */
+export function computeQuartileOutliers(normalized, salaryMode) {
+  const field = salaryFieldForMode(salaryMode)
+  const norm = (normalized || []).filter(
+    (r) => (r.gender === 'M' || r.gender === 'F') && validSalary(r, field),
+  )
+  if (norm.length < 8) return []
+
+  const sorted = [...norm].sort((a, b) => a[field] - b[field])
+  const len = sorted.length
+  const qSize = Math.ceil(len / 4) || 1
+  const outliers = []
+
+  for (let qi = 0; qi < 4; qi++) {
+    const start = qi * qSize
+    const end = Math.min(len, (qi + 1) * qSize)
+    const chunk = sorted.slice(start, end)
+    if (chunk.length < 4) continue
+
+    const vals = chunk.map((r) => r[field]).sort((a, b) => a - b)
+    const q1 = percentileSorted(vals, 0.25)
+    const q3 = percentileSorted(vals, 0.75)
+    const iqr = q3 - q1
+    const low = q1 - 1.5 * iqr
+    const high = q3 + 1.5 * iqr
+
+    for (const r of chunk) {
+      const v = r[field]
+      if (v < low || v > high) {
+        outliers.push({
+          index: r.index,
+          name: r.name,
+          gender: r.gender,
+          salary: v,
+          quartile: qi + 1,
+          reason: v < low ? 'Sotto la soglia inferiore (IQR)' : 'Sopra la soglia superiore (IQR)',
+        })
+      }
+    }
+  }
+
+  return outliers.sort((a, b) => a.quartile - b.quartile || b.salary - a.salary)
+}
+
 function normByIndexMap(normalized) {
   return new Map((normalized || []).map((r) => [r.index, r]))
 }
