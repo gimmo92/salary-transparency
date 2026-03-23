@@ -490,6 +490,17 @@ function formatPctSigned(n) {
   const sign = n > 0 ? '+' : ''
   return `${sign}${n.toFixed(1)}%`
 }
+/** Scostamento % retribuzione totale vs media della fascia (stesso bucket punteggio) */
+function formatDeviationVsBandMean(p) {
+  return formatPctSigned(p?.deviationFromHayBandMeanPct)
+}
+/** Testo del livello 1–5 per un fattore (comportamento valutato) */
+function transparencyLevelText(factorDef, score) {
+  const s = Number(score)
+  if (!factorDef?.levels?.length || !Number.isFinite(s)) return '–'
+  const idx = Math.max(0, Math.min(4, Math.round(s) - 1))
+  return factorDef.levels[idx] || '–'
+}
 
 /** Punteggio performance mock (40–100), deterministico per indice dipendente */
 function mockPerformanceScoreForPerson(personIndex) {
@@ -1772,10 +1783,55 @@ function exportJobGradingPdf() {
                     </div>
                     <div
                       v-if="isRoleDetailExpanded(band.level, sub.label, rb.role)"
-                      class="people-detail hay-person-detail"
+                      class="jg-role-expand-block"
                     >
+                      <div class="jg-role-valuation-panel">
+                        <h4 class="jg-role-valuation-title">Dettaglio valutazione — {{ rb.role }}</h4>
+                        <p class="jg-role-valuation-lead muted">
+                          Pesi delle <strong>macro-categorie</strong> sul totale e dei <strong>fattori</strong> all’interno di ciascuna area.
+                          Per ogni fattore: punteggio assegnato (1–5) e <strong>comportamento</strong> corrispondente alla scala.
+                        </p>
+                        <div class="jg-role-valuation-table-wrap">
+                          <table class="jg-role-valuation-table">
+                            <thead>
+                              <tr>
+                                <th>Macro-area (peso sul totale)</th>
+                                <th>Fattore (peso sull’area)</th>
+                                <th>Punteggio</th>
+                                <th>Comportamento valutato</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <template v-for="area in TRANSPARENCY_MACRO_AREAS" :key="'v-' + area.id + '-' + rb.role">
+                                <tr v-for="(f, fi) in area.factors" :key="f.id">
+                                  <td v-if="fi === 0" :rowspan="area.factors.length" class="jg-rv-mac">
+                                    <strong>{{ area.label }}</strong>
+                                    <div class="jg-rv-w">{{ area.weightPct }}% sul totale valutazione</div>
+                                  </td>
+                                  <td class="jg-rv-fac">
+                                    <strong>{{ f.label }}</strong>
+                                    <div class="jg-rv-w">{{ f.weightPct }}% · {{ f.description }}</div>
+                                  </td>
+                                  <td class="jg-rv-score">{{ roleTr(rb, f.id) ?? '–' }}</td>
+                                  <td class="jg-rv-beh">{{ transparencyLevelText(f, roleTr(rb, f.id)) }}</td>
+                                </tr>
+                              </template>
+                            </tbody>
+                            <tfoot>
+                              <tr class="jg-rv-foot">
+                                <td colspan="2"><strong>Punteggio pesato complessivo (scala 1–5)</strong></td>
+                                <td colspan="2" class="jg-rv-foot-score">
+                                  <strong>{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</strong>
+                                  <span class="muted jg-rv-foot-hint">Σ (punteggio × peso fattore)</span>
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+                      <div class="people-detail hay-person-detail jg-role-persons-after-table">
                       <div class="people-header hay-person-header">
-                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span>Anzianità</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
+                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span class="hay-person-deviation-head" title="Scostamento % retribuzione totale rispetto alla media della fascia">Scost. vs media fascia</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
                       </div>
                       <div
                         v-for="p in rb.people"
@@ -1818,7 +1874,7 @@ function exportJobGradingPdf() {
                           ><circle cx="12" cy="12" r="9"/><path d="M9 9h.01"/><path d="M15 9h.01"/><path d="M8 15c1.2 1.2 2.6 1.8 4 1.8s2.8-.6 4-1.8"/></svg>
                           {{ p.name || '–' }}
                         </span>
-                        <span class="hay-seniority-cell" :title="formatSeniorityDisplay(p.seniority)">{{ formatSeniorityDisplay(p.seniority) }}</span>
+                        <span class="hay-person-deviation-cell" title="Retribuzione totale vs media aritmetica della fascia (stesso punteggio pesato)">{{ formatDeviationVsBandMean(p) }}</span>
                         <span>{{ formatNum(p.baseSalary) }}</span>
                         <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
@@ -1836,6 +1892,7 @@ function exportJobGradingPdf() {
                           </button>
                           <span v-else class="muted hay-person-no-justify">–</span>
                         </span>
+                      </div>
                       </div>
                     </div>
                   </template>
@@ -4275,6 +4332,109 @@ function exportJobGradingPdf() {
   font-weight: 700;
   color: var(--text-primary);
 }
+.jg-role-expand-block {
+  margin: 0.35rem 0 0.5rem 0.25rem;
+  padding-left: 0.5rem;
+  border-left: 3px solid rgba(33, 82, 255, 0.35);
+}
+.jg-role-valuation-panel {
+  background: #f8fafc;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 0.75rem 0.85rem 0.9rem;
+  margin-bottom: 0.65rem;
+}
+.jg-role-valuation-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.jg-role-valuation-lead {
+  margin: 0 0 0.65rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.jg-role-valuation-table-wrap {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: #fff;
+}
+.jg-role-valuation-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+.jg-role-valuation-table th,
+.jg-role-valuation-table td {
+  border-bottom: 1px solid var(--border-light);
+  padding: 0.45rem 0.5rem;
+  vertical-align: top;
+  text-align: left;
+}
+.jg-role-valuation-table thead th {
+  background: rgba(10, 108, 210, 0.09);
+  font-weight: 700;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+.jg-role-valuation-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.jg-rv-mac {
+  background: rgba(10, 108, 210, 0.05);
+  font-weight: 600;
+  min-width: 7.5rem;
+  width: 18%;
+}
+.jg-rv-fac {
+  min-width: 10rem;
+  width: 22%;
+}
+.jg-rv-w {
+  font-size: 0.72em;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-top: 0.2rem;
+  line-height: 1.3;
+}
+.jg-rv-score {
+  text-align: center;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  width: 4rem;
+  white-space: nowrap;
+}
+.jg-rv-beh {
+  font-size: 0.72rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.jg-rv-foot td {
+  background: rgba(33, 82, 255, 0.06);
+  border-top: 2px solid var(--border-light);
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+.jg-rv-foot-score {
+  font-variant-numeric: tabular-nums;
+}
+.jg-rv-foot-score strong {
+  font-size: 1rem;
+}
+.jg-rv-foot-hint {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 400;
+  margin-top: 0.2rem;
+}
+.jg-role-persons-after-table {
+  margin-top: 0.25rem;
+}
 .job-grading-tab-head {
   display: flex;
   align-items: flex-start;
@@ -4444,6 +4604,16 @@ function exportJobGradingPdf() {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.hay-person-deviation-head {
+  line-height: 1.2;
+  white-space: normal;
+}
+.hay-person-deviation-cell {
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
   color: var(--text-secondary);
 }
 
