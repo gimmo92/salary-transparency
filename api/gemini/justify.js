@@ -1,5 +1,15 @@
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
+function fmt(n) {
+  if (n == null || !Number.isFinite(Number(n))) return 'n/d'
+  return Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 })
+}
+
+function fmtPct(n) {
+  if (n == null || !Number.isFinite(Number(n))) return 'n/d'
+  return `${Number(n).toFixed(2)}%`
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -11,39 +21,74 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { role, level, band, totalScore, medianSalary, deviation, jobFamily, nEmployees } = req.body || {}
+    const b = req.body || {}
+    const {
+      role,
+      level,
+      bandId,
+      bandRangeLabel,
+      employeeName,
+      gender,
+      personTotalSalary,
+      avgFasciaSalary,
+      personDeviationFromFasciaPct,
+      genderGapPct,
+      avgSalaryMen,
+      avgSalaryWomen,
+      nMen,
+      nWomen,
+      trParametricScore100,
+      trWeightedScore,
+      seniorityPctVsFascia,
+      performancePctVsFascia,
+    } = b
 
-    const prompt = `Sei un consulente HR esperto in politiche retributive e trasparenza salariale (D.Lgs. 198/2006, Direttiva UE 2023/970).
+    const prompt = `Sei un consulente del lavoro e HR. Devi scrivere un testo breve di GIUSTIFICATIVO (report interno / documentazione trasparenza retributiva, riferimento Direttiva UE 2023/970 e principi di non discriminazione).
 
-Devi suggerire un giustificativo professionale per la deviazione retributiva di un ruolo rispetto alla mediana della sua banda di appartenenza.
-
-Dati del ruolo:
+CONTESTO (stessa fascia di job grading: stesso punteggio parametrico / stesso bucket retributivo atteso):
 - Ruolo: ${role || 'N/D'}
-- Livello contrattuale CCNL: ${level || 'N/D'}
-- Job Family: ${jobFamily || 'General'}
-- Banda di appartenenza: ${band}
-- Punteggio totale: ${totalScore}
-- Retribuzione mediana di banda: €${medianSalary}
-- Deviazione dalla mediana: ${deviation}%
-- Numero dipendenti nel ruolo: ${nEmployees}
+- Livello CCNL: ${level || 'N/D'}
+- Fascia: ${bandId || 'N/D'} — ${bandRangeLabel || 'N/D'}
+- Punteggio parametrico ruolo (0–100): ${trParametricScore100 != null ? fmt(trParametricScore100) : 'n/d'}
+- Media pesata fattori (1–5): ${trWeightedScore != null ? fmt(trWeightedScore) : 'n/d'}
 
-Scrivi un giustificativo conciso (3-5 frasi) in italiano che spieghi la ragione della deviazione retributiva, citando fattori oggettivi come:
-- Scarsità del profilo sul mercato del lavoro
-- Competenze specialistiche richieste
-- Livello contrattuale e minimi tabellari CCNL
-- Anzianità media nel ruolo
-- Responsabilità aggiuntive non catturate dal job grading
-- Condizioni di mercato per la job family
+DIPENDENTE PER CUI SI REDIGE IL GIUSTIFICATIVO:
+- Nome o etichetta: ${employeeName || 'N/D'}
+- Genere (M/F): ${gender || 'N/D'}
+- Retribuzione totale del dipendente: € ${fmt(personTotalSalary)} (questo è il reddito del singolo, NON la media di fascia)
 
-Il tono deve essere professionale, adatto a un report di compliance.
-Rispondi SOLO con il testo del giustificativo, senza premesse o formattazione.`
+DATI DELLA FASCIA (tutti i ruoli con lo stesso punteggio nella stessa analisi):
+- Retribuzione media complessiva della fascia: € ${fmt(avgFasciaSalary)}
+- Scostamento % del dipendente rispetto alla media della fascia: ${fmtPct(personDeviationFromFasciaPct)} (positivo = sopra media, negativo = sotto media)
+- Numero uomini nella fascia: ${nMen ?? 'n/d'}, numero donne: ${nWomen ?? 'n/d'}
+- Media retribuzione uomini nella fascia: € ${fmt(avgSalaryMen)}
+- Media retribuzione donne nella fascia: € ${fmt(avgSalaryWomen)}
+- Gap retributivo M/F nella fascia (stima da medie: (media M − media F) / media M × 100): ${fmtPct(genderGapPct)}
+
+ELEMENTI OPZIONALI (se disponibili, puoi citarli solo se coerenti):
+- Scostamento anzianità vs media fascia: ${seniorityPctVsFascia != null ? fmtPct(seniorityPctVsFascia) : 'n/d'}
+- Scostamento performance vs media fascia: ${performancePctVsFascia != null ? fmtPct(performancePctVsFascia) : 'n/d'}
+
+ISTRUZIONI DI SCRITTURA (OBBLIGATORIE):
+1) Scrivi in ITALIANO, tono professionale e neutro.
+2) Tra 3 e 5 frasi COMPLETE: ogni frase deve finire con un punto fermo. Non interrompere a metà parola o a metà frase.
+3) Spiega in modo chiaro il contesto del gap di genere nella fascia (medie M vs F) e, se utile, la posizione del dipendente rispetto alla media della fascia. NON scrivere che la "mediana di banda" sia la retribuzione del dipendente: sono concetti diversi.
+4) Non inventare cifre: usa solo i dati sopra o formulazioni generiche ("ove applicabile").
+5) Non usare elenchi puntati; solo paragrafo di testo continuo.
+6) Non aggiungere titoli, prefissi tipo "Ecco il testo:" o conclusioni tipo "Spero sia utile". Solo il testo del giustificativo.
+
+Rispondi ESCLUSIVAMENTE con il paragrafo del giustificativo, nient'altro.`
 
     const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 300 },
+        generationConfig: {
+          temperature: 0.25,
+          maxOutputTokens: 1200,
+          topP: 0.9,
+        },
       }),
     })
 
@@ -53,9 +98,19 @@ Rispondi SOLO con il testo del giustificativo, senza premesse o formattazione.`
     }
 
     const data = await geminiRes.json()
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    const cand = data.candidates?.[0]
+    const text = cand?.content?.parts?.[0]?.text || ''
+    const finish = cand?.finishReason
 
-    return res.status(200).json({ suggestion: text.trim() })
+    let out = String(text).trim()
+    if (finish === 'MAX_TOKENS' && out.length > 0 && !/[.!?]\s*$/.test(out)) {
+      const lastPeriod = Math.max(out.lastIndexOf('.'), out.lastIndexOf('!'), out.lastIndexOf('?'))
+      if (lastPeriod > 40) {
+        out = out.slice(0, lastPeriod + 1).trim()
+      }
+    }
+
+    return res.status(200).json({ suggestion: out })
   } catch (err) {
     console.error('Gemini justify error:', err)
     return res.status(500).json({ error: err.message || 'Gemini justify failed' })

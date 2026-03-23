@@ -158,10 +158,17 @@ const WEIGHTS = transparencyWeightsMap()
 
 /**
  * Fascia da punteggio pesato 1–5 (mezzi passi per raggruppare ruoli simili).
+ * key/min/max restano sulla scala 1–5; la label UI usa la scala parametrica /100 (×20).
  */
 function fasciaFromWeightedScore(w) {
   const x = Math.min(5, Math.max(1, Math.round(Number(w) * 2) / 2))
   return { min: x, max: x, key: String(x) }
+}
+
+/** Da media pesata 1–5 a punteggio parametrico /100 (Σ %×voto/5 con pesi al 100%). */
+function parametric100FromWeighted15(w) {
+  const x = Math.min(5, Math.max(1, Number(w) || 0))
+  return Math.round(x * 20)
 }
 
 /**
@@ -535,7 +542,7 @@ export function groupByLevel(normalizedData, roleOverrides = {}) {
       }
     })
 
-    // 2) Raggruppa ruoli per punteggio pesato (scala 1–5, passi da 0,5)
+    // 2) Raggruppa ruoli per punteggio pesato (scala 1–5, passi da 0,5); label fascia in /100
     const hayMap = new Map()
     for (const roleProfile of roleProfiles) {
       const bucket = fasciaFromWeightedScore(roleProfile.trWeightedScore ?? 3)
@@ -579,11 +586,14 @@ export function groupByLevel(normalizedData, roleOverrides = {}) {
 
         const bandTrMeans = meanTransparencyScores(allPeople) || {}
 
+        const score100 = parametric100FromWeighted15(hb.min)
         return {
           id: `Fascia ${idx + 1}`,
-          label: `Punteggio ${hb.key}`,
+          label: `Punteggio ${score100}/100`,
           minScore: hb.min,
           maxScore: hb.max,
+          minScore100: score100,
+          maxScore100: score100,
           n: people.length,
           nValid: valid.length,
           nRoles: hb.roles.length,

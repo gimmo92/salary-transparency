@@ -77,10 +77,31 @@ const roleValuationModalRb = computed(() => {
 })
 
 function openRoleValuationModal(level, subLabel, roleName) {
+  const band = jobResults.value.find((b) => b.level === level)
+  const sub = band?.hayBands?.find((h) => h.label === subLabel)
+  const role = sub?.roles?.find((r) => r.role === roleName)
+  if (!role) return
+  const next = emptyRoleTransparencyForm()
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    next[f.id] = clampTrScore(role[trFieldName(f.id)])
+  }
+  roleValuationForm.value = next
   roleValuationModal.value = { level, subLabel, roleName }
 }
 function closeRoleValuationModal() {
   roleValuationModal.value = null
+}
+function saveRoleValuationModal() {
+  const ctx = roleValuationModal.value
+  if (!ctx) return
+  const overrides = {}
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    overrides[f.id] = clampTrScore(roleValuationForm.value[f.id])
+  }
+  const key = `${ctx.level}|${ctx.roleName}`
+  transparencyRoleOverrides.value = { ...transparencyRoleOverrides.value, [key]: overrides }
+  roleValuationModal.value = null
+  runJobGrading()
 }
 
 /** Risultati analisi: dashboard UE genere (default) | job grading | giustificativo persona */
@@ -551,6 +572,8 @@ function emptyRoleTransparencyForm() {
   }
   return o
 }
+/** Form modifica punteggi nel popup Dettaglio valutazione */
+const roleValuationForm = ref(emptyRoleTransparencyForm())
 function roleTr(role, factorId) {
   if (!role) return null
   return role[trFieldName(factorId)]
@@ -581,20 +604,24 @@ function formatMacroAreaScore(role, area) {
   const s = roleMacroAreaParametricPoints(role, area)
   return s == null ? '–' : formatNum(s)
 }
-function previewRoleWeightedScore() {
+function previewValuationFormWeighted() {
   let w = 0
   for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    const v = roleParamsForm.value[f.id]
-    w += clampTrScore(v) * (f.weightPct / 100)
+    w += clampTrScore(roleValuationForm.value[f.id]) * (f.weightPct / 100)
   }
   return Math.round(w * 100) / 100
 }
-function previewRoleParametric100() {
+function previewValuationFormParametric100() {
   let pts = 0
   for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    pts += transparencyParametricPointsFromFactor(clampTrScore(roleParamsForm.value[f.id]), f.weightPct)
+    pts += transparencyParametricPointsFromFactor(clampTrScore(roleValuationForm.value[f.id]), f.weightPct)
   }
   return Math.round(pts * 100) / 100
+}
+/** Contributo da form modifica (popup dettaglio) */
+function formatFactorParametricContributionFromForm(factor) {
+  const v = transparencyParametricPointsFromFactor(clampTrScore(roleValuationForm.value[factor.id]), factor.weightPct)
+  return formatNum(v)
 }
 /** Contributo singolo fattore su scala 100: % peso × voto / 5 */
 function formatFactorParametricContribution(role, factor) {
@@ -613,41 +640,7 @@ const justifyingLevel = ref(null)
 const justifyText = ref('')
 const personJustifications = ref({})
 const justifyingPerson = ref(null)
-const editingRoleParams = ref(null)
-const roleParamsForm = ref(emptyRoleTransparencyForm())
 const justifyAiLoading = ref(false)
-
-function openRoleParamsModal(level, subLabel, roleName) {
-  const band = jobResults.value.find((b) => b.level === level)
-  const sub = band?.hayBands?.find((h) => h.label === subLabel)
-  const role = sub?.roles?.find((r) => r.role === roleName)
-  if (!role) return
-
-  editingRoleParams.value = { level, subLabel, roleName }
-  const next = emptyRoleTransparencyForm()
-  for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    next[f.id] = clampTrScore(role[trFieldName(f.id)])
-  }
-  roleParamsForm.value = next
-}
-
-function cancelRoleParamsModal() {
-  editingRoleParams.value = null
-}
-
-function saveRoleParams() {
-  const ctx = editingRoleParams.value
-  if (!ctx) return
-
-  const overrides = {}
-  for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    overrides[f.id] = clampTrScore(roleParamsForm.value[f.id])
-  }
-  const key = `${ctx.level}|${ctx.roleName}`
-  transparencyRoleOverrides.value = { ...transparencyRoleOverrides.value, [key]: overrides }
-  editingRoleParams.value = null
-  runJobGrading()
-}
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -730,6 +723,13 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     gapFasciaPct: gapPct,
     gapFasciaFormatted:
       gapPct != null ? formatGapMforF(gapPct, hayBandHasJustifications(hayBand)) : '–',
+    /** Dati fascia per prompt AI (non confondere con retribuzione del singolo) */
+    avgFasciaSalary: hayBand.avgTotalSalary ?? null,
+    personDeviationFromFasciaPct: person.deviationFromHayBandMeanPct ?? null,
+    avgSalaryMen: hayBand.avgSalaryMen,
+    avgSalaryWomen: hayBand.avgSalaryWomen,
+    nMenFascia: hayBand.nMen ?? 0,
+    nWomenFascia: hayBand.nWomen ?? 0,
   }
   resultsTabBeforeJustify.value = resultsTab.value
   resultsTab.value = 'person_justify'
@@ -741,10 +741,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
 }
 
 function canSuggestPersonJustifyAI() {
-  if (!justifyingPerson.value) return false
-  const s = justifyingPerson.value.seniorityPctVsFascia
-  const p = justifyingPerson.value.performancePctVsFascia
-  return (Number.isFinite(s) && s > 0) || (Number.isFinite(p) && p > 0)
+  return !!justifyingPerson.value
 }
 
 async function suggestPersonJustifyAI() {
@@ -755,12 +752,22 @@ async function suggestPersonJustifyAI() {
     const suggestion = await suggestJustificationWithGemini({
       role: j.roleName,
       level: j.levelLabel,
-      band: j.fasciaId,
-      totalScore: j.trParametricScore100 ?? j.trWeightedScore,
-      medianSalary: j.totalSalary,
-      deviation: j.gapFasciaPct,
-      jobFamily: j.levelLabel,
-      nEmployees: 1,
+      bandId: j.fasciaId,
+      bandRangeLabel: j.fasciaRange,
+      employeeName: j.displayName,
+      gender: j.gender,
+      personTotalSalary: j.totalSalary,
+      avgFasciaSalary: j.avgFasciaSalary,
+      personDeviationFromFasciaPct: j.personDeviationFromFasciaPct,
+      genderGapPct: j.gapFasciaPct,
+      avgSalaryMen: j.avgSalaryMen,
+      avgSalaryWomen: j.avgSalaryWomen,
+      nMen: j.nMenFascia,
+      nWomen: j.nWomenFascia,
+      trParametricScore100: j.trParametricScore100,
+      trWeightedScore: j.trWeightedScore,
+      seniorityPctVsFascia: j.seniorityPctVsFascia,
+      performancePctVsFascia: j.performancePctVsFascia,
     })
     const text = String(suggestion || '').trim()
     if (text) {
@@ -1354,6 +1361,111 @@ onMounted(async () => {
   }
 })
 
+function bandJustifyReasonLabelsForPdf(reasonIds) {
+  if (!reasonIds?.length) return ''
+  return reasonIds.map((id) => BAND_JUSTIFY_REASONS.find((r) => r.id === id)?.label || id).join('; ')
+}
+
+/** Righe per PDF: giustificativi dipendenti salvati in job grading */
+function buildPdfJobGradingPersonRows() {
+  const notes = personJustifications.value || {}
+  const rows = []
+  const seen = new Set()
+  for (const b of jobResults.value || []) {
+    for (const sub of b.hayBands || []) {
+      for (const rb of sub.roles || []) {
+        for (const p of rb.people || []) {
+          const key = String(p.index)
+          const text = notes[key]
+          if (typeof text !== 'string' || !text.trim()) continue
+          seen.add(key)
+          rows.push({
+            livello: b.level || '–',
+            fascia: sub.label || '–',
+            ruolo: rb.role || '–',
+            index: p.index,
+            nome: (p.name && String(p.name).trim()) || `Dip. #${key}`,
+            genere: p.gender === 'M' ? 'M' : p.gender === 'F' ? 'F' : '–',
+            testo: text.trim().replace(/\r\n/g, '\n').replace(/\n/g, ' '),
+          })
+        }
+      }
+    }
+  }
+  for (const [key, text] of Object.entries(notes)) {
+    if (seen.has(key)) continue
+    const t = String(text || '').trim()
+    if (!t) continue
+    rows.push({
+      livello: '–',
+      fascia: '–',
+      ruolo: '–',
+      index: key,
+      nome: '–',
+      genere: '–',
+      testo: t.replace(/\r\n/g, '\n').replace(/\n/g, ' '),
+    })
+  }
+  return rows.sort((a, b) => {
+    const na = Number(a.index)
+    const nb = Number(b.index)
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+    return String(a.index).localeCompare(String(b.index))
+  })
+}
+
+function buildPdfQuartileJustificationRows() {
+  const rows = []
+  const cache = genderNormalizedCache.value || []
+  for (const [key, text] of Object.entries(quartileOutlierJustifications.value || {})) {
+    const t = String(text || '').trim()
+    if (!t) continue
+    const idx = Number(key)
+    const person = cache.find((r) => r.index === idx)
+    rows.push({
+      index: key,
+      nome: person?.name != null && String(person.name).trim() ? String(person.name).trim() : '–',
+      genere: person?.gender === 'M' ? 'M' : person?.gender === 'F' ? 'F' : '–',
+      livello: person?.level != null ? String(person.level) : '–',
+      ruolo: person?.role != null ? String(person.role) : '–',
+      testo: t.replace(/\r\n/g, '\n').replace(/\n/g, ' '),
+    })
+  }
+  return rows.sort((a, b) => Number(a.index) - Number(b.index))
+}
+
+function buildPdfBandGenderRows() {
+  const map = bandGenderJustifications.value || {}
+  const rows = []
+  for (const [band, j] of Object.entries(map)) {
+    if (!j) continue
+    const hasReasons = (j.reasons || []).length > 0
+    const note = String(j.note || '').trim()
+    const fileNames = (j.files || []).map((f) => f.name).filter(Boolean).join(', ')
+    if (!hasReasons && !note && !fileNames) continue
+    const reasonStr = bandJustifyReasonLabelsForPdf(j.reasons || [])
+    const parts = [reasonStr, note, fileNames].filter(Boolean)
+    rows.push({
+      band: String(band),
+      contenuto: parts.join(' | '),
+    })
+  }
+  return rows.sort((a, b) => a.band.localeCompare(b.band))
+}
+
+function buildPdfLevelJustificationRows() {
+  const rows = []
+  for (const [level, text] of Object.entries(justifications.value || {})) {
+    const t = String(text || '').trim()
+    if (!t) continue
+    rows.push({
+      livello: String(level),
+      testo: t.replace(/\r\n/g, '\n').replace(/\n/g, ' '),
+    })
+  }
+  return rows.sort((a, b) => a.livello.localeCompare(b.livello))
+}
+
 // PDF export job grading
 function exportJobGradingPdf() {
   try {
@@ -1416,6 +1528,123 @@ function exportJobGradingPdf() {
       },
       margin: { left: 14, right: 14 },
     })
+
+    let nextY = doc.lastAutoTable?.finalY != null ? doc.lastAutoTable.finalY + 12 : y + 60
+
+    const jgRows = buildPdfJobGradingPersonRows()
+    const qRows = buildPdfQuartileJustificationRows()
+    const bandRows = buildPdfBandGenderRows()
+    const levRows = buildPdfLevelJustificationRows()
+    const anyJustify = jgRows.length + qRows.length + bandRows.length + levRows.length > 0
+
+    const tableOptsText = {
+      theme: 'grid',
+      headStyles: { fillColor: [10, 108, 210], fontSize: 7, halign: 'center' },
+      bodyStyles: { fontSize: 6.5, overflow: 'linebreak' },
+      margin: { left: 14, right: 14 },
+    }
+
+    const newPageIfNeeded = (start) => {
+      if (start > 155) {
+        doc.addPage()
+        return 16
+      }
+      return start
+    }
+
+    if (jgRows.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Giustificativi dipendenti (job grading)', 14, nextY)
+      nextY += 6
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Livello CCNL', 'Fascia', 'Ruolo', '#', 'Nome', 'Genere', 'Testo giustificativo']],
+        body: jgRows.map((r) => [r.livello, r.fascia, r.ruolo, String(r.index), r.nome, r.genere, r.testo]),
+        columnStyles: {
+          0: { cellWidth: 22 },
+          1: { cellWidth: 26 },
+          2: { cellWidth: 28 },
+          3: { cellWidth: 10, halign: 'center' },
+          4: { cellWidth: 28 },
+          5: { cellWidth: 12, halign: 'center' },
+          6: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 12
+    }
+
+    if (qRows.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Giustificativi outlier quartile (dashboard UE)', 14, nextY)
+      nextY += 6
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['#', 'Nome', 'Genere', 'Livello', 'Ruolo', 'Testo giustificativo']],
+        body: qRows.map((r) => [r.index, r.nome, r.genere, r.livello, r.ruolo, r.testo]),
+        columnStyles: {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 32 },
+          2: { cellWidth: 12, halign: 'center' },
+          3: { cellWidth: 22 },
+          4: { cellWidth: 32 },
+          5: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 12
+    }
+
+    if (bandRows.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Giustificativi gap per livello (dashboard UE)', 14, nextY)
+      nextY += 6
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Livello / banda', 'Motivi, note e allegati (nomi file)']],
+        body: bandRows.map((r) => [r.band, r.contenuto]),
+        columnStyles: {
+          0: { cellWidth: 35 },
+          1: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 12
+    }
+
+    if (levRows.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Giustificativi per livello CCNL (modale)', 14, nextY)
+      nextY += 6
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Livello', 'Testo giustificativo']],
+        body: levRows.map((r) => [r.livello, r.testo]),
+        columnStyles: {
+          0: { cellWidth: 35 },
+          1: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 12
+    }
+
+    if (!anyJustify) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'italic')
+      doc.setTextColor(100, 100, 100)
+      doc.text('Nessun giustificativo testuale registrato nell’analisi corrente.', 14, nextY)
+      doc.setTextColor(0, 0, 0)
+    }
 
     doc.save('job-grading-report.pdf')
   } catch (err) {
@@ -1759,7 +1988,7 @@ function exportJobGradingPdf() {
             </div>
             <div class="job-table" v-if="band.hayBands && band.hayBands.length">
               <div class="job-row header hay-row">
-                <span>Fascia</span><span>Range score</span><span>N uomini</span><span>N donne</span><span>N ruoli</span><span>Media retrib. M</span><span>Media retrib. F</span>
+                <span>Fascia</span><span title="Fascia di punteggio parametrico (scala /100)">Range /100</span><span>N uomini</span><span>N donne</span><span>N ruoli</span><span>Media retrib. M</span><span>Media retrib. F</span>
               </div>
               <template v-for="sub in band.hayBands" :key="`${band.level}-${sub.label}`">
                 <div
@@ -1820,13 +2049,6 @@ function exportJobGradingPdf() {
                     >
                       <span class="role-cell-main">
                         <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg>{{ isRoleDetailExpanded(band.level, sub.label, rb.role) ? '▾' : '▸' }} {{ rb.role }}</span>
-                        <button
-                          class="role-settings-btn"
-                          title="Modifica punteggi 1–5 del ruolo"
-                          @click.stop="openRoleParamsModal(band.level, sub.label, rb.role)"
-                        >
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .33-1.82 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.82.33h0A1.7 1.7 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
-                        </button>
                       </span>
                       <span
                         v-for="area in TRANSPARENCY_MACRO_AREAS"
@@ -1952,7 +2174,7 @@ function exportJobGradingPdf() {
             <p class="person-justify-tab-lead">
               <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
               · <strong>Livello CCNL</strong> {{ justifyingPerson.bandNum }} ({{ justifyingPerson.levelLabel }})
-              · <strong>{{ justifyingPerson.fasciaId }}</strong> — range score {{ justifyingPerson.fasciaRange }}
+              · <strong>{{ justifyingPerson.fasciaId }}</strong> — range /100 {{ justifyingPerson.fasciaRange }}
             </p>
 
             <div class="person-justify-summary-grid">
@@ -2126,6 +2348,9 @@ function exportJobGradingPdf() {
         <div v-if="roleValuationModal != null" class="justify-overlay" @click.self="closeRoleValuationModal">
           <div class="justify-modal justify-modal--wide jg-role-valuation-modal" role="dialog" aria-modal="true" aria-labelledby="jg-role-val-title">
             <h3 id="jg-role-val-title">Dettaglio valutazione — {{ roleValuationModal.roleName }}</h3>
+            <p class="justify-hint jg-role-valuation-edit-hint">
+              Modifica i <strong>voti (1–5)</strong> per ogni fattore e salva. Apri <strong>Info analisi</strong> per le definizioni dei livelli.
+            </p>
             <template v-if="roleValuationModalRb">
               <div class="jg-role-valuation-table-wrap">
                 <table class="jg-role-valuation-table">
@@ -2148,8 +2373,19 @@ function exportJobGradingPdf() {
                           <strong>{{ f.label }}</strong>
                           <div class="jg-rv-w">{{ f.weightPct }}% · {{ f.description }}</div>
                         </td>
-                        <td class="jg-rv-score">{{ roleTr(roleValuationModalRb, f.id) ?? '–' }}</td>
-                        <td class="jg-rv-pt" title="% peso sul totale × voto / 5">{{ formatFactorParametricContribution(roleValuationModalRb, f) }}</td>
+                        <td class="jg-rv-score">
+                          <input
+                            v-model.number="roleValuationForm[f.id]"
+                            type="number"
+                            min="1"
+                            max="5"
+                            step="1"
+                            class="mapping-select jg-rv-input"
+                            :aria-label="'Voto ' + f.label"
+                            @click.stop
+                          />
+                        </td>
+                        <td class="jg-rv-pt" title="% peso sul totale × voto / 5">{{ formatFactorParametricContributionFromForm(f) }}</td>
                       </tr>
                     </template>
                   </tbody>
@@ -2158,14 +2394,14 @@ function exportJobGradingPdf() {
                       <td colspan="2"><strong>Punteggio parametrico (0–100)</strong></td>
                       <td class="muted">—</td>
                       <td class="jg-rv-foot-score">
-                        <strong>{{ roleValuationModalRb.trParametricScore100 != null ? formatNum(roleValuationModalRb.trParametricScore100) : '–' }}</strong>
+                        <strong>{{ formatNum(previewValuationFormParametric100()) }}</strong>
                         <span class="muted jg-rv-foot-hint">Σ (% peso × voto / 5); es. 10% e voto 4 → 8 pt</span>
                       </td>
                     </tr>
                     <tr class="jg-rv-foot jg-rv-foot--sub">
                       <td colspan="2"><strong>Media pesata (scala 1–5)</strong></td>
                       <td colspan="2" class="jg-rv-foot-score">
-                        <strong>{{ roleValuationModalRb.trWeightedScore != null ? formatNum(roleValuationModalRb.trWeightedScore) : '–' }}</strong>
+                        <strong>{{ formatNum(previewValuationFormWeighted()) }}</strong>
                         <span class="muted jg-rv-foot-hint">Σ (voto × peso fattore)</span>
                       </td>
                     </tr>
@@ -2175,32 +2411,9 @@ function exportJobGradingPdf() {
             </template>
             <p v-else class="muted jg-role-valuation-missing">Dati ruolo non disponibili.</p>
             <div class="justify-actions">
+              <button type="button" class="btn-secondary" @click="closeRoleValuationModal">Annulla</button>
               <span style="flex: 1"></span>
-              <button type="button" class="btn-primary" @click="closeRoleValuationModal">Chiudi</button>
-            </div>
-          </div>
-        </div>
-        <div v-if="editingRoleParams != null" class="justify-overlay" @click.self="cancelRoleParamsModal">
-          <div class="justify-modal justify-modal--wide">
-            <h3>Punteggi ruolo – {{ editingRoleParams.roleName }}</h3>
-            <p class="justify-hint">Scala <strong>1–5</strong> per fattore. Apri <strong>Info analisi</strong> per le definizioni dei livelli.</p>
-            <div class="role-params-grid role-params-grid--tr">
-              <label v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id" class="role-param-field">
-                <span>{{ f.label }} <span class="muted">({{ f.weightPct }}%)</span></span>
-                <input v-model.number="roleParamsForm[f.id]" type="number" min="1" max="5" step="1" class="mapping-select" />
-              </label>
-            </div>
-            <p class="role-params-total">
-              Punteggio parametrico: <strong>{{ previewRoleParametric100() }}</strong><span class="muted">/100</span>
-              <span class="muted role-params-formula"> — Σ (% peso × voto / 5)</span>
-            </p>
-            <p class="role-params-total role-params-total--sub muted">
-              Media pesata (1–5): <strong>{{ previewRoleWeightedScore() }}</strong>
-            </p>
-            <div class="justify-actions">
-              <span style="flex:1"></span>
-              <button class="btn-secondary" @click="cancelRoleParamsModal">Annulla</button>
-              <button class="btn-primary" @click="saveRoleParams">Salva e ricalcola fasce</button>
+              <button type="button" class="btn-primary" @click="saveRoleValuationModal">Salva e ricalcola fasce</button>
             </div>
           </div>
         </div>
@@ -4560,6 +4773,18 @@ function exportJobGradingPdf() {
   width: 4rem;
   white-space: nowrap;
 }
+.jg-rv-input {
+  width: 3.25rem;
+  max-width: 100%;
+  padding: 0.28rem 0.35rem;
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.jg-role-valuation-edit-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+}
 .jg-rv-foot td {
   background: rgba(33, 82, 255, 0.06);
   border-top: 2px solid var(--border-light);
@@ -4963,25 +5188,6 @@ function exportJobGradingPdf() {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-}
-
-.role-settings-btn {
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.role-settings-btn:hover {
-  color: var(--accent-blue);
-  border-color: var(--accent-blue);
-  background: rgba(10, 108, 210, 0.06);
 }
 
 .role-params-grid {
