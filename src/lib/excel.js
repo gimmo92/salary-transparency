@@ -51,23 +51,34 @@ export async function parseExcelFromUrl(url) {
   }
   const arrayBuffer = await response.arrayBuffer()
   const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-  const sheetName = workbook.SheetNames[0]
-  const sheet = workbook.Sheets[sheetName]
+  let best = { headers: [], rows: [], nonEmptyDataRows: -1 }
 
-  // raw: true (default) → numeri come number JS. raw: false produce stringhe formattate (anche in formato US)
-  // che rompono parseNumber italiano (punto decimale rimosso come migliaia) e gonfiano le retribuzioni.
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true })
-  if (!rows.length) {
-    return { rows: [], headers: [] }
+  // Alcuni file hanno il dataset "principale" in un foglio diverso dal primo.
+  // Selezioniamo il foglio con più righe dati non vuote.
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    if (!sheet) continue
+
+    // raw: true (default) → numeri come number JS. raw: false produce stringhe formattate (anche in formato US)
+    // che rompono parseNumber italiano (punto decimale rimosso come migliaia) e gonfiano le retribuzioni.
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true })
+    if (!rows.length) continue
+
+    const headerRowIndex = detectHeaderRow(rows)
+    const headers = (rows[headerRowIndex] || []).map((h) => String(h ?? '').trim())
+    const dataRows = rows.slice(headerRowIndex + 1)
+    const nonEmptyDataRows = dataRows.filter(
+      (row) => Array.isArray(row) && row.some((c) => c != null && String(c).trim() !== '')
+    ).length
+
+    if (nonEmptyDataRows > best.nonEmptyDataRows) {
+      best = { headers, rows: dataRows, nonEmptyDataRows }
+    }
   }
 
-  const headerRowIndex = detectHeaderRow(rows)
-  const headers = rows[headerRowIndex] || []
-  const dataRows = rows.slice(headerRowIndex + 1)
-
   return {
-    headers: headers.map((h) => String(h ?? '').trim()),
-    rows: dataRows,
+    headers: best.headers,
+    rows: best.rows,
   }
 }
 
