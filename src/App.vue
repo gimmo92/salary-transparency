@@ -27,16 +27,16 @@ import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fet
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
-const activeSection = ref('salaryReview')
+const activeSection = ref('analisi')
 
+/** Tab principali (Revisione salariale nascosta per ora) */
 const sections = [
-  { id: 'salaryReview', label: 'Revisione Salariale', icon: 'salary' },
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
 ]
 
 // Flusso unificato
-const analisiStep = ref('idle') // idle | upload | mapping | results
+const analisiStep = ref('upload') // idle | upload | mapping | results — default upload con sezione Analisi
 const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
@@ -54,8 +54,10 @@ const indicatorsSource = ref('locale')
 
 const jobResults = ref([])
 
-/** Risultati analisi: dashboard UE genere (default) | job grading */
+/** Risultati analisi: dashboard UE genere (default) | job grading | giustificativo persona */
 const resultsTab = ref('eu_dashboard')
+/** Tab risultati da ripristinare dopo chiusura giustificativo persona */
+const resultsTabBeforeJustify = ref('job_grading')
 /** Retribuzione per KPI dashboard: base o totale */
 const euDashboardSalaryMode = ref('total')
 
@@ -140,6 +142,7 @@ async function viewAnalysis(id) {
 
     analisiStep.value = 'results'
     resultsTab.value = 'eu_dashboard'
+    justifyingPerson.value = null
     activeSection.value = 'analisi'
   } catch (err) {
     storicoError.value = 'Impossibile caricare l\'analisi: ' + (err.message || String(err))
@@ -298,6 +301,13 @@ function startNuovaAnalisi() {
   bandGenderJustifications.value = {}
   resultsTab.value = 'eu_dashboard'
   euDashboardSalaryMode.value = 'total'
+  justifyingPerson.value = null
+}
+
+function goToMappingFromResults() {
+  analisiStep.value = 'mapping'
+  justifyingPerson.value = null
+  justifyText.value = ''
 }
 
 function goToUpload() {
@@ -348,6 +358,7 @@ async function confirmMapping() {
   if (analysisLoading.value) return
   analysisLoading.value = true
   uploadError.value = ''
+  justifyingPerson.value = null
   try {
     // --- Analisi di genere ---
     const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
@@ -568,9 +579,9 @@ function cancelJustify() {
   justifyText.value = ''
 }
 
-function openPersonJustify(person, contextLabel, hayBand) {
+function openPersonJustify(person, roleBlock, band, hayBand) {
   const key = String(person?.index || '')
-  if (!key) return
+  if (!key || !roleBlock || !band || !hayBand) return
 
   const peopleInFascia =
     hayBand?.people?.length ? hayBand.people : person ? [person] : []
@@ -599,9 +610,16 @@ function openPersonJustify(person, contextLabel, hayBand) {
       ? ((performanceScore - fascAvgPerformance) / fascAvgPerformance) * 100
       : null
 
+  const displayName =
+    person?.name && String(person.name).trim()
+      ? String(person.name).trim()
+      : `Dipendente #${key}`
+  const gapPct = hayBandAdjustedGapPct(hayBand)
+
   justifyingPerson.value = {
     key,
-    label: contextLabel || `Persona #${key}`,
+    displayName,
+    label: `${roleBlock.role} · ${displayName}`,
     seniority: person?.seniority || null,
     seniorityYearsRaw,
     fascAvgSeniorityYears,
@@ -609,7 +627,26 @@ function openPersonJustify(person, contextLabel, hayBand) {
     performanceScore,
     fascAvgPerformance,
     performancePctVsFascia,
+    roleName: roleBlock.role,
+    bandNum: band.band,
+    levelLabel: band.level,
+    fasciaId: hayBand.id,
+    fasciaRange: hayBand.label,
+    baseSalary: person.baseSalary,
+    variableComponents: person.variableComponents,
+    totalSalary: person.totalSalary,
+    gender: person.gender,
+    hayResp: roleBlock.avgHayResponsibility,
+    hayProblem: roleBlock.avgHayProblemSolving,
+    haySkills: roleBlock.avgHayRequiredSkills,
+    hayCond: roleBlock.avgHayWorkingConditions,
+    hayTotal: roleBlock.avgHayTotalScore,
+    gapFasciaPct: gapPct,
+    gapFasciaFormatted:
+      gapPct != null ? formatGapMforF(gapPct, hayBandHasJustifications(hayBand)) : '–',
   }
+  resultsTabBeforeJustify.value = resultsTab.value
+  resultsTab.value = 'person_justify'
   justifyText.value = personJustifications.value[key] || ''
 }
 
@@ -632,15 +669,19 @@ function savePersonJustify() {
   if (justifyingPerson.value?.key) {
     personJustifications.value[justifyingPerson.value.key] = justifyText.value
   }
+  const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
+  resultsTab.value = back
 }
 
 function cancelPersonJustify() {
+  const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
+  resultsTab.value = back
 }
 
 const PERSON_JUSTIFY_DOC_INFO_SECTIONS = [
@@ -1115,7 +1156,7 @@ function cancelIncreaseEdit() {
 }
 
 onMounted(async () => {
-  loadRules()
+  // loadRules() — da ripristinare se si riattiva la sezione Revisione salariale
   geminiApiUnreachable.value = false
   try {
     const res = await fetch('/api/gemini/status')
@@ -1211,11 +1252,10 @@ function exportJobGradingPdf() {
           :key="s.id"
           class="tab"
           :class="{ active: activeSection === s.id }"
-          @click="activeSection = s.id; if (s.id === 'analisi' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'storico') loadStorico(); if (s.id === 'salaryReview') loadRules()"
+          @click="activeSection = s.id; if (s.id === 'analisi' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'storico') loadStorico()"
         >
           <span class="tab-icon">
-            <svg v-if="s.icon === 'salary'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-            <svg v-else-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+            <svg v-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
             <svg v-else-if="s.icon === 'history'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           </span>
           <span class="tab-label">{{ s.label }}</span>
@@ -1224,7 +1264,7 @@ function exportJobGradingPdf() {
     </header>
 
     <div class="main-wrap">
-    <header v-if="!showSalaryReview" class="main-header">
+    <header class="main-header">
       <button class="btn-primary" @click="startNuovaAnalisi">
         <span>NUOVA ANALISI</span>
       </button>
@@ -1312,6 +1352,15 @@ function exportJobGradingPdf() {
             @click="resultsTab = 'job_grading'"
           >
             Lavori di pari valore
+          </button>
+          <button
+            v-if="justifyingPerson != null"
+            type="button"
+            class="subtab"
+            :class="{ active: resultsTab === 'person_justify' }"
+            @click="resultsTab = 'person_justify'"
+          >
+            Giustificativo
           </button>
         </div>
 
@@ -1597,7 +1646,7 @@ function exportJobGradingPdf() {
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
                             title="Apri o modifica il giustificativo (gap M/F nella fascia)"
-                            @click.stop="openPersonJustify(p, `${rb.role} · ${p.name || ('#' + p.index)}`, sub)"
+                            @click.stop="openPersonJustify(p, rb, band, sub)"
                           >
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
                             + Giustificativo
@@ -1623,27 +1672,49 @@ function exportJobGradingPdf() {
           </div>
         </div>
 
-        <div class="mapping-actions">
-          <button class="btn-secondary" @click="analisiStep = 'mapping'">Modifica mapping</button>
-          <button class="btn-primary" @click="startNuovaAnalisi">Nuova analisi</button>
-        </div>
+        <!-- Tab: inserisci giustificativo (ex popup) -->
+        <div
+          v-show="resultsTab === 'person_justify' && justifyingPerson"
+          class="person-justify-tab-panel"
+        >
+          <template v-if="justifyingPerson">
+            <h2 class="person-justify-tab-title">
+              Inserisci giustificativo per {{ justifyingPerson.displayName }}
+            </h2>
+            <p class="person-justify-tab-lead">
+              <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
+              · <strong>Livello CCNL</strong> {{ justifyingPerson.bandNum }} ({{ justifyingPerson.levelLabel }})
+              · <strong>{{ justifyingPerson.fasciaId }}</strong> — range score {{ justifyingPerson.fasciaRange }}
+            </p>
 
-        <!-- Modal giustificativo -->
-        <div v-if="justifyingLevel != null" class="justify-overlay" @click.self="cancelJustify">
-          <div class="justify-modal">
-            <h3>Giustificativo – {{ justifyingLevel }}</h3>
-            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla media complessiva.</p>
-            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
-            <div class="justify-actions">
-              <span style="flex:1"></span>
-              <button class="btn-secondary" @click="cancelJustify">Annulla</button>
-              <button class="btn-primary" @click="saveJustify">Salva</button>
+            <div class="person-justify-summary-grid">
+              <div class="person-justify-summary-card">
+                <h4 class="person-justify-summary-title">Dati retributivi</h4>
+                <ul class="person-justify-summary-list">
+                  <li><strong>Retribuzione base:</strong> {{ formatNum(justifyingPerson.baseSalary) }}</li>
+                  <li><strong>Componenti variabili:</strong> {{ formatNum(justifyingPerson.variableComponents) }}</li>
+                  <li><strong>Retribuzione totale:</strong> {{ formatNum(justifyingPerson.totalSalary) }}</li>
+                  <li><strong>Genere:</strong> {{ justifyingPerson.gender === 'M' ? 'M' : justifyingPerson.gender === 'F' ? 'F' : '–' }}</li>
+                </ul>
+              </div>
+              <div class="person-justify-summary-card">
+                <h4 class="person-justify-summary-title">Gap M/F nella fascia</h4>
+                <p class="person-justify-gap-line">
+                  <span :class="euGapSeverityClass(justifyingPerson.gapFasciaPct)">{{ justifyingPerson.gapFasciaFormatted }}</span>
+                </p>
+              </div>
+              <div class="person-justify-summary-card person-justify-summary-card--hay">
+                <h4 class="person-justify-summary-title">Punteggio ruolo (Hay)</h4>
+                <ul class="person-justify-summary-list person-justify-hay-list">
+                  <li><strong>Responsabilità:</strong> {{ formatNum(justifyingPerson.hayResp) }}</li>
+                  <li><strong>Problem solving:</strong> {{ formatNum(justifyingPerson.hayProblem) }}</li>
+                  <li><strong>Competenze:</strong> {{ formatNum(justifyingPerson.haySkills) }}</li>
+                  <li><strong>Condizioni:</strong> {{ formatNum(justifyingPerson.hayCond) }}</li>
+                  <li><strong>Punteggio totale:</strong> {{ formatNum(justifyingPerson.hayTotal) }}</li>
+                </ul>
+              </div>
             </div>
-          </div>
-        </div>
-        <div v-if="justifyingPerson != null" class="justify-overlay" @click.self="cancelPersonJustify">
-          <div class="justify-modal justify-modal-person">
-            <h3>Giustificativo persona – {{ justifyingPerson.label }}</h3>
+
             <div class="justify-person-metrics">
               <div class="justify-metric-card">
                 <div class="justify-metric-title">Anzianità</div>
@@ -1735,11 +1806,11 @@ function exportJobGradingPdf() {
                   type="button"
                   class="justify-info-trigger"
                   aria-label="Informazioni sui documenti da allegare"
-                  aria-describedby="person-justify-doc-tooltip"
+                  aria-describedby="person-justify-doc-tooltip-tab"
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
                 </button>
-                <div id="person-justify-doc-tooltip" class="justify-doc-tooltip" role="tooltip">
+                <div id="person-justify-doc-tooltip-tab" class="justify-doc-tooltip" role="tooltip">
                   <p class="justify-doc-tooltip-title">Documentazione utile per categoria</p>
                   <p v-for="(sec, idx) in PERSON_JUSTIFY_DOC_INFO_SECTIONS" :key="idx" class="justify-doc-tooltip-p">
                     <strong>{{ sec.title }}:</strong> {{ sec.body }}
@@ -1750,10 +1821,28 @@ function exportJobGradingPdf() {
 
             <label class="person-justify-textarea-label">Testo del giustificativo</label>
             <textarea v-model="justifyText" class="justify-textarea" rows="6" placeholder="Motivo..."></textarea>
+            <div class="justify-actions justify-actions-tab">
+              <button type="button" class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
+              <button type="button" class="btn-primary" @click="savePersonJustify">Salva giustificativo</button>
+            </div>
+          </template>
+        </div>
+
+        <div class="mapping-actions">
+          <button class="btn-secondary" @click="goToMappingFromResults">Modifica mapping</button>
+          <button class="btn-primary" @click="startNuovaAnalisi">Nuova analisi</button>
+        </div>
+
+        <!-- Modal giustificativo -->
+        <div v-if="justifyingLevel != null" class="justify-overlay" @click.self="cancelJustify">
+          <div class="justify-modal">
+            <h3>Giustificativo – {{ justifyingLevel }}</h3>
+            <p class="justify-hint">Inserisci un giustificativo per la deviazione retributiva superiore a ±5% dalla media complessiva.</p>
+            <textarea v-model="justifyText" class="justify-textarea" rows="5" placeholder="Motivo..."></textarea>
             <div class="justify-actions">
               <span style="flex:1"></span>
-              <button class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
-              <button class="btn-primary" @click="savePersonJustify">Salva</button>
+              <button class="btn-secondary" @click="cancelJustify">Annulla</button>
+              <button class="btn-primary" @click="saveJustify">Salva</button>
             </div>
           </div>
         </div>
@@ -3126,6 +3215,81 @@ function exportJobGradingPdf() {
 .eu-results-tabs {
   margin-top: 0.25rem;
 }
+
+/* Tab giustificativo persona (ex modal) */
+.person-justify-tab-panel {
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.15rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft);
+}
+.person-justify-tab-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+.person-justify-tab-lead {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.person-justify-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+@media (min-width: 900px) {
+  .person-justify-summary-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.person-justify-summary-card {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+  background: var(--bg-page);
+}
+.person-justify-summary-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+.person-justify-summary-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.person-justify-hay-list {
+  columns: 1;
+}
+@media (min-width: 600px) {
+  .person-justify-hay-list {
+    columns: 2;
+  }
+}
+.person-justify-gap-line {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.justify-actions-tab {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 .eu-dashboard-wrap {
   margin-bottom: 2rem;
 }
@@ -4304,10 +4468,10 @@ function exportJobGradingPdf() {
   align-items: center;
   gap: 0.4rem;
   padding: 0.4rem 0.65rem;
-  border: 1px solid var(--border-light);
+  border: 1px solid rgba(22, 163, 74, 0.35);
   border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--text-primary);
+  background: rgba(22, 163, 74, 0.08);
+  color: #166534;
   font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
@@ -4321,9 +4485,9 @@ function exportJobGradingPdf() {
 }
 
 .btn-justify-person:hover {
-  background: rgba(10, 108, 210, 0.08);
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
+  background: rgba(22, 163, 74, 0.16);
+  border-color: #16a34a;
+  color: #15803d;
 }
 
 .btn-justify-person:hover svg {
@@ -4331,9 +4495,9 @@ function exportJobGradingPdf() {
 }
 
 .btn-justify-person.has-note {
-  background: rgba(10, 108, 210, 0.12);
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
+  background: rgba(22, 163, 74, 0.2);
+  border-color: #16a34a;
+  color: #14532d;
 }
 
 /* Modal giustificativo */
