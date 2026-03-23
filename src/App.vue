@@ -17,6 +17,7 @@ import {
   buildNormalizedJobGradingData,
   groupByLevel,
   enrichWithDeviation,
+  seniorityToYearsNumeric,
 } from './lib/jobGrading.js'
 import {
   computeEuGenderDashboard,
@@ -187,6 +188,17 @@ function hasHayBandDisparity(hayBand) {
   return isGapAlert(hayBandAdjustedGapPct(hayBand))
 }
 
+/** Numero di fasce Job Grading con gap M/F oltre ±5% (da corregere / giustificare) */
+const jobGradingGapsToFixCount = computed(() => {
+  let n = 0
+  for (const band of jobResults.value || []) {
+    for (const sub of band.hayBands || []) {
+      if (hasHayBandDisparity(sub)) n += 1
+    }
+  }
+  return n
+})
+
 function personGenderClass(gender) {
   if (gender === 'M') return 'gender-male'
   if (gender === 'F') return 'gender-female'
@@ -200,10 +212,33 @@ function hayBandKey(level, label) {
   return `${level}::${label}`
 }
 
-function toggleHayBand(level, label) {
+function expandAllRolesForFascia(level, subLabel, roles) {
+  const next = new Set(expandedRoleDetails.value)
+  for (const rb of roles || []) {
+    if (rb?.role != null) next.add(roleDetailKey(level, subLabel, rb.role))
+  }
+  expandedRoleDetails.value = next
+}
+
+function collapseAllRolesForFascia(level, subLabel, roles) {
+  const next = new Set(expandedRoleDetails.value)
+  for (const rb of roles || []) {
+    if (rb?.role != null) next.delete(roleDetailKey(level, subLabel, rb.role))
+  }
+  expandedRoleDetails.value = next
+}
+
+/** Aprendo una fascia si espandono anche tutti i ruoli (lista persone visibile); chiudendo si collassano. */
+function toggleHayBand(level, label, sub) {
   const key = hayBandKey(level, label)
-  if (expandedHayBands.value.has(key)) expandedHayBands.value.delete(key)
-  else expandedHayBands.value.add(key)
+  const roles = sub?.roles
+  if (expandedHayBands.value.has(key)) {
+    expandedHayBands.value.delete(key)
+    collapseAllRolesForFascia(level, label, roles)
+  } else {
+    expandedHayBands.value.add(key)
+    expandAllRolesForFascia(level, label, roles)
+  }
   expandedHayBands.value = new Set(expandedHayBands.value)
 }
 
@@ -398,6 +433,34 @@ async function confirmMapping() {
 }
 
 function formatPct(n) { return n == null ? '–' : n.toFixed(2) + '%' }
+
+function formatPctSigned(n) {
+  if (n == null || !Number.isFinite(n)) return '–'
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(1)}%`
+}
+
+/** Punteggio performance mock (40–100), deterministico per indice dipendente */
+function mockPerformanceScoreForPerson(personIndex) {
+  const k = Number(personIndex) || 0
+  const x = Math.sin(k * 12.9898) * 43758.5453
+  const frac = x - Math.floor(x)
+  return Math.round(40 + frac * 55)
+}
+
+/** Gap da pctGap / media M vs F: positivo = uomini pagati di più, negativo = donne pagate di più */
+function formatGapMforF(gap, rettificato = false) {
+  if (gap == null || !Number.isFinite(gap)) return '–'
+  const a = Math.abs(gap)
+  let body
+  if (a < 1e-9) body = '0%'
+  else {
+    const letter = gap > 0 ? 'M' : 'F'
+    body = `${letter} + ${a.toFixed(2)}%`
+  }
+  const lead = rettificato ? 'Gap rett.: ' : 'Gap: '
+  return `${lead}${body}`
+}
 function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 }) }
 function clampScoreInput(v) {
   const n = Number(v)
@@ -493,13 +556,47 @@ function cancelJustify() {
   justifyText.value = ''
 }
 
-function openPersonJustify(person, contextLabel) {
+function openPersonJustify(person, contextLabel, hayBand) {
   const key = String(person?.index || '')
   if (!key) return
+
+  const peopleInFascia =
+    hayBand?.people?.length ? hayBand.people : person ? [person] : []
+  const seniorityYearsList = peopleInFascia
+    .map((p) => seniorityToYearsNumeric(p.seniority))
+    .filter((n) => n != null && Number.isFinite(n) && n >= 0)
+  const fascAvgSeniorityYears = seniorityYearsList.length
+    ? meanLocal(seniorityYearsList)
+    : null
+  const seniorityYearsRaw = seniorityToYearsNumeric(person?.seniority)
+  const seniorityPctVsFascia =
+    fascAvgSeniorityYears != null &&
+    fascAvgSeniorityYears > 0 &&
+    seniorityYearsRaw != null &&
+    Number.isFinite(seniorityYearsRaw)
+      ? ((seniorityYearsRaw - fascAvgSeniorityYears) / fascAvgSeniorityYears) * 100
+      : null
+
+  const perfScores = peopleInFascia.map((p) => mockPerformanceScoreForPerson(p.index))
+  const fascAvgPerformance = perfScores.length ? meanLocal(perfScores) : null
+  const performanceScore = mockPerformanceScoreForPerson(person?.index)
+  const performancePctVsFascia =
+    fascAvgPerformance != null &&
+    fascAvgPerformance > 0 &&
+    performanceScore != null
+      ? ((performanceScore - fascAvgPerformance) / fascAvgPerformance) * 100
+      : null
+
   justifyingPerson.value = {
     key,
     label: contextLabel || `Persona #${key}`,
     seniority: person?.seniority || null,
+    seniorityYearsRaw,
+    fascAvgSeniorityYears,
+    seniorityPctVsFascia,
+    performanceScore,
+    fascAvgPerformance,
+    performancePctVsFascia,
   }
   justifyText.value = personJustifications.value[key] || ''
 }
@@ -517,17 +614,62 @@ function formatHayBandAvgWomen(sub) {
   return (sub?.nWomen ?? 0) > 0 ? formatNum(sub.avgSalaryWomen) : '–'
 }
 
+const personJustifyFileInput = ref(null)
+
 function savePersonJustify() {
   if (justifyingPerson.value?.key) {
     personJustifications.value[justifyingPerson.value.key] = justifyText.value
   }
   justifyingPerson.value = null
   justifyText.value = ''
+  if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
 }
 
 function cancelPersonJustify() {
   justifyingPerson.value = null
   justifyText.value = ''
+  if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
+}
+
+const PERSON_JUSTIFY_DOC_INFO_SECTIONS = [
+  {
+    title: 'Competenze (Hard Skills)',
+    body: 'Certificazioni tecniche, titoli di studio specialistici (Master/PhD) e matrici di competenze validate.',
+  },
+  {
+    title: 'Performance (Merito)',
+    body: 'Schede di valutazione annuale firmate, report sul raggiungimento dei KPI e storici dei premi MBO.',
+  },
+  {
+    title: 'Esperienza (Seniority)',
+    body: 'CV che attestino l\'esperienza pregressa nel ruolo e storico dell\'anzianità aziendale.',
+  },
+  {
+    title: 'Condizioni di Lavoro',
+    body: 'Documenti che provino turni notturni, reperibilità h24, trasferte frequenti o responsabilità extra (es. coordinamento progetti).',
+  },
+  {
+    title: 'Mercato (Eccezioni)',
+    body: 'Report di benchmarking salariale esterno e log dei processi di selezione che provino la scarsità di profili (difficoltà di reperimento).',
+  },
+]
+
+function triggerPersonJustifyFile() {
+  personJustifyFileInput.value?.click()
+}
+
+function onPersonJustifyFilesSelected(ev) {
+  const input = ev.target
+  const files = input?.files
+  if (!files?.length || !justifyingPerson.value?.key) {
+    if (input) input.value = ''
+    return
+  }
+  const names = Array.from(files).map((f) => f.name).join(', ')
+  const note = `[Documenti allegati: ${names}]`
+  const cur = justifyText.value.trim()
+  justifyText.value = cur ? `${cur}\n\n${note}` : note
+  input.value = ''
 }
 
 /** Suggerimenti strutturati per il giustificativo persona (click per inserire nel testo) */
@@ -992,7 +1134,7 @@ function exportJobGradingPdf() {
         const gap = hayBandAdjustedGapPct(sub)
         const gapLabel = gap == null
           ? 'n/d'
-          : `${hayBandHasJustifications(sub) ? 'rett. ' : ''}${formatPct(gap)}`
+          : formatGapMforF(gap, hayBandHasJustifications(sub))
         return [
           b.band,
           b.level || '-',
@@ -1170,11 +1312,11 @@ function exportJobGradingPdf() {
             <div class="eu-kpi-grid">
               <div class="eu-kpi-card">
                 <div class="eu-kpi-label">Gender pay gap medio (azienda)</div>
-                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMean)">{{ formatPct(euDashboard.gapMean) }}</div>
+                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMean)">{{ formatGapMforF(euDashboard.gapMean) }}</div>
               </div>
               <div class="eu-kpi-card">
                 <div class="eu-kpi-label">Gender pay gap mediano (azienda)</div>
-                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMedian)">{{ formatPct(euDashboard.gapMedian) }}</div>
+                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMedian)">{{ formatGapMforF(euDashboard.gapMedian) }}</div>
               </div>
               <div class="eu-kpi-card">
                 <div class="eu-kpi-label">% fasce (cluster) oltre 5%</div>
@@ -1237,7 +1379,7 @@ function exportJobGradingPdf() {
                     <div class="eu-level-head">
                       <span class="eu-level-name">Livello {{ row.band }} — {{ row.levelLabel }}</span>
                       <span v-if="row.segregation" class="eu-segregation-msg">{{ row.segregationMsg }}</span>
-                      <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ formatPct(row.gap) }}</span>
+                      <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ formatGapMforF(row.gap) }}</span>
                     </div>
                     <div v-if="!row.segregation && row.gap != null" class="eu-level-track">
                       <div
@@ -1256,7 +1398,7 @@ function exportJobGradingPdf() {
               <ul v-if="euDashboard.criticalAlerts.length" class="eu-alert-list">
                 <li v-for="(a, idx) in euDashboard.criticalAlerts" :key="idx" class="eu-alert-item">
                   <strong>Livello {{ a.band }}</strong> — {{ a.levelLabel }}, <strong>{{ a.fasciaId }}</strong> (range {{ a.fasciaLabel }}):
-                  gap <span class="gap-alert">{{ formatPct(a.gap) }}</span>
+                  <span class="gap-alert">{{ formatGapMforF(a.gap) }}</span>
                 </li>
               </ul>
               <p v-else class="muted">Nessuna fascia con |gap| &gt; 5% tra quelle confrontabili, oppure dati insufficienti.</p>
@@ -1275,6 +1417,21 @@ function exportJobGradingPdf() {
 
         <div v-show="resultsTab === 'job_grading'">
           <template v-if="jobResults.length > 0">
+          <div
+            class="job-grading-gap-alert"
+            :class="{ 'job-grading-gap-alert--ok': jobGradingGapsToFixCount === 0 }"
+            role="status"
+          >
+            <span class="job-grading-gap-alert__icon" aria-hidden="true">
+              <svg v-if="jobGradingGapsToFixCount > 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M12 3l10 18H2L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+            </span>
+            <div class="job-grading-gap-alert__body">
+              <strong class="job-grading-gap-alert__count">{{ jobGradingGapsToFixCount }}</strong>
+              <span class="job-grading-gap-alert__label">Gap da correggere</span>
+              <span class="job-grading-gap-alert__hint">(fasce con disparità M/F oltre il 5%)</span>
+            </div>
+          </div>
           <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
 
           <div v-for="band in jobResults" :key="band.band" class="band-section">
@@ -1290,7 +1447,7 @@ function exportJobGradingPdf() {
               <template v-for="sub in band.hayBands" :key="`${band.level}-${sub.label}`">
                 <div
                   class="job-row hay-row clickable"
-                  @click="toggleHayBand(band.level, sub.label)"
+                  @click="toggleHayBand(band.level, sub.label, sub)"
                 >
                   <span class="hay-band-label">
                     <strong>{{ isHayBandExpanded(band.level, sub.label) ? '▾' : '▸' }} {{ sub.id }}</strong>
@@ -1313,7 +1470,7 @@ function exportJobGradingPdf() {
                   <span>
                     {{ sub.label }}
                     <span v-if="hayBandAdjustedGapPct(sub) != null" class="hay-band-gap-pill" :class="{ 'gap-alert': hasHayBandDisparity(sub) }">
-                      {{ hayBandHasJustifications(sub) ? 'Gap rett.' : 'Gap M/F' }}: {{ formatPct(hayBandAdjustedGapPct(sub)) }}
+                      {{ formatGapMforF(hayBandAdjustedGapPct(sub), hayBandHasJustifications(sub)) }}
                     </span>
                   </span>
                   <span>{{ sub.nMen ?? 0 }}</span>
@@ -1411,7 +1568,7 @@ function exportJobGradingPdf() {
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
                             title="Apri o modifica il giustificativo (gap M/F nella fascia)"
-                            @click.stop="openPersonJustify(p, `${rb.role} · ${p.name || ('#' + p.index)}`)"
+                            @click.stop="openPersonJustify(p, `${rb.role} · ${p.name || ('#' + p.index)}`, sub)"
                           >
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
                             + Giustificativo
@@ -1458,10 +1615,51 @@ function exportJobGradingPdf() {
         <div v-if="justifyingPerson != null" class="justify-overlay" @click.self="cancelPersonJustify">
           <div class="justify-modal justify-modal-person">
             <h3>Giustificativo persona – {{ justifyingPerson.label }}</h3>
-            <p v-if="justifyingPerson.seniority" class="justify-hint justify-seniority-box">
-              <strong>Anzianità (da file Excel):</strong> {{ justifyingPerson.seniority }}
-            </p>
-            <p class="justify-hint">Inserisci un giustificativo rispetto al gap retributivo M/F nella fascia (puoi richiamare l'anzianità di servizio come elemento oggettivo, se coerente con i dati caricati).</p>
+            <div class="justify-person-metrics">
+              <div class="justify-metric-card">
+                <div class="justify-metric-title">Anzianità</div>
+                <p class="justify-metric-line">
+                  <strong>Da file:</strong>
+                  {{ formatSeniorityDisplay(justifyingPerson.seniority) }}
+                </p>
+                <p class="justify-metric-line">
+                  <strong>Scostamento vs media della fascia:</strong>
+                  <span v-if="justifyingPerson.seniorityPctVsFascia != null" class="justify-metric-pct">
+                    {{ formatPctSigned(justifyingPerson.seniorityPctVsFascia) }}
+                  </span>
+                  <span v-else class="muted">n/d</span>
+                  <span v-if="justifyingPerson.fascAvgSeniorityYears != null" class="justify-metric-ref muted">
+                    (media fascia: {{ justifyingPerson.fascAvgSeniorityYears.toFixed(1) }} anni)
+                  </span>
+                </p>
+                <p v-if="justifyingPerson.seniorityPctVsFascia == null" class="justify-metric-note muted">
+                  Il confronto % richiede anzianità espressa in anni numerici o data di ingresso; in alcuni formati non è calcolabile.
+                </p>
+              </div>
+              <div class="justify-metric-card justify-metric-card--mock">
+                <div class="justify-metric-title">
+                  Performance <span class="justify-mock-badge">dati dimostrativi</span>
+                </div>
+                <p class="justify-metric-line">
+                  <strong>Punteggio performance (mock):</strong>
+                  {{ justifyingPerson.performanceScore ?? '–' }} / 100
+                </p>
+                <p class="justify-metric-line">
+                  <strong>Scostamento vs media della fascia:</strong>
+                  <span v-if="justifyingPerson.performancePctVsFascia != null" class="justify-metric-pct">
+                    {{ formatPctSigned(justifyingPerson.performancePctVsFascia) }}
+                  </span>
+                  <span v-else class="muted">n/d</span>
+                  <span v-if="justifyingPerson.fascAvgPerformance != null" class="justify-metric-ref muted">
+                    (media fascia: {{ justifyingPerson.fascAvgPerformance.toFixed(1) }})
+                  </span>
+                </p>
+                <p class="justify-metric-note muted">
+                  Punteggio simulato per supporto redazionale; sostituire con dati reali da sistema HR.
+                </p>
+              </div>
+            </div>
+            <p class="justify-hint">Inserisci un giustificativo rispetto al gap retributivo M/F nella fascia (puoi richiamare anzianità e performance come elementi oggettivi, se coerenti con i dati).</p>
 
             <div class="person-justify-suggestions">
               <p class="person-justify-suggestions-title">Suggerimenti — clic per aggiungere al testo</p>
@@ -1488,6 +1686,37 @@ function exportJobGradingPdf() {
                   </button>
                 </div>
               </details>
+            </div>
+
+            <div class="justify-upload-toolbar">
+              <input
+                ref="personJustifyFileInput"
+                type="file"
+                class="person-justify-file-input"
+                multiple
+                accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,application/pdf,image/*"
+                @change="onPersonJustifyFilesSelected"
+              />
+              <button type="button" class="btn-secondary justify-upload-btn" @click="triggerPersonJustifyFile">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Carica documento giustificativo
+              </button>
+              <div class="justify-doc-info-wrap">
+                <button
+                  type="button"
+                  class="justify-info-trigger"
+                  aria-label="Informazioni sui documenti da allegare"
+                  aria-describedby="person-justify-doc-tooltip"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                </button>
+                <div id="person-justify-doc-tooltip" class="justify-doc-tooltip" role="tooltip">
+                  <p class="justify-doc-tooltip-title">Documentazione utile per categoria</p>
+                  <p v-for="(sec, idx) in PERSON_JUSTIFY_DOC_INFO_SECTIONS" :key="idx" class="justify-doc-tooltip-p">
+                    <strong>{{ sec.title }}:</strong> {{ sec.body }}
+                  </p>
+                </div>
+              </div>
             </div>
 
             <label class="person-justify-textarea-label">Testo del giustificativo</label>
@@ -3150,6 +3379,56 @@ function exportJobGradingPdf() {
   font-size: 0.95rem;
 }
 
+.job-grading-gap-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin: 0 0 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  background: rgba(254, 242, 242, 0.95);
+  color: #991b1b;
+}
+.job-grading-gap-alert--ok {
+  border-color: rgba(22, 163, 74, 0.35);
+  background: rgba(240, 253, 244, 0.95);
+  color: #166534;
+}
+.job-grading-gap-alert__icon {
+  flex-shrink: 0;
+  display: flex;
+  margin-top: 0.1rem;
+}
+.job-grading-gap-alert__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.5rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.job-grading-gap-alert__count {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+.job-grading-gap-alert__label {
+  font-weight: 600;
+}
+.job-grading-gap-alert__hint {
+  font-size: 0.8rem;
+  font-weight: 500;
+  opacity: 0.9;
+  width: 100%;
+  flex-basis: 100%;
+}
+@media (min-width: 520px) {
+  .job-grading-gap-alert__hint {
+    width: auto;
+    flex-basis: auto;
+  }
+}
+
 .result-source {
   margin: 0 0 1rem;
   font-size: 0.875rem;
@@ -3455,6 +3734,162 @@ function exportJobGradingPdf() {
   border-radius: var(--radius-sm);
   padding: 0.5rem 0.65rem;
   margin-bottom: 0.35rem;
+}
+
+.justify-person-metrics {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+.justify-metric-card {
+  background: rgba(10, 108, 210, 0.06);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.justify-metric-card--mock {
+  background: rgba(234, 179, 8, 0.08);
+  border-color: rgba(202, 138, 4, 0.35);
+}
+.justify-metric-title {
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.justify-mock-badge {
+  font-weight: 600;
+  font-size: 0.65rem;
+  text-transform: none;
+  letter-spacing: 0;
+  background: rgba(202, 138, 4, 0.2);
+  color: #92400e;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+}
+.justify-metric-line {
+  margin: 0.25rem 0 0;
+}
+.justify-metric-pct {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.25rem;
+}
+.justify-metric-ref {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+}
+.justify-metric-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.person-justify-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.justify-upload-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+.justify-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.justify-doc-info-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.justify-info-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  background: var(--bg-page);
+  color: var(--accent-blue, #2563eb);
+  cursor: help;
+  transition: background 0.15s, border-color 0.15s;
+}
+.justify-info-trigger:hover,
+.justify-info-trigger:focus-visible {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: var(--accent-blue, #2563eb);
+  outline: none;
+}
+.justify-doc-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 50;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(22rem, calc(100vw - 3rem));
+  max-height: min(70vh, 24rem);
+  overflow-y: auto;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
+  text-align: left;
+}
+.justify-doc-tooltip::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  transform: rotate(45deg);
+}
+.justify-doc-info-wrap:hover .justify-doc-tooltip,
+.justify-doc-info-wrap:focus-within .justify-doc-tooltip {
+  display: block;
+}
+.justify-doc-tooltip-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+.justify-doc-tooltip-p {
+  margin: 0 0 0.5rem;
+}
+.justify-doc-tooltip-p:last-child {
+  margin-bottom: 0;
 }
 
 .inline-icon {

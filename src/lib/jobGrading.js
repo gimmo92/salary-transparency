@@ -242,6 +242,67 @@ function parseSeniorityThreeDigitAmbiguous(compact) {
   return whole + dec / 10
 }
 
+/** Anni trascorsi da una data di ingresso (approssimato) */
+function yearsFromSeniorityDate(raw) {
+  const s = String(raw).trim()
+  let d = null
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const t = Date.parse(s.slice(0, 10))
+    if (!Number.isNaN(t)) d = new Date(t)
+  } else {
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+    if (m) {
+      d = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10))
+    }
+  }
+  if (!d || Number.isNaN(d.getTime())) return null
+  const ms = Date.now() - d.getTime()
+  return Math.max(0, ms / (365.25 * 24 * 3600 * 1000))
+}
+
+/**
+ * Converte il valore anzianità (come in Excel) in anni numerici per confronti statistici.
+ * Ritorna null se non è un numero né una data interpretabile.
+ */
+export function seniorityToYearsNumeric(value) {
+  if (value == null || value === '') return null
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (Number.isInteger(value) && value >= 101 && value <= 509) {
+      const recovered = parseSeniorityThreeDigitAmbiguous(String(value))
+      if (recovered != null) return recovered
+    }
+    return value
+  }
+
+  const raw = String(value).trim()
+  if (!raw) return null
+
+  if (/\d\s*[/]\s*\d/.test(raw) || /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return yearsFromSeniorityDate(raw)
+  }
+
+  const anniMatch = raw.match(/(\d+[.,]?\d*)\s*anni/i)
+  if (anniMatch) {
+    const compact = anniMatch[1].replace(/\s/g, '')
+    const parsed = parseItalianDecimalString(compact)
+    if (parsed != null) return parsed
+    const n = parseFloat(compact.replace(',', '.'))
+    return Number.isFinite(n) ? n : null
+  }
+
+  if (/[a-zA-Zàèéìòù]/.test(raw) && !/^[-+]?[\d.,]+$/.test(raw.replace(/\s/g, ''))) {
+    return null
+  }
+
+  const compact = raw.replace(/\s/g, '')
+  const parsed = parseItalianDecimalString(compact)
+  if (parsed != null) return parsed
+  const lostComma = parseSeniorityThreeDigitAmbiguous(compact)
+  if (lostComma != null) return lostComma
+  return null
+}
+
 export function buildNormalizedJobGradingData(rows, headers, mapping) {
   if (!rows?.length || !headers?.length || !mapping) return []
 
