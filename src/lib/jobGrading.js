@@ -1,4 +1,10 @@
 import { COLUMN_ROLES } from './excel.js'
+import {
+  TRANSPARENCY_FLAT_FACTORS,
+  TRANSPARENCY_FACTOR_IDS,
+  trFieldName,
+  transparencyWeightsMap,
+} from './transparencyCriteria.js'
 
 // --- CCNL Level hierarchy (higher number = higher band) ---
 
@@ -30,21 +36,43 @@ const LEVEL_FUZZY = [
   [/\bd1?\b/i, 1],
 ]
 
-const RESPONSIBILITY_KEYWORDS = [
-  'responsabile', 'manager', 'direttore', 'director', 'head', 'lead', 'coordin',
-  'budget', 'kpi', 'strateg', 'decision', 'governance',
+const KW_TITOLI = [
+  'laurea', 'master', 'phd', 'dottor', 'diploma', 'certific', 'specializz',
+  'istruzione', 'formazione', 'qualifica',
 ]
-const PROBLEM_SOLVING_KEYWORDS = [
-  'analisi', 'problem solving', 'ottimizz', 'miglioramento', 'progett',
-  'architect', 'root cause', 'compless', 'innovazione', 'troubleshoot',
+const KW_ESPERIENZA = [
+  'senior', 'esperienza', 'consolidat', 'plurienn', 'ultra', 'decenn',
+  'esperto', 'veteran',
 ]
-const SKILLS_KEYWORDS = [
-  'certific', 'specialist', 'senior', 'expert', 'engineer', 'svilupp',
-  'tecnico', 'compliance', 'normativa', 'sap', 'erp', 'data', 'finance',
+const KW_TRASVERSALI = [
+  'leadership', 'negozia', 'team', 'relazion', 'comunicaz', 'collabor',
+  'influenz', 'soft skill', 'empatia',
 ]
-const CONDITIONS_KEYWORDS = [
-  'turn', 'notte', 'impianto', 'produzione', 'trasferta', 'reperibil',
-  'stress', 'sicurezza', 'rischio', 'cantiere', 'magazzino',
+const KW_AUTONOMIA = [
+  'autonom', 'delega', 'discrezional', 'responsabile', 'decision', 'indipendent',
+]
+const KW_IMPATTO = [
+  'strateg', 'budget', 'kpi', 'obiettiv', 'risultat', 'business', 'economico',
+  'margine', 'fatturato', 'target',
+]
+const KW_GESTIONE_RH = [
+  'coordina', 'manager', 'direttore', 'capo', 'supervision', 'team di',
+  'struttura', 'risorse umane', 'valutazion', 'sviluppo del personale',
+]
+const KW_SFORZO_MENTALE = [
+  'analisi', 'compless', 'problem', 'progett', 'architect', 'ottimizz',
+  'innovaz', 'ricerca', 'sviluppo tecnico',
+]
+const KW_TENSIONE = [
+  'stress', 'urgenz', 'reclami', 'crisi', 'conflitt', 'pressione', 'deadline',
+]
+const KW_AMBIENTE = [
+  'impianto', 'produz', 'rumore', 'cantiere', 'magazzino', 'sicurezza',
+  'rischio chimico', 'laboratorio', 'reparto',
+]
+const KW_DISAGIO_ORG = [
+  'turno', 'notte', 'trasfert', 'reperibil', 'isolamento', 'mobilità',
+  'mobilita', 'weekend', 'chiamata',
 ]
 
 export function normalizeLevelLabel(levelRaw) {
@@ -99,12 +127,23 @@ function pctGap(maleAvg, femaleAvg) {
   return ((maleAvg - femaleAvg) / maleAvg) * 100
 }
 
-function clampScore(v) {
-  return Math.max(1, Math.min(100, Math.round(v)))
+function clamp15(n) {
+  return Math.max(1, Math.min(5, Math.round(Number(n) || 0)))
 }
 
 function keywordHits(text, list) {
   return list.reduce((acc, kw) => acc + (text.includes(kw) ? 1 : 0), 0)
+}
+
+function scoreFromText(text, keywords, base = 2) {
+  const h = keywordHits(text, keywords)
+  return clamp15(base + Math.min(3, h))
+}
+
+function levelNormBoost(levelRaw) {
+  const o = levelSortOrder(levelRaw)
+  if (!o) return 0
+  return Math.min(2, Math.floor(o / 5))
 }
 
 function normalizeGender(raw) {
@@ -114,29 +153,79 @@ function normalizeGender(raw) {
   return null
 }
 
-function haySubBandFromScore(totalHayScore) {
-  const start = Math.floor((totalHayScore - 1) / 20) * 20 + 1
-  const end = start + 19
-  return { min: start, max: end, key: `${start}-${end}` }
+const WEIGHTS = transparencyWeightsMap()
+
+/**
+ * Fascia da punteggio pesato 1–5 (mezzi passi per raggruppare ruoli simili).
+ */
+function fasciaFromWeightedScore(w) {
+  const x = Math.min(5, Math.max(1, Math.round(Number(w) * 2) / 2))
+  return { min: x, max: x, key: String(x) }
 }
 
-function computeHayForPerson(person, { companyContext = '' } = {}) {
+/**
+ * @param {object} person - record normalizzato job grading
+ * @param {object} opts
+ * @param {string} [opts.companyContext]
+ * @param {Record<string, number>|null} [opts.override] - punteggi 1–5 per id fattore (es. titoliConoscenze)
+ */
+export function computeTransparencyScoresForPerson(person, { companyContext = '', override = null } = {}) {
   const text = `${person.role || ''} ${person.description || ''} ${person.category || ''} ${companyContext}`.toLowerCase()
-  const seniorityBoost = (person.level && String(person.level).length > 0) ? 4 : 0
+  const descLen = String(person.description || '').length
+  const lb = levelNormBoost(person.level)
+  const sen = person.seniority
+  const senNum = typeof sen === 'number' && Number.isFinite(sen) ? sen : null
 
-  const responsibility = clampScore(30 + keywordHits(text, RESPONSIBILITY_KEYWORDS) * 8 + seniorityBoost)
-  const problemSolving = clampScore(28 + keywordHits(text, PROBLEM_SOLVING_KEYWORDS) * 8 + String(person.description || '').length / 80)
-  const requiredSkills = clampScore(30 + keywordHits(text, SKILLS_KEYWORDS) * 7 + seniorityBoost)
-  const workingConditions = clampScore(20 + keywordHits(text, CONDITIONS_KEYWORDS) * 10)
-  const totalHayScore = responsibility + problemSolving + requiredSkills + workingConditions
-
-  return {
-    hayResponsibility: responsibility,
-    hayProblemSolving: problemSolving,
-    hayRequiredSkills: requiredSkills,
-    hayWorkingConditions: workingConditions,
-    hayTotalScore: totalHayScore,
+  const heuristic = {
+    titoliConoscenze: scoreFromText(text, KW_TITOLI, 2 + Math.min(1, Math.floor(descLen / 400))),
+    esperienza: clamp15(
+      2 + (senNum != null && senNum >= 10 ? 2 : senNum != null && senNum >= 5 ? 1 : 0) + lb + (keywordHits(text, KW_ESPERIENZA) ? 1 : 0),
+    ),
+    competenzeTrasversali: scoreFromText(text, KW_TRASVERSALI, 2 + Math.min(1, lb)),
+    autonomiaDelega: scoreFromText(text, KW_AUTONOMIA, 2 + lb),
+    impattoObiettivi: scoreFromText(text, KW_IMPATTO, 2 + lb),
+    gestioneRisorseUmane: scoreFromText(text, KW_GESTIONE_RH, 2 + lb),
+    sforzoMentale: scoreFromText(text, KW_SFORZO_MENTALE, 2 + Math.min(2, Math.floor(descLen / 200))),
+    tensioneEmotiva: scoreFromText(text, KW_TENSIONE, 2),
+    ambienteFisico: scoreFromText(text, KW_AMBIENTE, 1 + (keywordHits(text, KW_AMBIENTE) ? 2 : 0)),
+    disagioOrganizzativo: scoreFromText(text, KW_DISAGIO_ORG, 1 + (keywordHits(text, KW_DISAGIO_ORG) ? 2 : 0)),
   }
+
+  const out = {}
+  for (const id of TRANSPARENCY_FACTOR_IDS) {
+    const v = override && override[id] != null ? clamp15(override[id]) : heuristic[id]
+    out[trFieldName(id)] = v
+  }
+
+  let weighted = 0
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    weighted += out[trFieldName(f.id)] * WEIGHTS[f.id]
+  }
+  out.trWeightedScore = Math.round(weighted * 100) / 100
+
+  return out
+}
+
+/** Media aritmetica dei punteggi trasparenza su un elenco di persone */
+export function meanTransparencyScores(people) {
+  if (!people?.length) return null
+  const sums = Object.fromEntries(TRANSPARENCY_FACTOR_IDS.map((id) => [id, 0]))
+  for (const p of people) {
+    for (const id of TRANSPARENCY_FACTOR_IDS) {
+      sums[id] += Number(p[trFieldName(id)]) || 0
+    }
+  }
+  const n = people.length
+  const avg = {}
+  for (const id of TRANSPARENCY_FACTOR_IDS) {
+    avg[trFieldName(id)] = Math.round((sums[id] / n) * 100) / 100
+  }
+  let w = 0
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    w += avg[trFieldName(f.id)] * WEIGHTS[f.id]
+  }
+  avg.trWeightedScore = Math.round(w * 100) / 100
+  return avg
 }
 
 function isValidSalary(person) {
@@ -355,14 +444,23 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
 
 // --- Group people by CCNL level → each level is a "band" ---
 
-export function groupByLevel(normalizedData) {
+/**
+ * @param {Array} normalizedData
+ * @param {Record<string, Record<string, number>>} [roleOverrides] chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: 1–5 }
+ */
+export function groupByLevel(normalizedData, roleOverrides = {}) {
   const companyContext = [...new Set(normalizedData.map((p) => p.category).filter(Boolean))].slice(0, 8).join(' ')
 
   const map = new Map()
 
   for (const person of normalizedData) {
-    const withHay = { ...person, ...computeHayForPerson(person, { companyContext }) }
     const levelKey = normalizeLevelLabel(person.level) || 'N/D'
+    const roleKey = String(person.role || 'N/D').trim() || 'N/D'
+    const ov = roleOverrides[`${levelKey}|${roleKey}`] || null
+    const withTr = {
+      ...person,
+      ...computeTransparencyScoresForPerson(person, { companyContext, override: ov }),
+    }
     if (!map.has(levelKey)) {
       map.set(levelKey, {
         level: levelKey,
@@ -370,7 +468,7 @@ export function groupByLevel(normalizedData) {
         people: [],
       })
     }
-    map.get(levelKey).people.push(withHay)
+    map.get(levelKey).people.push(withTr)
   }
 
   const groups = Array.from(map.values())
@@ -409,7 +507,7 @@ export function groupByLevel(normalizedData) {
       const femaleSalaries = validPeople.filter((p) => p.gender === 'F').map((p) => p.totalSalary)
       const avgMen = mean(maleSalaries)
       const avgWomen = mean(femaleSalaries)
-      const roleHayTotal = mean(people.map((p) => p.hayTotalScore))
+      const trMeans = meanTransparencyScores(people) || {}
 
       return {
         role: r.role,
@@ -417,11 +515,7 @@ export function groupByLevel(normalizedData) {
         n: people.length,
         nValid: validPeople.length,
         avgTotalSalary: mean(validPeople.map((p) => p.totalSalary)),
-        avgHayResponsibility: mean(people.map((p) => p.hayResponsibility)),
-        avgHayProblemSolving: mean(people.map((p) => p.hayProblemSolving)),
-        avgHayRequiredSkills: mean(people.map((p) => p.hayRequiredSkills)),
-        avgHayWorkingConditions: mean(people.map((p) => p.hayWorkingConditions)),
-        avgHayTotalScore: roleHayTotal,
+        ...trMeans,
         avgSalaryMen: avgMen,
         avgSalaryWomen: avgWomen,
         nMen: maleSalaries.length,
@@ -432,10 +526,10 @@ export function groupByLevel(normalizedData) {
       }
     })
 
-    // 2) Group ROLES by Hay interval (20 points)
+    // 2) Raggruppa ruoli per punteggio pesato (scala 1–5, passi da 0,5)
     const hayMap = new Map()
     for (const roleProfile of roleProfiles) {
-      const bucket = haySubBandFromScore(roleProfile.avgHayTotalScore)
+      const bucket = fasciaFromWeightedScore(roleProfile.trWeightedScore ?? 3)
       if (!hayMap.has(bucket.key)) {
         hayMap.set(bucket.key, {
           ...bucket,
@@ -474,9 +568,11 @@ export function groupByLevel(normalizedData) {
           })),
         }))
 
+        const bandTrMeans = meanTransparencyScores(allPeople) || {}
+
         return {
           id: `Fascia ${idx + 1}`,
-          label: `${hb.min}-${hb.max}`,
+          label: `Punteggio ${hb.key}`,
           minScore: hb.min,
           maxScore: hb.max,
           n: people.length,
@@ -484,11 +580,7 @@ export function groupByLevel(normalizedData) {
           nRoles: hb.roles.length,
           roles,
           avgTotalSalary: avgBandSalary,
-          avgHayResponsibility: mean(hb.roles.map((r) => r.avgHayResponsibility)),
-          avgHayProblemSolving: mean(hb.roles.map((r) => r.avgHayProblemSolving)),
-          avgHayRequiredSkills: mean(hb.roles.map((r) => r.avgHayRequiredSkills)),
-          avgHayWorkingConditions: mean(hb.roles.map((r) => r.avgHayWorkingConditions)),
-          avgHayTotalScore: mean(hb.roles.map((r) => r.avgHayTotalScore)),
+          ...bandTrMeans,
           genderPayGapPct: (maleSalaries.length > 0 && femaleSalaries.length > 0)
             ? pctGap(maleAvg, femaleAvg)
             : null,

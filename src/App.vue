@@ -20,6 +20,11 @@ import {
   seniorityToYearsNumeric,
 } from './lib/jobGrading.js'
 import {
+  TRANSPARENCY_MACRO_AREAS,
+  TRANSPARENCY_FLAT_FACTORS,
+  trFieldName,
+} from './lib/transparencyCriteria.js'
+import {
   computeEuGenderDashboard,
   computeQuartileOutliers,
   gapSeverityClass as euGapSeverityClass,
@@ -55,6 +60,10 @@ const indicatorsResult = ref(null)
 const indicatorsSource = ref('locale')
 
 const jobResults = ref([])
+
+/** Override punteggi 1–5 per ruolo: chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: number } */
+const transparencyRoleOverrides = ref({})
+const jobGradingCriteriaModalOpen = ref(false)
 
 /** Risultati analisi: dashboard UE genere (default) | job grading | giustificativo persona */
 const resultsTab = ref('eu_dashboard')
@@ -293,7 +302,7 @@ function runJobGrading() {
     gender: p.gender || genderByIndex.get(p.index) || null,
   }))
   if (normalizedJob.length > 0) {
-    const grouped = groupByLevel(enrichedJob)
+    const grouped = groupByLevel(enrichedJob, transparencyRoleOverrides.value)
     jobResults.value = enrichWithDeviation(grouped)
   } else {
     jobResults.value = []
@@ -314,6 +323,7 @@ function startNuovaAnalisi() {
   genderViewMode.value = 'media'
   genderNormalizedCache.value = []
   quartileOutlierJustifications.value = {}
+  transparencyRoleOverrides.value = {}
   bandGenderJustifications.value = {}
   resultsTab.value = 'eu_dashboard'
   euDashboardSalaryMode.value = 'total'
@@ -344,6 +354,7 @@ async function onLoadFromUrl() {
     excelRows.value = rows
     excelHeaders.value = headers
     quartileOutlierJustifications.value = {}
+    transparencyRoleOverrides.value = {}
     const heuristic = detectColumnRoles(headers, rows)
     let suggested = { ...heuristic }
     if (geminiEnabled.value) {
@@ -449,6 +460,7 @@ async function confirmMapping() {
     genderNormalizedCache.value = normalizedGender
     bandGenderJustifications.value = {}
     quartileOutlierJustifications.value = {}
+    transparencyRoleOverrides.value = {}
 
     // Salvataggio DB
     try {
@@ -506,6 +518,30 @@ function clampScoreInput(v) {
   if (!Number.isFinite(n)) return 1
   return Math.max(1, Math.min(100, Math.round(n)))
 }
+function clampTrScore(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 3
+  return Math.max(1, Math.min(5, Math.round(n)))
+}
+function emptyRoleTransparencyForm() {
+  const o = {}
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    o[f.id] = 3
+  }
+  return o
+}
+function roleTr(role, factorId) {
+  if (!role) return null
+  return role[trFieldName(factorId)]
+}
+function previewRoleWeightedScore() {
+  let w = 0
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    const v = roleParamsForm.value[f.id]
+    w += clampTrScore(v) * (f.weightPct / 100)
+  }
+  return Math.round(w * 100) / 100
+}
 function meanLocal(values) {
   if (!values?.length) return 0
   return values.reduce((sum, v) => sum + Number(v || 0), 0) / values.length
@@ -517,12 +553,7 @@ const justifyText = ref('')
 const personJustifications = ref({})
 const justifyingPerson = ref(null)
 const editingRoleParams = ref(null)
-const roleParamsForm = ref({
-  responsibility: 50,
-  problemSolving: 50,
-  requiredSkills: 50,
-  workingConditions: 50,
-})
+const roleParamsForm = ref(emptyRoleTransparencyForm())
 const justifyAiLoading = ref(false)
 
 function openRoleParamsModal(level, subLabel, roleName) {
@@ -532,12 +563,11 @@ function openRoleParamsModal(level, subLabel, roleName) {
   if (!role) return
 
   editingRoleParams.value = { level, subLabel, roleName }
-  roleParamsForm.value = {
-    responsibility: clampScoreInput(role.avgHayResponsibility),
-    problemSolving: clampScoreInput(role.avgHayProblemSolving),
-    requiredSkills: clampScoreInput(role.avgHayRequiredSkills),
-    workingConditions: clampScoreInput(role.avgHayWorkingConditions),
+  const next = emptyRoleTransparencyForm()
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    next[f.id] = clampTrScore(role[trFieldName(f.id)])
   }
+  roleParamsForm.value = next
 }
 
 function cancelRoleParamsModal() {
@@ -548,34 +578,14 @@ function saveRoleParams() {
   const ctx = editingRoleParams.value
   if (!ctx) return
 
-  const band = jobResults.value.find((b) => b.level === ctx.level)
-  const sub = band?.hayBands?.find((h) => h.label === ctx.subLabel)
-  const role = sub?.roles?.find((r) => r.role === ctx.roleName)
-  if (!role || !sub) {
-    editingRoleParams.value = null
-    return
+  const overrides = {}
+  for (const f of TRANSPARENCY_FLAT_FACTORS) {
+    overrides[f.id] = clampTrScore(roleParamsForm.value[f.id])
   }
-
-  const responsibility = clampScoreInput(roleParamsForm.value.responsibility)
-  const problemSolving = clampScoreInput(roleParamsForm.value.problemSolving)
-  const requiredSkills = clampScoreInput(roleParamsForm.value.requiredSkills)
-  const workingConditions = clampScoreInput(roleParamsForm.value.workingConditions)
-  const total = responsibility + problemSolving + requiredSkills + workingConditions
-
-  role.avgHayResponsibility = responsibility
-  role.avgHayProblemSolving = problemSolving
-  role.avgHayRequiredSkills = requiredSkills
-  role.avgHayWorkingConditions = workingConditions
-  role.avgHayTotalScore = total
-
-  sub.avgHayResponsibility = meanLocal(sub.roles.map((r) => r.avgHayResponsibility))
-  sub.avgHayProblemSolving = meanLocal(sub.roles.map((r) => r.avgHayProblemSolving))
-  sub.avgHayRequiredSkills = meanLocal(sub.roles.map((r) => r.avgHayRequiredSkills))
-  sub.avgHayWorkingConditions = meanLocal(sub.roles.map((r) => r.avgHayWorkingConditions))
-  sub.avgHayTotalScore = meanLocal(sub.roles.map((r) => r.avgHayTotalScore))
-
-  jobResults.value = [...jobResults.value]
+  const key = `${ctx.level}|${ctx.roleName}`
+  transparencyRoleOverrides.value = { ...transparencyRoleOverrides.value, [key]: overrides }
   editingRoleParams.value = null
+  runJobGrading()
 }
 
 function openJustify(level) {
@@ -653,11 +663,8 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     variableComponents: person.variableComponents,
     totalSalary: person.totalSalary,
     gender: person.gender,
-    hayResp: roleBlock.avgHayResponsibility,
-    hayProblem: roleBlock.avgHayProblemSolving,
-    haySkills: roleBlock.avgHayRequiredSkills,
-    hayCond: roleBlock.avgHayWorkingConditions,
-    hayTotal: roleBlock.avgHayTotalScore,
+    roleScoresBlock: roleBlock,
+    trWeightedScore: roleBlock.trWeightedScore,
     gapFasciaPct: gapPct,
     gapFasciaFormatted:
       gapPct != null ? formatGapMforF(gapPct, hayBandHasJustifications(hayBand)) : '–',
@@ -687,7 +694,7 @@ async function suggestPersonJustifyAI() {
       role: j.roleName,
       level: j.levelLabel,
       band: j.fasciaId,
-      totalScore: j.hayTotal,
+      totalScore: j.trWeightedScore,
       medianSalary: j.totalSalary,
       deviation: j.gapFasciaPct,
       jobFamily: j.levelLabel,
@@ -1677,7 +1684,10 @@ function exportJobGradingPdf() {
               <span class="job-grading-gap-alert__hint">(fasce con disparità M/F oltre il 5%)</span>
             </div>
           </div>
-          <p class="result-source">Raggruppamento per <strong>Livello CCNL</strong></p>
+          <div class="job-grading-tab-head">
+            <p class="result-source job-grading-tab-head__text">Raggruppamento per <strong>Livello CCNL</strong> · punteggi 1–5 per fattore (trasparenza retributiva)</p>
+            <button type="button" class="btn-jg-criteria" @click="jobGradingCriteriaModalOpen = true">Info analisi</button>
+          </div>
 
           <div v-for="band in jobResults" :key="band.band" class="band-section">
             <h3 class="band-title">{{ band.level }}</h3>
@@ -1728,29 +1738,35 @@ function exportJobGradingPdf() {
                   v-if="isHayBandExpanded(band.level, sub.label)"
                   class="people-detail hay-fascia-detail"
                 >
-                  <div class="people-header hay-role-header">
-                    <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg> Ruolo</span><span>Resp.</span><span>Problem</span><span>Comp.</span><span>Cond.</span><span>Punteggio</span><span>N</span><span>Media retrib.</span>
+                  <div class="people-header hay-role-header jg-tr-score-grid">
+                    <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg> Ruolo</span>
+                    <span
+                      v-for="f in TRANSPARENCY_FLAT_FACTORS"
+                      :key="'h-' + f.id"
+                      class="jg-tr-col-head"
+                      :title="f.label + ' (' + f.weightPct + '%)'"
+                    >{{ f.shortLabel }}</span>
+                    <span class="jg-tr-col-head" title="Punteggio pesato (1–5)">P</span>
+                    <span>N</span>
+                    <span>Media retrib.</span>
                   </div>
                   <template v-for="rb in sub.roles" :key="`${band.level}-${sub.label}-${rb.role}`">
                     <div
-                      class="people-row hay-role-row clickable"
+                      class="people-row hay-role-row jg-tr-score-grid clickable"
                       @click="toggleRoleDetail(band.level, sub.label, rb.role)"
                     >
                       <span class="role-cell-main">
                         <span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 7h18"/><path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2"/><rect x="3" y="7" width="18" height="13" rx="2"/></svg>{{ isRoleDetailExpanded(band.level, sub.label, rb.role) ? '▾' : '▸' }} {{ rb.role }}</span>
                         <button
                           class="role-settings-btn"
-                          title="Modifica parametri Job Grading del ruolo"
+                          title="Modifica punteggi 1–5 del ruolo"
                           @click.stop="openRoleParamsModal(band.level, sub.label, rb.role)"
                         >
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .33-1.82 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.82.33h0A1.7 1.7 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
                         </button>
                       </span>
-                      <span>{{ formatNum(rb.avgHayResponsibility) }}</span>
-                      <span>{{ formatNum(rb.avgHayProblemSolving) }}</span>
-                      <span>{{ formatNum(rb.avgHayRequiredSkills) }}</span>
-                      <span>{{ formatNum(rb.avgHayWorkingConditions) }}</span>
-                      <span>{{ formatNum(rb.avgHayTotalScore) }}</span>
+                      <span v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="rb.role + f.id" class="jg-tr-score-cell">{{ roleTr(rb, f.id) ?? '–' }}</span>
+                      <span class="jg-tr-score-cell jg-tr-p">{{ rb.trWeightedScore != null ? formatNum(rb.trWeightedScore) : '–' }}</span>
                       <span>{{ rb.n }}</span>
                       <span>{{ formatNum(rb.avgTotalSalary) }}</span>
                     </div>
@@ -1871,13 +1887,12 @@ function exportJobGradingPdf() {
                 </p>
               </div>
               <div class="person-justify-summary-card person-justify-summary-card--hay">
-                <h4 class="person-justify-summary-title">Punteggio ruolo</h4>
+                <h4 class="person-justify-summary-title">Punteggi ruolo (1–5)</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
-                  <li><strong>Responsabilità:</strong> {{ formatNum(justifyingPerson.hayResp) }}</li>
-                  <li><strong>Problem solving:</strong> {{ formatNum(justifyingPerson.hayProblem) }}</li>
-                  <li><strong>Competenze:</strong> {{ formatNum(justifyingPerson.haySkills) }}</li>
-                  <li><strong>Condizioni:</strong> {{ formatNum(justifyingPerson.hayCond) }}</li>
-                  <li><strong>Punteggio totale:</strong> {{ formatNum(justifyingPerson.hayTotal) }}</li>
+                  <li v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id">
+                    <strong>{{ f.label }}:</strong> {{ roleTr(justifyingPerson.roleScoresBlock, f.id) ?? '–' }}
+                  </li>
+                  <li><strong>Punteggio pesato:</strong> {{ justifyingPerson.trWeightedScore != null ? formatNum(justifyingPerson.trWeightedScore) : '–' }}</li>
                 </ul>
               </div>
             </div>
@@ -2024,34 +2039,70 @@ function exportJobGradingPdf() {
           </div>
         </div>
         <div v-if="editingRoleParams != null" class="justify-overlay" @click.self="cancelRoleParamsModal">
-          <div class="justify-modal">
-            <h3>Parametri Job Grading – {{ editingRoleParams.roleName }}</h3>
-            <p class="justify-hint">Modifica i punteggi del ruolo (scala 1-100 per fattore).</p>
-            <div class="role-params-grid">
-              <label class="role-param-field">
-                <span>Responsabilita</span>
-                <input v-model.number="roleParamsForm.responsibility" type="number" min="1" max="100" class="mapping-select" />
-              </label>
-              <label class="role-param-field">
-                <span>Problem solving</span>
-                <input v-model.number="roleParamsForm.problemSolving" type="number" min="1" max="100" class="mapping-select" />
-              </label>
-              <label class="role-param-field">
-                <span>Competenze</span>
-                <input v-model.number="roleParamsForm.requiredSkills" type="number" min="1" max="100" class="mapping-select" />
-              </label>
-              <label class="role-param-field">
-                <span>Condizioni</span>
-                <input v-model.number="roleParamsForm.workingConditions" type="number" min="1" max="100" class="mapping-select" />
+          <div class="justify-modal justify-modal--wide">
+            <h3>Punteggi ruolo – {{ editingRoleParams.roleName }}</h3>
+            <p class="justify-hint">Scala <strong>1–5</strong> per fattore. Apri <strong>Info analisi</strong> per le definizioni dei livelli.</p>
+            <div class="role-params-grid role-params-grid--tr">
+              <label v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id" class="role-param-field">
+                <span>{{ f.label }} <span class="muted">({{ f.weightPct }}%)</span></span>
+                <input v-model.number="roleParamsForm[f.id]" type="number" min="1" max="5" step="1" class="mapping-select" />
               </label>
             </div>
             <p class="role-params-total">
-              Punteggio: <strong>{{ clampScoreInput(roleParamsForm.responsibility) + clampScoreInput(roleParamsForm.problemSolving) + clampScoreInput(roleParamsForm.requiredSkills) + clampScoreInput(roleParamsForm.workingConditions) }}</strong>
+              Punteggio pesato: <strong>{{ previewRoleWeightedScore() }}</strong> (scala 1–5)
             </p>
             <div class="justify-actions">
               <span style="flex:1"></span>
               <button class="btn-secondary" @click="cancelRoleParamsModal">Annulla</button>
-              <button class="btn-primary" @click="saveRoleParams">Salva parametri</button>
+              <button class="btn-primary" @click="saveRoleParams">Salva e ricalcola fasce</button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="jobGradingCriteriaModalOpen"
+          class="eu-outlier-modal-backdrop jg-criteria-backdrop"
+          @click.self="jobGradingCriteriaModalOpen = false"
+        >
+          <div class="jg-criteria-modal" role="dialog" aria-modal="true" aria-labelledby="jg-crit-title">
+            <h3 id="jg-crit-title">Criteri valutativi — trasparenza retributiva</h3>
+            <p class="jg-criteria-intro muted">
+              Quattro macro-aree con peso sul totale. Ogni fattore ha peso proprio e una scala da <strong>1</strong> (minimo) a <strong>5</strong> (massimo).
+            </p>
+            <div class="jg-criteria-table-wrap">
+              <table class="jg-criteria-table">
+                <thead>
+                  <tr>
+                    <th>Macro-area</th>
+                    <th>Fattore (peso)</th>
+                    <th>In sintesi</th>
+                    <th>1</th>
+                    <th>2</th>
+                    <th>3</th>
+                    <th>4</th>
+                    <th>5</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="area in TRANSPARENCY_MACRO_AREAS" :key="area.id">
+                    <tr v-for="(f, fi) in area.factors" :key="f.id">
+                      <td v-if="fi === 0" :rowspan="area.factors.length" class="jg-mac-area">
+                        <strong>{{ area.label }}</strong>
+                        <div class="jg-mac-w">{{ area.weightPct }}%</div>
+                      </td>
+                      <td class="jg-crit-factor">
+                        <strong>{{ f.label }}</strong>
+                        <span class="jg-f-w">{{ f.weightPct }}%</span>
+                      </td>
+                      <td class="jg-crit-desc">{{ f.description }}</td>
+                      <td v-for="(lvl, li) in f.levels" :key="li" class="jg-crit-lvl">{{ lvl }}</td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <div class="jg-criteria-actions">
+              <button type="button" class="btn-primary" @click="jobGradingCriteriaModalOpen = false">Chiudi</button>
             </div>
           </div>
         </div>
@@ -4203,9 +4254,147 @@ function exportJobGradingPdf() {
   border-bottom: none;
 }
 
-.hay-role-header,
-.hay-role-row {
-  grid-template-columns: 2.4fr 0.8fr 0.9fr 0.8fr 0.8fr 0.9fr 0.6fr 1.1fr;
+.hay-role-header.jg-tr-score-grid,
+.hay-role-row.jg-tr-score-grid {
+  grid-template-columns:
+    minmax(10rem, 2.1fr) repeat(10, minmax(1.15rem, 0.42fr)) minmax(1.35rem, 0.4fr) minmax(1.15rem, 0.38fr) minmax(4.2rem, 1fr);
+  gap: 0.25rem 0.3rem;
+  font-size: 0.72rem;
+}
+.jg-tr-col-head {
+  text-align: center;
+  line-height: 1.15;
+  white-space: normal;
+  font-size: 0.62rem;
+}
+.jg-tr-score-cell {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.jg-tr-p {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.job-grading-tab-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+.job-grading-tab-head__text {
+  flex: 1;
+  min-width: 14rem;
+  margin: 0;
+}
+.btn-jg-criteria {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.42rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: #2152ff;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+}
+.btn-jg-criteria:hover {
+  background: rgba(33, 82, 255, 0.08);
+}
+.jg-criteria-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 1rem 1.15rem 1.1rem;
+  max-width: min(96vw, 1200px);
+  width: 100%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.18);
+}
+.jg-criteria-modal h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.jg-criteria-intro {
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.jg-criteria-table-wrap {
+  overflow: auto;
+  flex: 1;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+.jg-criteria-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.62rem;
+  line-height: 1.3;
+}
+.jg-criteria-table th,
+.jg-criteria-table td {
+  border: 1px solid var(--border-light);
+  padding: 0.35rem 0.4rem;
+  vertical-align: top;
+}
+.jg-criteria-table thead th {
+  background: rgba(10, 108, 210, 0.08);
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.jg-mac-area {
+  background: rgba(10, 108, 210, 0.06);
+  font-weight: 600;
+  white-space: normal;
+  min-width: 5.5rem;
+}
+.jg-mac-w {
+  font-size: 0.75em;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-top: 0.2rem;
+}
+.jg-crit-factor .jg-f-w {
+  display: block;
+  font-size: 0.75em;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-top: 0.15rem;
+}
+.jg-crit-desc {
+  max-width: 10rem;
+  color: var(--text-secondary);
+}
+.jg-crit-lvl {
+  min-width: 5.5rem;
+  max-width: 7.5rem;
+  font-size: 0.58rem;
+  line-height: 1.25;
+}
+.jg-criteria-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.justify-modal--wide {
+  max-width: min(94vw, 44rem);
+}
+.role-params-grid--tr {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+  gap: 0.5rem;
+  max-height: 52vh;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
 }
 
 .hay-person-header,
