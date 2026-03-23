@@ -44,6 +44,50 @@ function detectHeaderRow(rows) {
   return 0
 }
 
+function expandSheetRangeIfNeeded(sheet) {
+  if (!sheet || typeof sheet !== 'object') return
+
+  // Alcuni export hanno !ref troncato (es. A1:Z100) anche se esistono celle oltre.
+  // In quel caso sheet_to_json legge solo il range !ref e sembra "fermarsi" a 100 righe.
+  const cellKeys = Object.keys(sheet).filter((k) => !k.startsWith('!'))
+  if (!cellKeys.length) return
+
+  let minR = Number.POSITIVE_INFINITY
+  let minC = Number.POSITIVE_INFINITY
+  let maxR = -1
+  let maxC = -1
+
+  for (const key of cellKeys) {
+    const cell = XLSX.utils.decode_cell(key)
+    if (cell.r < minR) minR = cell.r
+    if (cell.c < minC) minC = cell.c
+    if (cell.r > maxR) maxR = cell.r
+    if (cell.c > maxC) maxC = cell.c
+  }
+
+  if (maxR < 0 || maxC < 0) return
+  const computedRef = XLSX.utils.encode_range({
+    s: { r: Number.isFinite(minR) ? minR : 0, c: Number.isFinite(minC) ? minC : 0 },
+    e: { r: maxR, c: maxC },
+  })
+
+  const existingRef = sheet['!ref']
+  if (!existingRef) {
+    sheet['!ref'] = computedRef
+    return
+  }
+
+  try {
+    const existing = XLSX.utils.decode_range(existingRef)
+    // Aggiorna solo se il range dichiarato è più piccolo del range reale trovato.
+    if (existing.e.r < maxR || existing.e.c < maxC) {
+      sheet['!ref'] = computedRef
+    }
+  } catch {
+    sheet['!ref'] = computedRef
+  }
+}
+
 export async function parseExcelFromUrl(url) {
   const response = await fetch(url)
   if (!response.ok) {
@@ -58,6 +102,7 @@ export async function parseExcelFromUrl(url) {
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName]
     if (!sheet) continue
+    expandSheetRangeIfNeeded(sheet)
 
     // raw: true (default) → numeri come number JS. raw: false produce stringhe formattate (anche in formato US)
     // che rompono parseNumber italiano (punto decimale rimosso come migliaia) e gonfiano le retribuzioni.
