@@ -1421,7 +1421,7 @@ function exportJobGradingPdf() {
             <div class="eu-dash-header">
               <h3 class="eu-dash-title">Global Gender Pay Transparency Dashboard</h3>
               <p class="eu-dash-sub">
-                Trasparenza retributiva di genere — riferimento <strong>Direttiva UE 2023/970</strong>. Panoramica prima del dettaglio Job Grading.
+                Trasparenza retributiva di genere — riferimento <strong>Direttiva UE 2023/970</strong>.
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Calcolo gap su:</span>
@@ -1443,21 +1443,6 @@ function exportJobGradingPdf() {
               <div class="eu-kpi-card">
                 <div class="eu-kpi-label">Gender pay gap mediano (azienda)</div>
                 <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapMedian)">{{ formatGapMforF(euDashboard.gapMedian) }}</div>
-              </div>
-              <div class="eu-kpi-card">
-                <div class="eu-kpi-label">% fasce (cluster) oltre 5%</div>
-                <div
-                  class="eu-kpi-value"
-                  :class="euDashboard.pctFasceSopraSoglia != null && euDashboard.pctFasceSopraSoglia > 0 ? 'gap-severity-red' : 'gap-severity-green'"
-                >
-                  {{ euDashboard.pctFasceSopraSoglia != null ? formatPct(euDashboard.pctFasceSopraSoglia) : '–' }}
-                </div>
-                <div class="eu-kpi-hint">{{ euDashboard.bandsAboveThreshold }} / {{ euDashboard.bandsComparable }} fasce con uomini e donne</div>
-              </div>
-              <div class="eu-kpi-card">
-                <div class="eu-kpi-label">Budget stimato correzione (annuo)</div>
-                <div class="eu-kpi-value">{{ formatNum(euDashboard.budgetEstimate) }}</div>
-                <div class="eu-kpi-hint">Stima: somma n<sub>donne</sub> × max(0; media M − media F) per fasce con |gap| &gt; 5%</div>
               </div>
               <div class="eu-kpi-card eu-kpi-span">
                 <div class="eu-kpi-label">Dipendenti analizzati</div>
@@ -1504,7 +1489,7 @@ function exportJobGradingPdf() {
                   <div v-for="row in euDashboard.levelRows" :key="'lv-' + row.band + '-' + row.levelLabel" class="eu-level-row">
                     <div class="eu-level-head">
                       <span class="eu-level-name">{{ row.levelLabel }}</span>
-                      <span v-if="row.segregation" class="eu-segregation-msg">{{ row.segregationMsg }}</span>
+                      <span v-if="row.segregation" class="eu-segregation-msg">Dati non confrontabili (presente un solo genere)</span>
                       <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ formatGapMforF(row.gap) }}</span>
                     </div>
                     <div v-if="!row.segregation && row.gap != null" class="eu-level-track">
@@ -1530,14 +1515,6 @@ function exportJobGradingPdf() {
               <p v-else class="muted">Nessuna fascia con |gap| &gt; 5% tra quelle confrontabili, oppure dati insufficienti.</p>
             </div>
 
-            <div v-if="euDashboard.segregationWarnings.length" class="eu-panel eu-seg-panel">
-              <h4 class="eu-panel-title">Segregazione occupazionale (fasce)</h4>
-              <ul class="eu-seg-list">
-                <li v-for="(w, idx) in euDashboard.segregationWarnings" :key="idx">
-                  {{ w.levelLabel }} — {{ w.fasciaId }} ({{ w.fasciaLabel }}): {{ w.segregationMsg }}
-                </li>
-              </ul>
-            </div>
           </template>
         </div>
 
@@ -4953,17 +4930,24 @@ function exportJobGradingPdf() {
 }
 .toggle-btn {
   padding: 0.35rem 1rem;
-  border: 1px solid var(--border-light);
+  border: 1px solid #cbd5e1;
   border-radius: 6px;
-  background: var(--bg-page);
+  background: #ffffff;
+  color: #1f2937;
   cursor: pointer;
   font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   transition: all 0.15s;
 }
+.toggle-btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
 .toggle-btn.active {
-  background: var(--primary);
+  background: #2563eb;
   color: #fff;
-  border-color: var(--primary);
+  border-color: #2563eb;
   font-weight: 600;
 }
 .eu-compliant-msg {
