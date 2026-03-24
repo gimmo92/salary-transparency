@@ -730,6 +730,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     avgSalaryWomen: hayBand.avgSalaryWomen,
     nMenFascia: hayBand.nMen ?? 0,
     nWomenFascia: hayBand.nWomen ?? 0,
+    justifySource: 'job_grading',
   }
   resultsTabBeforeJustify.value = resultsTab.value
   resultsTab.value = 'person_justify'
@@ -804,7 +805,16 @@ const personJustifyFileInput = ref(null)
 
 function savePersonJustify() {
   if (justifyingPerson.value?.key) {
-    personJustifications.value[justifyingPerson.value.key] = justifyText.value
+    const key = justifyingPerson.value.key
+    const text = justifyText.value
+    if (justifyingPerson.value.justifySource === 'quartile_outlier') {
+      const next = { ...quartileOutlierJustifications.value }
+      if (String(text || '').trim()) next[key] = text
+      else delete next[key]
+      quartileOutlierJustifications.value = next
+    } else {
+      personJustifications.value[key] = text
+    }
   }
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
@@ -971,30 +981,73 @@ const quartileExcludedEntries = computed(() => {
   return out.sort((a, b) => a.index - b.index)
 })
 
-const quartileOutlierModalOpen = ref(false)
-const quartileOutlierModalRow = ref(null)
-const quartileOutlierModalText = ref('')
-
-function openQuartileOutlierModal(row) {
-  quartileOutlierModalRow.value = row
-  quartileOutlierModalText.value = quartileOutlierJustifications.value[String(row.index)] || ''
-  quartileOutlierModalOpen.value = true
+function findJobGradingContextByIndex(index) {
+  for (const b of jobResults.value || []) {
+    for (const sub of b.hayBands || []) {
+      for (const rb of sub.roles || []) {
+        const p = (rb.people || []).find((pp) => pp.index === index)
+        if (p) {
+          return { band: b, hayBand: sub, roleBlock: rb, person: p }
+        }
+      }
+    }
+  }
+  return null
 }
 
-function closeQuartileOutlierModal() {
-  quartileOutlierModalOpen.value = false
-  quartileOutlierModalRow.value = null
-}
-
-function saveQuartileOutlierJustification() {
-  const row = quartileOutlierModalRow.value
+function openQuartileOutlierJustifyTab(row) {
   if (!row) return
-  const text = quartileOutlierModalText.value.trim()
-  const next = { ...quartileOutlierJustifications.value }
-  if (text) next[String(row.index)] = text
-  else delete next[String(row.index)]
-  quartileOutlierJustifications.value = next
-  closeQuartileOutlierModal()
+  const key = String(row.index)
+  const ctx = findJobGradingContextByIndex(row.index)
+
+  if (ctx) {
+    openPersonJustify(ctx.person, ctx.roleBlock, ctx.band, ctx.hayBand)
+  } else {
+    justifyingPerson.value = {
+      key,
+      displayName: row.name && String(row.name).trim() ? String(row.name).trim() : `Dipendente #${key}`,
+      label: `Outlier quartile · #${key}`,
+      seniority: null,
+      seniorityYearsRaw: null,
+      fascAvgSeniorityYears: null,
+      seniorityPctVsFascia: null,
+      performanceScore: mockPerformanceScoreForPerson(row.index),
+      fascAvgPerformance: null,
+      performancePctVsFascia: null,
+      roleName: row.role || 'N/D',
+      bandNum: '–',
+      levelLabel: row.level || 'N/D',
+      fasciaId: `Q${row.quartile}`,
+      fasciaRange: row.reason || 'Outlier quartile',
+      baseSalary: null,
+      variableComponents: null,
+      totalSalary: row.salary,
+      gender: row.gender,
+      roleScoresBlock: null,
+      trWeightedScore: null,
+      trParametricScore100: null,
+      gapFasciaPct: null,
+      gapFasciaFormatted: '–',
+      avgFasciaSalary: null,
+      personDeviationFromFasciaPct: null,
+      avgSalaryMen: null,
+      avgSalaryWomen: null,
+      nMenFascia: 0,
+      nWomenFascia: 0,
+      justifySource: 'quartile_outlier',
+    }
+    resultsTabBeforeJustify.value = resultsTab.value
+    resultsTab.value = 'person_justify'
+    nextTick(() => {
+      mainWrapRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    })
+  }
+
+  justifyText.value = quartileOutlierJustifications.value[key] || ''
+  if (justifyingPerson.value) {
+    justifyingPerson.value.justifySource = 'quartile_outlier'
+  }
 }
 
 function clearQuartileOutlierExclusion(index) {
@@ -1552,6 +1605,182 @@ function exportJobGradingPdf() {
       return start
     }
 
+    // ---- Dashboard UE (dati principali) ----
+    const dash = euDashboard.value || {}
+    nextY = newPageIfNeeded(nextY)
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Dashboard trasparenza genere (UE) — Dati', 14, nextY)
+    nextY += 6
+
+    autoTable(doc, {
+      ...tableOptsText,
+      startY: nextY,
+      head: [[
+        'Modalità',
+        'Gap medio',
+        'Gap mediano',
+        '% fasce > 5%',
+        'Fasce > 5%',
+        'Fasce confrontabili',
+        'Budget stima',
+        'N M',
+        'N F',
+        'N analizzati',
+      ]],
+      body: [[
+        euDashboardSalaryMode.value === 'base' ? 'Retrib. base' : 'Retrib. totale',
+        formatPct(dash.gapMean),
+        formatPct(dash.gapMedian),
+        formatPct(dash.pctFasceSopraSoglia),
+        dash.bandsAboveThreshold ?? 0,
+        dash.bandsComparable ?? 0,
+        formatNum(dash.budgetEstimate),
+        dash.nMaschi ?? 0,
+        dash.nFemmine ?? 0,
+        dash.nTotaleAnalizzati ?? 0,
+      ]],
+      columnStyles: {
+        0: { cellWidth: 24 },
+        1: { cellWidth: 18, halign: 'right' },
+        2: { cellWidth: 18, halign: 'right' },
+        3: { cellWidth: 18, halign: 'right' },
+        4: { cellWidth: 16, halign: 'center' },
+        5: { cellWidth: 22, halign: 'center' },
+        6: { cellWidth: 22, halign: 'right' },
+        7: { cellWidth: 12, halign: 'center' },
+        8: { cellWidth: 12, halign: 'center' },
+        9: { cellWidth: 16, halign: 'center' },
+      },
+    })
+    nextY = doc.lastAutoTable.finalY + 8
+
+    const quartRows = (dash.quartiles || []).map((q) => [
+      `Q${q.quartile}`,
+      q.totale ?? 0,
+      q.maschile ?? 0,
+      q.femminile ?? 0,
+      formatPct(q.maschilePct),
+      formatPct(q.femminilePct),
+    ])
+    if (quartRows.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Distribuzione per quartili', 14, nextY)
+      nextY += 5
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Quartile', 'Totale', 'M', 'F', '% M', '% F']],
+        body: quartRows,
+        columnStyles: {
+          0: { cellWidth: 18, halign: 'center' },
+          1: { cellWidth: 18, halign: 'center' },
+          2: { cellWidth: 12, halign: 'center' },
+          3: { cellWidth: 12, halign: 'center' },
+          4: { cellWidth: 14, halign: 'right' },
+          5: { cellWidth: 14, halign: 'right' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 8
+    }
+
+    const levelRowsPdf = (dash.levelRows || []).map((r) => [
+      r.band ?? '–',
+      r.levelLabel ?? '–',
+      r.nM ?? 0,
+      r.nF ?? 0,
+      r.gap == null ? 'n/d' : formatPct(r.gap),
+      r.segregation ? (r.segregationMsg || 'Sì') : 'No',
+    ])
+    if (levelRowsPdf.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Gap per livello CCNL', 14, nextY)
+      nextY += 5
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Band', 'Livello', 'N M', 'N F', 'Gap', 'Segregazione / note']],
+        body: levelRowsPdf,
+        columnStyles: {
+          0: { cellWidth: 12, halign: 'center' },
+          1: { cellWidth: 26 },
+          2: { cellWidth: 12, halign: 'center' },
+          3: { cellWidth: 12, halign: 'center' },
+          4: { cellWidth: 16, halign: 'right' },
+          5: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 8
+    }
+
+    const fasciaRowsPdf = (dash.fasciaRows || []).map((r) => [
+      r.levelLabel ?? '–',
+      r.fasciaId ?? '–',
+      r.fasciaLabel ?? '–',
+      r.nM ?? 0,
+      r.nF ?? 0,
+      r.gap == null ? 'n/d' : formatPct(r.gap),
+      r.segregation ? (r.segregationMsg || 'Sì') : 'No',
+    ])
+    if (fasciaRowsPdf.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Gap per fascia / cluster', 14, nextY)
+      nextY += 5
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Livello', 'Fascia', 'Range', 'N M', 'N F', 'Gap', 'Segregazione / note']],
+        body: fasciaRowsPdf,
+        columnStyles: {
+          0: { cellWidth: 22 },
+          1: { cellWidth: 16, halign: 'center' },
+          2: { cellWidth: 24 },
+          3: { cellWidth: 12, halign: 'center' },
+          4: { cellWidth: 12, halign: 'center' },
+          5: { cellWidth: 16, halign: 'right' },
+          6: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 8
+    }
+
+    const outRowsPdf = (quartileOutlierRows.value || []).map((r) => [
+      `Q${r.quartile}`,
+      r.index,
+      r.name || '–',
+      r.gender || '–',
+      formatNum(r.salary),
+      r.reason || '–',
+    ])
+    if (outRowsPdf.length) {
+      nextY = newPageIfNeeded(nextY)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Outlier quartile (IQR)', 14, nextY)
+      nextY += 5
+      autoTable(doc, {
+        ...tableOptsText,
+        startY: nextY,
+        head: [['Q', '#', 'Nome', 'Genere', euDashboardSalaryMode.value === 'base' ? 'Base' : 'Totale', 'Motivo']],
+        body: outRowsPdf,
+        columnStyles: {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 10, halign: 'center' },
+          2: { cellWidth: 30 },
+          3: { cellWidth: 12, halign: 'center' },
+          4: { cellWidth: 20, halign: 'right' },
+          5: { cellWidth: 'auto' },
+        },
+      })
+      nextY = doc.lastAutoTable.finalY + 10
+    }
+
     if (jgRows.length) {
       nextY = newPageIfNeeded(nextY)
       doc.setFontSize(11)
@@ -1896,7 +2125,7 @@ function exportJobGradingPdf() {
                       <td class="eu-outlier-num">{{ formatNum(row.salary) }}</td>
                       <td class="eu-outlier-reason">{{ row.reason }}</td>
                       <td>
-                        <button type="button" class="btn-eu-outlier" @click="openQuartileOutlierModal(row)">Giustificativo</button>
+                        <button type="button" class="btn-eu-outlier" @click="openQuartileOutlierJustifyTab(row)">Giustificativo</button>
                       </td>
                     </tr>
                   </tbody>
@@ -1915,32 +2144,6 @@ function exportJobGradingPdf() {
                     <button type="button" class="btn-eu-outlier btn-eu-outlier-ghost" @click="clearQuartileOutlierExclusion(ex.index)">Ripristina in analisi</button>
                   </li>
                 </ul>
-              </div>
-            </div>
-
-            <div
-              v-if="quartileOutlierModalOpen"
-              class="eu-outlier-modal-backdrop"
-              @click.self="closeQuartileOutlierModal"
-            >
-              <div class="eu-outlier-modal" role="dialog" aria-modal="true" aria-labelledby="eu-outlier-modal-title">
-                <h4 id="eu-outlier-modal-title">Giustificativo outlier quartile</h4>
-                <p v-if="quartileOutlierModalRow" class="eu-outlier-modal-sub muted">
-                  {{ quartileOutlierModalRow.name || 'Dipendente' }} · Q{{ quartileOutlierModalRow.quartile }} ·
-                  {{ formatNum(quartileOutlierModalRow.salary) }}
-                </p>
-                <label class="eu-outlier-label" for="eu-outlier-ta">Motivazione (testo non vuoto = esclusione dall’analisi)</label>
-                <textarea
-                  id="eu-outlier-ta"
-                  v-model="quartileOutlierModalText"
-                  class="eu-outlier-textarea"
-                  rows="4"
-                  placeholder="Es. incarico straordinario, part-time, dati anomali, assenza storica, ecc."
-                ></textarea>
-                <div class="eu-outlier-modal-actions">
-                  <button type="button" class="btn-eu-outlier" @click="saveQuartileOutlierJustification">Salva ed escludi</button>
-                  <button type="button" class="btn-eu-outlier btn-eu-outlier-ghost" @click="closeQuartileOutlierModal">Annulla</button>
-                </div>
               </div>
             </div>
 
