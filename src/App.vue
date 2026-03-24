@@ -1692,7 +1692,6 @@ function exportJobGradingPdf() {
       r.nM ?? 0,
       r.nF ?? 0,
       r.gap == null ? 'n/d' : formatPct(r.gap),
-      r.segregation ? (r.segregationMsg || 'Sì') : 'No',
     ])
     if (levelRowsPdf.length) {
       nextY = newPageIfNeeded(nextY)
@@ -1703,7 +1702,7 @@ function exportJobGradingPdf() {
       autoTable(doc, {
         ...tableOptsText,
         startY: nextY,
-        head: [['Band', 'Livello', 'N M', 'N F', 'Gap', 'Segregazione / note']],
+        head: [['Band', 'Livello', 'N M', 'N F', 'Gap']],
         body: levelRowsPdf,
         columnStyles: {
           0: { cellWidth: 12, halign: 'center' },
@@ -1711,7 +1710,6 @@ function exportJobGradingPdf() {
           2: { cellWidth: 12, halign: 'center' },
           3: { cellWidth: 12, halign: 'center' },
           4: { cellWidth: 16, halign: 'right' },
-          5: { cellWidth: 'auto' },
         },
       })
       nextY = doc.lastAutoTable.finalY + 8
@@ -1724,7 +1722,6 @@ function exportJobGradingPdf() {
       r.nM ?? 0,
       r.nF ?? 0,
       r.gap == null ? 'n/d' : formatPct(r.gap),
-      r.segregation ? (r.segregationMsg || 'Sì') : 'No',
     ])
     if (fasciaRowsPdf.length) {
       nextY = newPageIfNeeded(nextY)
@@ -1735,7 +1732,7 @@ function exportJobGradingPdf() {
       autoTable(doc, {
         ...tableOptsText,
         startY: nextY,
-        head: [['Livello', 'Fascia', 'Range', 'N M', 'N F', 'Gap', 'Segregazione / note']],
+        head: [['Livello', 'Fascia', 'Range', 'N M', 'N F', 'Gap']],
         body: fasciaRowsPdf,
         columnStyles: {
           0: { cellWidth: 22 },
@@ -1744,41 +1741,9 @@ function exportJobGradingPdf() {
           3: { cellWidth: 12, halign: 'center' },
           4: { cellWidth: 12, halign: 'center' },
           5: { cellWidth: 16, halign: 'right' },
-          6: { cellWidth: 'auto' },
         },
       })
       nextY = doc.lastAutoTable.finalY + 8
-    }
-
-    const outRowsPdf = (quartileOutlierRows.value || []).map((r) => [
-      `Q${r.quartile}`,
-      r.index,
-      r.name || '–',
-      r.gender || '–',
-      formatNum(r.salary),
-      r.reason || '–',
-    ])
-    if (outRowsPdf.length) {
-      nextY = newPageIfNeeded(nextY)
-      doc.setFontSize(10)
-      doc.setFont('helvetica', 'bold')
-      doc.text('Outlier quartile (IQR)', 14, nextY)
-      nextY += 5
-      autoTable(doc, {
-        ...tableOptsText,
-        startY: nextY,
-        head: [['Q', '#', 'Nome', 'Genere', euDashboardSalaryMode.value === 'base' ? 'Base' : 'Totale', 'Motivo']],
-        body: outRowsPdf,
-        columnStyles: {
-          0: { cellWidth: 10, halign: 'center' },
-          1: { cellWidth: 10, halign: 'center' },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 12, halign: 'center' },
-          4: { cellWidth: 20, halign: 'right' },
-          5: { cellWidth: 'auto' },
-        },
-      })
-      nextY = doc.lastAutoTable.finalY + 10
     }
 
     if (jgRows.length) {
@@ -2080,10 +2045,9 @@ function exportJobGradingPdf() {
                   <div v-for="row in euDashboard.levelRows" :key="'lv-' + row.band + '-' + row.levelLabel" class="eu-level-row">
                     <div class="eu-level-head">
                       <span class="eu-level-name">{{ row.levelLabel }}</span>
-                      <span v-if="row.segregation" class="eu-segregation-msg">Dati non confrontabili (presente un solo genere)</span>
-                      <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ formatGapMforF(row.gap) }}</span>
+                      <span class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ row.gap == null ? 'n/d' : formatGapMforF(row.gap) }}</span>
                     </div>
-                    <div v-if="!row.segregation && row.gap != null" class="eu-level-track">
+                    <div v-if="row.gap != null" class="eu-level-track">
                       <div
                         class="eu-level-fill"
                         :class="euGapSeverityClass(row.gap)"
@@ -4459,14 +4423,6 @@ function exportJobGradingPdf() {
 .eu-level-gap {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-}
-.eu-segregation-msg {
-  font-size: 0.78rem;
-  color: #b45309;
-  font-weight: 600;
-  background: rgba(202, 138, 4, 0.1);
-  padding: 0.2rem 0.5rem;
-  border-radius: 6px;
 }
 .eu-level-track {
   height: 6px;
