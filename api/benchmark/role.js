@@ -17,6 +17,61 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null
 }
 
+function normalizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function roleAliases(role) {
+  const norm = normalizeText(role)
+  const aliases = new Set()
+  const map = {
+    'data analyst': ['data analytics analyst', 'analytics analyst'],
+    'software engineer': ['software developer', 'swe'],
+    'product manager': ['pm'],
+    'ux designer': ['ux ui designer', 'user experience designer'],
+    'payroll specialist': ['payroll analyst'],
+    'talent acquisition lead': ['ta lead', 'talent acquisition manager'],
+  }
+  if (norm === 'hr') {
+    aliases.add('HR')
+    aliases.add('Human Resources')
+    aliases.add('HR Manager')
+    aliases.add('HR Specialist')
+  }
+  if (norm === 'hrbp') {
+    aliases.add('HR Business Partner')
+    aliases.add('Human Resources Business Partner')
+  }
+  if (map[norm]) {
+    map[norm].forEach((a) => aliases.add(a))
+  }
+  return Array.from(aliases)
+}
+
+function roleMatch(text, terms) {
+  const hay = normalizeText(text)
+  if (!hay) return false
+  return (terms || []).some((t) => {
+    const tokens = normalizeText(t).split(' ').filter((x) => x.length >= 2)
+    if (!tokens.length) return false
+    return tokens.every((tk) => hay.includes(tk))
+  })
+}
+
+function isRelevantJobLink(link) {
+  const u = String(link || '').toLowerCase()
+  return (
+    u.includes('linkedin.com/jobs/view') ||
+    u.includes('indeed.com/viewjob') ||
+    u.includes('indeed.com/job')
+  )
+}
+
 function pointSalary(a) {
   if (a.salaryAnnualEur != null) return a.salaryAnnualEur
   if (a.salaryMinAnnualEur != null && a.salaryMaxAnnualEur != null) {
@@ -37,7 +92,7 @@ function percentileSorted(sorted, p) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const serperKey = process.env.SERP_API_KEY
+  const serperKey = process.env.SERP_API_KEY || process.env.SERPER_API_KEY
   const geminiKey = process.env.GOOGLE_AI_API_KEY
   if (!serperKey) return res.status(500).json({ error: 'SERP_API_KEY non configurata sul server.' })
   if (!geminiKey) return res.status(500).json({ error: 'GOOGLE_AI_API_KEY non configurata sul server.' })
@@ -48,19 +103,53 @@ export default async function handler(req, res) {
 
     const qRole = String(role).trim()
     const qSector = String(sector || '').trim()
-    const query = `annuncio lavoro ${qRole} ${qSector} RAL stipendio`
+    const aliases = roleAliases(qRole)
+    const roleTerms = [qRole, ...aliases]
+    const roleGroup = Array.from(new Set(roleTerms)).map((x) => `"${x}"`).join(' OR ')
+    const roleQuery = roleGroup ? `(${roleGroup})` : `"${qRole}"`
+    const keywordGroup = '("RAL" OR "retribuzione" OR "stipendio" OR "annua" OR "lordo" OR "EUR" OR "€")'
+    const sectorText = qSector ? `"${qSector}"` : ''
+    const salaryQueries = [
+      `site:it.linkedin.com/jobs/view ${roleQuery} ${sectorText} ${keywordGroup}`,
+      `site:it.indeed.com/viewjob ${roleQuery} ${sectorText} ${keywordGroup}`,
+      `site:it.indeed.com/job ${roleQuery} ${sectorText} ${keywordGroup}`,
+    ]
+    const fallbackQueries = [
+      `site:it.linkedin.com/jobs/view ${roleQuery} ${sectorText}`,
+      `site:it.indeed.com/viewjob ${roleQuery} ${sectorText}`,
+      `site:it.indeed.com/job ${roleQuery} ${sectorText}`,
+    ]
 
-    const serperRes = await fetch(SERPER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-KEY': serperKey },
-      body: JSON.stringify({ q: query, gl: country, hl: language, num: 20 }),
-    })
-    if (!serperRes.ok) {
-      const txt = await serperRes.text()
-      return res.status(502).json({ error: `Serper API error ${serperRes.status}: ${txt.slice(0, 240)}` })
+    async function fetchSerperQueries(queries, num = 10) {
+      const settled = await Promise.allSettled(
+        queries.map((q) =>
+          fetch(SERPER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': serperKey },
+            body: JSON.stringify({ q, gl: country, hl: language, num }),
+          })
+        ),
+      )
+      const ok = []
+      for (const s of settled) {
+        if (s.status !== 'fulfilled' || !s.value?.ok) continue
+        const data = await s.value.json().catch(() => null)
+        if (Array.isArray(data?.organic)) ok.push(...data.organic)
+      }
+      return ok
     }
-    const serperData = await serperRes.json()
-    const raw = (serperData.organic || []).slice(0, 20).map((r, i) => ({
+
+    let organic = await fetchSerperQueries(salaryQueries, 10)
+    if (!organic.length) organic = await fetchSerperQueries(fallbackQueries, 10)
+
+    const filtered = organic
+      .filter((r) => isRelevantJobLink(r?.link))
+      .filter((r) => roleMatch(`${r?.title || ''} ${r?.snippet || ''}`, roleTerms))
+    const dedup = Array.from(new Map(filtered.map((r) => [String(r.link || ''), r])).values())
+      .filter((r) => String(r.link || '').trim())
+      .slice(0, 30)
+
+    const raw = dedup.map((r, i) => ({
       i: i + 1,
       title: r.title || '',
       snippet: r.snippet || '',
