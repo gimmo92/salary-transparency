@@ -38,3 +38,7 @@ export async function suggestJustificationWithGemini(roleData) {
   const data = await postJson('/api/gemini/justify', roleData)
   return data.suggestion || ''
 }
+
+export async function benchmarkRoleMarketWithSerper(payload) {
+  return postJson('/api/benchmark/role', payload)
+}

@@ -12,6 +12,7 @@ import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
   suggestJustificationWithGemini,
+  benchmarkRoleMarketWithSerper,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
@@ -641,6 +642,9 @@ const justifyText = ref('')
 const personJustifications = ref({})
 const justifyingPerson = ref(null)
 const justifyAiLoading = ref(false)
+const benchmarkLoading = ref(false)
+const benchmarkError = ref('')
+const benchmarkResult = ref(null)
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -696,6 +700,8 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
       ? String(person.name).trim()
       : `Dipendente #${key}`
   const gapPct = hayBandAdjustedGapPct(hayBand)
+  benchmarkResult.value = null
+  benchmarkError.value = ''
 
   justifyingPerson.value = {
     key,
@@ -731,6 +737,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     nMenFascia: hayBand.nMen ?? 0,
     nWomenFascia: hayBand.nWomen ?? 0,
     justifySource: 'job_grading',
+    benchmarkSector: person?.category != null ? String(person.category) : '',
   }
   resultsTabBeforeJustify.value = resultsTab.value
   resultsTab.value = 'person_justify'
@@ -743,6 +750,58 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
 
 function canSuggestPersonJustifyAI() {
   return !!justifyingPerson.value
+}
+
+function benchmarkSalaryPoint(a) {
+  if (!a) return null
+  if (Number.isFinite(Number(a.salaryAnnualEur))) return Number(a.salaryAnnualEur)
+  const min = Number(a.salaryMinAnnualEur)
+  const max = Number(a.salaryMaxAnnualEur)
+  if (Number.isFinite(min) && Number.isFinite(max)) return (min + max) / 2
+  if (Number.isFinite(min)) return min
+  if (Number.isFinite(max)) return max
+  return null
+}
+
+function boxMarkerPct(stats, roleSalary) {
+  if (!stats || !Number.isFinite(Number(roleSalary))) return null
+  const min = Number(stats.min)
+  const max = Number(stats.max)
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null
+  const pct = ((Number(roleSalary) - min) / (max - min)) * 100
+  return Math.max(0, Math.min(100, pct))
+}
+
+async function runSalaryBenchmarkAnalysis() {
+  if (!justifyingPerson.value || benchmarkLoading.value) return
+  benchmarkLoading.value = true
+  benchmarkError.value = ''
+  try {
+    const j = justifyingPerson.value
+    const payload = {
+      role: j.roleName || '',
+      sector: j.benchmarkSector || j.levelLabel || '',
+      country: 'it',
+      language: 'it',
+    }
+    const data = await benchmarkRoleMarketWithSerper(payload)
+    const ads = (data?.announcements || []).map((a) => ({
+      ...a,
+      benchmarkSalary: benchmarkSalaryPoint(a),
+    }))
+    benchmarkResult.value = {
+      role: data?.role || payload.role,
+      sector: data?.sector || payload.sector,
+      announcements: ads,
+      stats: data?.stats || null,
+      roleSalary: Number.isFinite(Number(j.totalSalary)) ? Number(j.totalSalary) : null,
+    }
+  } catch (err) {
+    benchmarkError.value = `Analisi benchmark non riuscita: ${err?.message || String(err)}`
+    benchmarkResult.value = null
+  } finally {
+    benchmarkLoading.value = false
+  }
 }
 
 async function suggestPersonJustifyAI() {
@@ -819,6 +878,8 @@ function savePersonJustify() {
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
+  benchmarkResult.value = null
+  benchmarkError.value = ''
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
 }
@@ -827,6 +888,8 @@ function cancelPersonJustify() {
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
+  benchmarkResult.value = null
+  benchmarkError.value = ''
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
 }
@@ -999,6 +1062,7 @@ function openQuartileOutlierJustifyTab(row) {
   if (!row) return
   const key = String(row.index)
   const ctx = findJobGradingContextByIndex(row.index)
+  const fullRow = genderNormalizedCache.value.find((r) => r.index === row.index)
 
   if (ctx) {
     openPersonJustify(ctx.person, ctx.roleBlock, ctx.band, ctx.hayBand)
@@ -1014,9 +1078,9 @@ function openQuartileOutlierJustifyTab(row) {
       performanceScore: mockPerformanceScoreForPerson(row.index),
       fascAvgPerformance: null,
       performancePctVsFascia: null,
-      roleName: row.role || 'N/D',
+      roleName: fullRow?.role != null && String(fullRow.role).trim() ? String(fullRow.role).trim() : 'N/D',
       bandNum: '–',
-      levelLabel: row.level || 'N/D',
+      levelLabel: fullRow?.level != null && String(fullRow.level).trim() ? String(fullRow.level).trim() : 'N/D',
       fasciaId: `Q${row.quartile}`,
       fasciaRange: row.reason || 'Outlier quartile',
       baseSalary: null,
@@ -1035,6 +1099,10 @@ function openQuartileOutlierJustifyTab(row) {
       nMenFascia: 0,
       nWomenFascia: 0,
       justifySource: 'quartile_outlier',
+      benchmarkSector:
+        fullRow?.category != null && String(fullRow.category).trim()
+          ? String(fullRow.category).trim()
+          : '',
     }
     resultsTabBeforeJustify.value = resultsTab.value
     resultsTab.value = 'person_justify'
@@ -2460,6 +2528,99 @@ function exportJobGradingPdf() {
                 <span v-else>Suggerisci giustificativo AI</span>
               </button>
               <span v-if="!geminiEnabled" class="muted justify-ai-note">Gemini non attivo in questo ambiente.</span>
+            </div>
+
+            <div class="person-justify-benchmark">
+              <div class="person-justify-benchmark-head">
+                <h3 class="person-justify-benchmark-title">Analisi benchmark retributivi</h3>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  :disabled="benchmarkLoading"
+                  @click="runSalaryBenchmarkAnalysis"
+                >
+                  <span v-if="benchmarkLoading">Analizzo annunci...</span>
+                  <span v-else>Avvia analisi</span>
+                </button>
+              </div>
+              <p class="muted person-justify-benchmark-lead">
+                Ricerca annunci per ruolo/settore con RAL in chiaro (Serper), normalizzazione salariale con Gemini e confronto con la retribuzione del ruolo.
+              </p>
+              <div v-if="justifyingPerson" class="benchmark-sector-field">
+                <label class="benchmark-sector-label" for="benchmark-sector-input">Settore (ricerca annunci)</label>
+                <input
+                  id="benchmark-sector-input"
+                  v-model="justifyingPerson.benchmarkSector"
+                  type="text"
+                  class="url-input benchmark-sector-input"
+                  placeholder="es. farmaceutico, retail, IT..."
+                  :disabled="benchmarkLoading"
+                />
+              </div>
+              <p v-if="benchmarkError" class="upload-error">{{ benchmarkError }}</p>
+
+              <template v-if="benchmarkResult">
+                <div class="benchmark-summary muted">
+                  <strong>Ruolo:</strong> {{ benchmarkResult.role || '–' }}
+                  · <strong>Settore:</strong> {{ benchmarkResult.sector || '–' }}
+                  · <strong>Annunci validi:</strong> {{ benchmarkResult.announcements.length }}
+                </div>
+
+                <div v-if="benchmarkResult.stats" class="benchmark-boxplot-wrap">
+                  <template v-if="benchmarkResult.stats.max > benchmarkResult.stats.min">
+                    <div class="benchmark-boxplot" aria-label="Boxplot benchmark RAL">
+                      <div class="benchmark-axis"></div>
+                      <div
+                        class="benchmark-whisker"
+                        :style="{ left: '0%', width: '100%' }"
+                      ></div>
+                      <div
+                        class="benchmark-box"
+                        :style="{
+                          left: ((benchmarkResult.stats.q1 - benchmarkResult.stats.min) / (benchmarkResult.stats.max - benchmarkResult.stats.min) * 100) + '%',
+                          width: ((benchmarkResult.stats.q3 - benchmarkResult.stats.q1) / (benchmarkResult.stats.max - benchmarkResult.stats.min) * 100) + '%',
+                        }"
+                      ></div>
+                      <div
+                        class="benchmark-median"
+                        :style="{ left: ((benchmarkResult.stats.median - benchmarkResult.stats.min) / (benchmarkResult.stats.max - benchmarkResult.stats.min) * 100) + '%' }"
+                      ></div>
+                      <div
+                        v-if="benchmarkResult.roleSalary != null && boxMarkerPct(benchmarkResult.stats, benchmarkResult.roleSalary) != null"
+                        class="benchmark-role-marker"
+                        :style="{ left: boxMarkerPct(benchmarkResult.stats, benchmarkResult.roleSalary) + '%' }"
+                        :title="'Retribuzione ruolo: ' + formatNum(benchmarkResult.roleSalary)"
+                      ></div>
+                    </div>
+                  </template>
+                  <p v-else class="muted benchmark-boxplot-note">
+                    Benchmark su un solo valore ({{ formatNum(benchmarkResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
+                  </p>
+                  <div class="benchmark-stats-grid">
+                    <span>Min {{ formatNum(benchmarkResult.stats.min) }}</span>
+                    <span>Q1 {{ formatNum(benchmarkResult.stats.q1) }}</span>
+                    <span>Mediana {{ formatNum(benchmarkResult.stats.median) }}</span>
+                    <span>Q3 {{ formatNum(benchmarkResult.stats.q3) }}</span>
+                    <span>Max {{ formatNum(benchmarkResult.stats.max) }}</span>
+                    <span v-if="benchmarkResult.roleSalary != null">Ruolo {{ formatNum(benchmarkResult.roleSalary) }}</span>
+                  </div>
+                </div>
+
+                <div v-if="benchmarkResult.announcements.length" class="benchmark-list">
+                  <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
+                  <ul class="benchmark-list-ul">
+                    <li v-for="(a, idx) in benchmarkResult.announcements" :key="'bm-' + idx" class="benchmark-item">
+                      <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
+                      <span v-else>{{ a.title || 'Annuncio' }}</span>
+                      <span class="muted">
+                        — {{ a.salaryText || 'RAL non testuale' }}
+                        <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+                <p v-else class="muted">Nessun annuncio con RAL in chiaro trovato per questa ricerca.</p>
+              </template>
             </div>
 
             <div class="person-justify-suggestions">
@@ -4036,6 +4197,145 @@ function exportJobGradingPdf() {
   font-size: 0.95rem;
   font-weight: 700;
 }
+
+.person-justify-benchmark {
+  margin: 1rem 0 1.1rem;
+  padding: 0.85rem 1rem;
+  border: 1px dashed var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-page);
+}
+.person-justify-benchmark-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.5rem;
+}
+.person-justify-benchmark-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.person-justify-benchmark-lead {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.benchmark-sector-field {
+  margin-bottom: 0.65rem;
+}
+.benchmark-sector-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 0.35rem;
+}
+.benchmark-sector-input {
+  max-width: 28rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.875rem;
+}
+.benchmark-summary {
+  font-size: 0.8rem;
+  margin-bottom: 0.65rem;
+  line-height: 1.45;
+}
+.benchmark-boxplot-wrap {
+  margin: 0.5rem 0 0.75rem;
+}
+.benchmark-boxplot {
+  position: relative;
+  height: 44px;
+  margin: 0.35rem 0 0.5rem;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-card) 0%, rgba(10, 108, 210, 0.06) 50%, var(--bg-card) 100%);
+}
+.benchmark-axis {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.85;
+}
+.benchmark-whisker {
+  position: absolute;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--text-muted);
+  opacity: 0.45;
+}
+.benchmark-box {
+  position: absolute;
+  top: 10px;
+  height: 24px;
+  margin-left: 0;
+  border-radius: 4px;
+  background: rgba(10, 108, 210, 0.35);
+  border: 1px solid var(--accent-blue);
+  box-sizing: border-box;
+}
+.benchmark-median {
+  position: absolute;
+  top: 8px;
+  width: 3px;
+  height: 28px;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  background: var(--accent-blue);
+  z-index: 2;
+}
+.benchmark-role-marker {
+  position: absolute;
+  top: 2px;
+  width: 0;
+  height: 0;
+  margin-left: -6px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 10px solid #c2410c;
+  z-index: 3;
+}
+.benchmark-boxplot-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+}
+.benchmark-stats-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.benchmark-list {
+  margin-top: 0.75rem;
+}
+.benchmark-list-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.benchmark-list-ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.benchmark-item {
+  margin-bottom: 0.35rem;
+}
+
 .justify-ai-row {
   display: flex;
   align-items: center;
