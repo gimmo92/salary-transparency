@@ -157,11 +157,11 @@ export default async function handler(req, res) {
       source: r.source || '',
     }))
 
-    if (!raw.length) return res.status(200).json({ role: qRole, sector: qSector, announcements: [], stats: null })
+    if (!raw.length) return res.status(200).json({ role: qRole, announcements: [], stats: null })
 
     const prompt = `Estrai SOLO annunci di lavoro con retribuzione/RAL esplicita in EUR annui o convertibile in annuo.
+Contesto: annunci riferiti al mercato del lavoro in Italia per il ruolo indicato (nessun filtro per settore).
 Ruolo target: ${qRole}
-Settore target: ${qSector || 'non specificato'}
 
 Input risultati web (JSON):
 ${JSON.stringify(raw)}
