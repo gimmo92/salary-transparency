@@ -12,9 +12,95 @@ function extractJson(text) {
   throw new Error('Risposta Gemini non in JSON valido')
 }
 
-function toNum(v) {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
+/** Parsing EUR: numeri puri, stringhe IT (85.000,00) o EN (85,000.00). 0 = assente. */
+function parseEurAmount(v) {
+  if (v == null || v === '') return null
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v) || v === 0) return null
+    return Math.round(v)
+  }
+  const text = String(v).trim()
+  if (!text) return null
+  const multiplier = /[kK]\b/.test(text) ? 1000 : 1
+  const cleaned = text.replace(/[^\d.,-]/g, '')
+  if (!cleaned) return null
+  const hasDot = cleaned.includes('.')
+  const hasComma = cleaned.includes(',')
+  let normalized = cleaned
+  if (hasDot && hasComma) {
+    if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) {
+      normalized = cleaned.replace(/\./g, '').replace(',', '.')
+    } else {
+      normalized = cleaned.replace(/,/g, '')
+    }
+  } else if (hasComma) {
+    const parts = cleaned.split(',')
+    if (parts.length === 2 && parts[1].length <= 2) {
+      normalized = parts[0].replace(/\./g, '') + '.' + parts[1]
+    } else {
+      normalized = parts.join('')
+    }
+  } else if (hasDot) {
+    const parts = cleaned.split('.')
+    if (parts.length === 2 && parts[1].length <= 2) {
+      normalized = parts[0].replace(/\./g, '') + '.' + parts[1]
+    } else {
+      normalized = parts.join('')
+    }
+  }
+  const n = Number(normalized) * multiplier
+  if (!Number.isFinite(n) || n === 0) return null
+  return Math.round(n)
+}
+
+/**
+ * Estrae min/max annuali da testo libero se i campi numerici da Gemini sono assenti/errati.
+ * Mensile → annuo x13 se il testo suggerisce retribuzione mensile e importi plausibili.
+ */
+function extractAnnualRangeFromText(text) {
+  const raw = String(text || '')
+  if (!raw.trim()) return null
+  const lower = raw.toLowerCase()
+  const monthlyHint =
+    /€\s*\d[\d.,]*\s*\/?\s*mo\b/.test(lower) ||
+    /\b(al mese|mensile|mensilit|mensilità|\/mese)\b/i.test(lower)
+  const annualHint = /\b(annu|ral|lordo|\/anno|eur\/a|stipendio annu)\b/i.test(lower) || /all['']anno/i.test(lower)
+
+  const patterns = [
+    /(\d[\d.,]*)\s*(?:€|eur|euro)?\s*(?:-|–|a)\s*(\d[\d.,]*)\s*(?:€|eur|euro)?/gi,
+    /(?:€|eur)\s*(\d[\d.,]*)\s*(?:-|–)\s*(\d[\d.,]*)/gi,
+    /(?:tra|fra)\s*(\d[\d.,]*)\s*(?:e|a)\s*(\d[\d.,]*)/gi,
+  ]
+  let best = null
+  for (const re of patterns) {
+    re.lastIndex = 0
+    let m
+    while ((m = re.exec(raw)) !== null) {
+      const x = parseEurAmount(m[1])
+      const y = parseEurAmount(m[2])
+      if (x == null || y == null) continue
+      let lo = Math.min(x, y)
+      let hi = Math.max(x, y)
+      if (monthlyHint && hi <= 12000 && !annualHint) {
+        lo *= 13
+        hi *= 13
+      }
+      if (hi >= 8000 && hi <= 600000) {
+        best = { min: lo, max: hi }
+        if (hi >= 15000) break
+      }
+    }
+    if (best && best.max >= 15000) break
+  }
+  if (best) return best
+  const single =
+    raw.match(/(?:ral|retribuz|stipendio)\s*[:\s]*(\d[\d.,]*)/i) ||
+    raw.match(/€\s*(\d[\d.,]*)\s*(?:all['']anno|annui)/i)
+  if (single) {
+    const v = parseEurAmount(single[1])
+    if (v != null && v >= 8000) return { min: v, max: v }
+  }
+  return null
 }
 
 function normalizeText(value) {
@@ -184,6 +270,7 @@ Regole:
 - Se c'è range usa min/max.
 - Se c'è un solo valore annuo usa salaryAnnualEur.
 - Se mensile converti ad annuo x13 (default Italia) e specifica in note.
+- Per salaryMinAnnualEur, salaryMaxAnnualEur, salaryAnnualEur usa SOLO numeri interi senza separatori (es. 85000), mai stringhe tipo "85.000".
 - Numeri interi in EUR annui.
 - Nessun testo extra oltre il JSON array.`
 
@@ -203,22 +290,47 @@ Regole:
     const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p?.text || '').join('\n')
     const parsed = extractJson(text)
     const announcements = (Array.isArray(parsed) ? parsed : [])
-      .map((a) => ({
-        i: toNum(a.i),
-        title: String(a.title || ''),
-        link: String(a.link || ''),
-        source: String(a.source || ''),
-        salaryText: String(a.salaryText || ''),
-        salaryMinAnnualEur: toNum(a.salaryMinAnnualEur),
-        salaryMaxAnnualEur: toNum(a.salaryMaxAnnualEur),
-        salaryAnnualEur: toNum(a.salaryAnnualEur),
-        note: String(a.note || ''),
-      }))
-      .filter((a) => a.title && (a.salaryAnnualEur != null || a.salaryMinAnnualEur != null || a.salaryMaxAnnualEur != null))
+      .map((a) => {
+        const salaryText = String(a.salaryText || '')
+        const title = String(a.title || '')
+        let salaryMinAnnualEur = parseEurAmount(a.salaryMinAnnualEur)
+        let salaryMaxAnnualEur = parseEurAmount(a.salaryMaxAnnualEur)
+        let salaryAnnualEur = parseEurAmount(a.salaryAnnualEur)
+        const idx = typeof a.i === 'number' ? a.i : parseInt(String(a.i), 10)
+        let row = {
+          i: Number.isFinite(idx) ? idx : null,
+          title,
+          link: String(a.link || ''),
+          source: String(a.source || ''),
+          salaryText,
+          salaryMinAnnualEur,
+          salaryMaxAnnualEur,
+          salaryAnnualEur,
+          note: String(a.note || ''),
+        }
+        let pt = pointSalary(row)
+        if (pt == null || pt === 0) {
+          const fromText = extractAnnualRangeFromText(`${salaryText} ${title}`)
+          if (fromText) {
+            row = {
+              ...row,
+              salaryMinAnnualEur: fromText.min,
+              salaryMaxAnnualEur: fromText.max,
+              salaryAnnualEur: null,
+            }
+          }
+        }
+        return row
+      })
+      .filter((a) => {
+        if (!a.title) return false
+        const p = pointSalary(a)
+        return p != null && p > 0
+      })
 
     const values = announcements
       .map(pointSalary)
-      .filter((v) => Number.isFinite(v))
+      .filter((v) => Number.isFinite(v) && v > 0)
       .sort((a, b) => a - b)
 
     const stats = values.length
