@@ -1,14 +1,131 @@
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 const SERPER_URL = 'https://google.serper.dev/search'
 
-function extractJson(text) {
-  const cleaned = String(text || '').replace(/```json\s*/gi, '').replace(/```/g, '').trim()
-  try { return JSON.parse(cleaned) } catch {}
-  const s = cleaned.indexOf('[')
-  const e = cleaned.lastIndexOf(']')
-  if (s >= 0 && e > s) {
-    try { return JSON.parse(cleaned.slice(s, e + 1)) } catch {}
+/** Rimuove virgole finali non valide in JSON (errore comune da LLM). */
+function stripTrailingCommas(jsonLike) {
+  return String(jsonLike).replace(/,(\s*[}\]])/g, '$1')
+}
+
+/**
+ * Estrae il primo array JSON bilanciando le parentesi quadre (evita ] dentro stringhe).
+ */
+function extractBalancedJsonArray(text) {
+  const s = text.indexOf('[')
+  if (s < 0) return null
+  let depth = 0
+  let inString = false
+  let escape = false
+  let q = ''
+  for (let i = s; i < text.length; i++) {
+    const c = text[i]
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (inString) {
+      if (c === '\\') {
+        escape = true
+        continue
+      }
+      if (c === q) inString = false
+      continue
+    }
+    if (c === '"' || c === "'") {
+      inString = true
+      q = c
+      continue
+    }
+    if (c === '[') depth++
+    if (c === ']') {
+      depth--
+      if (depth === 0) return text.slice(s, i + 1)
+    }
   }
+  return null
+}
+
+/**
+ * Parsa la risposta Gemini in array di annunci: prova più strategie (JSON mode a volte aggiunge testo).
+ */
+function extractJson(text) {
+  const cleaned = String(text || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/```json\s*/gi, '')
+    .replace(/```/g, '')
+    .trim()
+
+  const attempts = [
+    () => JSON.parse(cleaned),
+    () => JSON.parse(stripTrailingCommas(cleaned)),
+  ]
+  for (const fn of attempts) {
+    try {
+      const v = fn()
+      if (Array.isArray(v)) return v
+      if (v && typeof v === 'object') {
+        const arr = v.items || v.announcements || v.data || v.results
+        if (Array.isArray(arr)) return arr
+      }
+    } catch {
+      /* try next */
+    }
+  }
+
+  const slice = extractBalancedJsonArray(cleaned)
+  if (slice) {
+    for (const fn of [() => JSON.parse(slice), () => JSON.parse(stripTrailingCommas(slice))]) {
+      try {
+        const v = fn()
+        if (Array.isArray(v)) return v
+      } catch {
+        /* try next */
+      }
+    }
+  }
+
+  const objStart = cleaned.indexOf('{')
+  if (objStart >= 0) {
+    let depth = 0
+    let inString = false
+    let escape = false
+    let q = ''
+    for (let i = objStart; i < cleaned.length; i++) {
+      const c = cleaned[i]
+      if (escape) {
+        escape = false
+        continue
+      }
+      if (inString) {
+        if (c === '\\') {
+          escape = true
+          continue
+        }
+        if (c === q) inString = false
+        continue
+      }
+      if (c === '"' || c === "'") {
+        inString = true
+        q = c
+        continue
+      }
+      if (c === '{') depth++
+      if (c === '}') {
+        depth--
+        if (depth === 0) {
+          const objSlice = cleaned.slice(objStart, i + 1)
+          try {
+            const v = JSON.parse(stripTrailingCommas(objSlice))
+            const arr = v.items || v.announcements || v.data || v.results
+            if (Array.isArray(arr)) return arr
+          } catch {
+            /* fall through */
+          }
+          break
+        }
+      }
+    }
+  }
+
   throw new Error('Risposta Gemini non in JSON valido')
 }
 
@@ -287,7 +404,17 @@ Regole:
       return res.status(502).json({ error: `Gemini API error ${geminiRes.status}: ${txt.slice(0, 240)}` })
     }
     const data = await geminiRes.json()
-    const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p?.text || '').join('\n')
+    const cand = data.candidates?.[0]
+    const text = (cand?.content?.parts || []).map((p) => p?.text || '').join('\n')
+    if (!String(text || '').trim()) {
+      const r = cand?.finishReason || ''
+      console.error('Benchmark Gemini empty text', { finishReason: r, raw: JSON.stringify(data).slice(0, 1200) })
+      throw new Error(
+        r === 'SAFETY'
+          ? 'Gemini ha bloccato la risposta (policy).'
+          : 'Risposta Gemini vuota o incompleta.',
+      )
+    }
     const parsed = extractJson(text)
     const announcements = (Array.isArray(parsed) ? parsed : [])
       .map((a) => {
