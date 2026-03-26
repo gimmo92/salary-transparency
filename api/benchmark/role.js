@@ -98,26 +98,26 @@ export default async function handler(req, res) {
   if (!geminiKey) return res.status(500).json({ error: 'GOOGLE_AI_API_KEY non configurata sul server.' })
 
   try {
-    const { role, sector, country = 'it', language = 'it' } = req.body || {}
+    const { role, country = 'it', language = 'it' } = req.body || {}
     if (!role || !String(role).trim()) return res.status(400).json({ error: 'Ruolo mancante' })
 
     const qRole = String(role).trim()
-    const qSector = String(sector || '').trim()
     const aliases = roleAliases(qRole)
     const roleTerms = [qRole, ...aliases]
     const roleGroup = Array.from(new Set(roleTerms)).map((x) => `"${x}"`).join(' OR ')
     const roleQuery = roleGroup ? `(${roleGroup})` : `"${qRole}"`
     const keywordGroup = '("RAL" OR "retribuzione" OR "stipendio" OR "annua" OR "lordo" OR "EUR" OR "€")'
-    const sectorText = qSector ? `"${qSector}"` : ''
+    /** Ambito geografico: solo annunci in contesto Italia (Serper gl=it + hint in query) */
+    const geoHint = '(Italia OR Italy OR "in Italia")'
     const salaryQueries = [
-      `site:it.linkedin.com/jobs/view ${roleQuery} ${sectorText} ${keywordGroup}`,
-      `site:it.indeed.com/viewjob ${roleQuery} ${sectorText} ${keywordGroup}`,
-      `site:it.indeed.com/job ${roleQuery} ${sectorText} ${keywordGroup}`,
+      `site:it.linkedin.com/jobs/view ${roleQuery} ${keywordGroup} ${geoHint}`,
+      `site:it.indeed.com/viewjob ${roleQuery} ${keywordGroup} ${geoHint}`,
+      `site:it.indeed.com/job ${roleQuery} ${keywordGroup} ${geoHint}`,
     ]
     const fallbackQueries = [
-      `site:it.linkedin.com/jobs/view ${roleQuery} ${sectorText}`,
-      `site:it.indeed.com/viewjob ${roleQuery} ${sectorText}`,
-      `site:it.indeed.com/job ${roleQuery} ${sectorText}`,
+      `site:it.linkedin.com/jobs/view ${roleQuery} ${geoHint}`,
+      `site:it.indeed.com/viewjob ${roleQuery} ${geoHint}`,
+      `site:it.indeed.com/job ${roleQuery} ${geoHint}`,
     ]
 
     async function fetchSerperQueries(queries, num = 10) {
@@ -139,8 +139,8 @@ export default async function handler(req, res) {
       return ok
     }
 
-    let organic = await fetchSerperQueries(salaryQueries, 10)
-    if (!organic.length) organic = await fetchSerperQueries(fallbackQueries, 10)
+    let organic = await fetchSerperQueries(salaryQueries, 15)
+    if (!organic.length) organic = await fetchSerperQueries(fallbackQueries, 15)
 
     const filtered = organic
       .filter((r) => isRelevantJobLink(r?.link))
@@ -232,7 +232,7 @@ Regole:
         }
       : null
 
-    return res.status(200).json({ role: qRole, sector: qSector, announcements, stats })
+    return res.status(200).json({ role: qRole, announcements, stats })
   } catch (err) {
     console.error('Benchmark role error:', err)
     return res.status(500).json({ error: err.message || 'Benchmark analysis failed' })

@@ -737,7 +737,6 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     nMenFascia: hayBand.nMen ?? 0,
     nWomenFascia: hayBand.nWomen ?? 0,
     justifySource: 'job_grading',
-    benchmarkSector: person?.category != null ? String(person.category) : '',
   }
   resultsTabBeforeJustify.value = resultsTab.value
   resultsTab.value = 'person_justify'
@@ -780,7 +779,6 @@ async function runSalaryBenchmarkAnalysis() {
     const j = justifyingPerson.value
     const payload = {
       role: j.roleName || '',
-      sector: j.benchmarkSector || j.levelLabel || '',
       country: 'it',
       language: 'it',
     }
@@ -791,7 +789,6 @@ async function runSalaryBenchmarkAnalysis() {
     }))
     benchmarkResult.value = {
       role: data?.role || payload.role,
-      sector: data?.sector || payload.sector,
       announcements: ads,
       stats: data?.stats || null,
       roleSalary: Number.isFinite(Number(j.totalSalary)) ? Number(j.totalSalary) : null,
@@ -1099,10 +1096,6 @@ function openQuartileOutlierJustifyTab(row) {
       nMenFascia: 0,
       nWomenFascia: 0,
       justifySource: 'quartile_outlier',
-      benchmarkSector:
-        fullRow?.category != null && String(fullRow.category).trim()
-          ? String(fullRow.category).trim()
-          : '',
     }
     resultsTabBeforeJustify.value = resultsTab.value
     resultsTab.value = 'person_justify'
@@ -2544,25 +2537,14 @@ function exportJobGradingPdf() {
                 </button>
               </div>
               <p class="muted person-justify-benchmark-lead">
-                Ricerca annunci per ruolo/settore con RAL in chiaro (Serper), normalizzazione salariale con Gemini e confronto con la retribuzione del ruolo.
+                Ricerca annunci in Italia per il ruolo con RAL in chiaro (Serper), normalizzazione con Gemini e confronto con la retribuzione del ruolo.
               </p>
-              <div v-if="justifyingPerson" class="benchmark-sector-field">
-                <label class="benchmark-sector-label" for="benchmark-sector-input">Settore (ricerca annunci)</label>
-                <input
-                  id="benchmark-sector-input"
-                  v-model="justifyingPerson.benchmarkSector"
-                  type="text"
-                  class="url-input benchmark-sector-input"
-                  placeholder="es. farmaceutico, retail, IT..."
-                  :disabled="benchmarkLoading"
-                />
-              </div>
               <p v-if="benchmarkError" class="upload-error">{{ benchmarkError }}</p>
 
               <template v-if="benchmarkResult">
                 <div class="benchmark-summary muted">
                   <strong>Ruolo:</strong> {{ benchmarkResult.role || '–' }}
-                  · <strong>Settore:</strong> {{ benchmarkResult.sector || '–' }}
+                  · <strong>Italia</strong> (ricerca Serper)
                   · <strong>Annunci validi:</strong> {{ benchmarkResult.announcements.length }}
                 </div>
 
@@ -4223,25 +4205,6 @@ function exportJobGradingPdf() {
   margin: 0 0 0.65rem;
   font-size: 0.8rem;
   line-height: 1.45;
-}
-.benchmark-sector-field {
-  margin-bottom: 0.65rem;
-}
-.benchmark-sector-label {
-  display: block;
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-  margin-bottom: 0.35rem;
-}
-.benchmark-sector-input {
-  max-width: 28rem;
-  width: 100%;
-  min-width: 0;
-  padding: 0.55rem 0.75rem;
-  font-size: 0.875rem;
 }
 .benchmark-summary {
   font-size: 0.8rem;
