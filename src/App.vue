@@ -43,6 +43,7 @@ const activeSection = ref('analisi')
 const sections = [
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
+  { id: 'benchmark_lab', label: 'Benchmark test', icon: 'chart' },
 ]
 
 // Flusso unificato
@@ -143,6 +144,7 @@ const allRoleKeys = [
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
 const showStorico = computed(() => activeSection.value === 'storico')
+const showBenchmarkLab = computed(() => activeSection.value === 'benchmark_lab')
 
 // Storico
 const storicoList = ref([])
@@ -646,6 +648,22 @@ const justifyAiLoading = ref(false)
 const benchmarkLoading = ref(false)
 const benchmarkError = ref('')
 const benchmarkResult = ref(null)
+const BENCHMARK_TEST_ROLES = [
+  'Product Manager',
+  'Controller',
+  'Customer Success Specialist',
+  'Data Scientist',
+  'HR Business Partner',
+  'Supply Chain Planner',
+  'Cloud Architect',
+  'Compliance Officer',
+  'Content Strategist',
+  'Operations Manager',
+]
+const benchmarkTestRole = ref(BENCHMARK_TEST_ROLES[0])
+const benchmarkTestLoading = ref(false)
+const benchmarkTestError = ref('')
+const benchmarkTestResult = ref(null)
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -772,8 +790,8 @@ function boxMarkerPct(stats, roleSalary) {
   return Math.max(0, Math.min(100, pct))
 }
 
-const benchmarkChartSeries = computed(() => {
-  const s = benchmarkResult.value?.stats
+function buildBenchmarkChartSeries(result) {
+  const s = result?.stats
   if (!s) return []
   const min = Number(s.min)
   const q1 = Number(s.q1)
@@ -787,7 +805,7 @@ const benchmarkChartSeries = computed(() => {
       data: [{ x: 'Benchmark', y: [min, q1, median, q3, max] }],
     },
   ]
-  const roleSalary = Number(benchmarkResult.value?.roleSalary)
+  const roleSalary = Number(result?.roleSalary)
   if (Number.isFinite(roleSalary)) {
     series.push({
       type: 'scatter',
@@ -795,7 +813,10 @@ const benchmarkChartSeries = computed(() => {
     })
   }
   return series
-})
+}
+
+const benchmarkChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkResult.value))
+const benchmarkTestChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkTestResult.value))
 
 const benchmarkChartOptions = computed(() => ({
   chart: {
@@ -872,6 +893,35 @@ async function runSalaryBenchmarkAnalysis() {
     benchmarkResult.value = null
   } finally {
     benchmarkLoading.value = false
+  }
+}
+
+async function runBenchmarkTestAnalysis() {
+  const role = String(benchmarkTestRole.value || '').trim()
+  if (!role || benchmarkTestLoading.value) return
+  benchmarkTestLoading.value = true
+  benchmarkTestError.value = ''
+  try {
+    const data = await benchmarkRoleMarketWithSerper({
+      role,
+      country: 'it',
+      language: 'it',
+    })
+    const ads = (data?.announcements || []).map((a) => ({
+      ...a,
+      benchmarkSalary: benchmarkSalaryPoint(a),
+    }))
+    benchmarkTestResult.value = {
+      role: data?.role || role,
+      announcements: ads,
+      stats: data?.stats || null,
+      roleSalary: null,
+    }
+  } catch (err) {
+    benchmarkTestError.value = `Analisi benchmark non riuscita: ${err?.message || String(err)}`
+    benchmarkTestResult.value = null
+  } finally {
+    benchmarkTestLoading.value = false
   }
 }
 
@@ -1996,6 +2046,7 @@ function exportJobGradingPdf() {
           <span class="tab-icon">
             <svg v-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
             <svg v-else-if="s.icon === 'history'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <svg v-else-if="s.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg>
           </span>
           <span class="tab-label">{{ s.label }}</span>
         </button>
@@ -2621,44 +2672,48 @@ function exportJobGradingPdf() {
                   · <strong>Italia</strong> (ricerca Serper)
                   · <strong>Annunci validi:</strong> {{ benchmarkResult.announcements.length }}
                 </div>
-
-                <div v-if="benchmarkResult.stats" class="benchmark-boxplot-wrap">
-                  <template v-if="benchmarkResult.stats.max > benchmarkResult.stats.min">
-                    <VueApexCharts
-                      class="benchmark-apex"
-                      type="boxPlot"
-                      height="280"
-                      :options="benchmarkChartOptions"
-                      :series="benchmarkChartSeries"
-                    />
-                  </template>
-                  <p v-else class="muted benchmark-boxplot-note">
-                    Benchmark su un solo valore ({{ formatNum(benchmarkResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
-                  </p>
-                  <div class="benchmark-stats-grid">
-                    <span>Min {{ formatNum(benchmarkResult.stats.min) }}</span>
-                    <span>Q1 {{ formatNum(benchmarkResult.stats.q1) }}</span>
-                    <span>Mediana {{ formatNum(benchmarkResult.stats.median) }}</span>
-                    <span>Q3 {{ formatNum(benchmarkResult.stats.q3) }}</span>
-                    <span>Max {{ formatNum(benchmarkResult.stats.max) }}</span>
-                    <span v-if="benchmarkResult.roleSalary != null">Ruolo {{ formatNum(benchmarkResult.roleSalary) }}</span>
+                <div class="benchmark-two-col">
+                  <div class="benchmark-col benchmark-col-chart">
+                    <div v-if="benchmarkResult.stats" class="benchmark-boxplot-wrap">
+                      <template v-if="benchmarkResult.stats.max > benchmarkResult.stats.min">
+                        <VueApexCharts
+                          class="benchmark-apex"
+                          type="boxPlot"
+                          height="280"
+                          :options="benchmarkChartOptions"
+                          :series="benchmarkChartSeries"
+                        />
+                      </template>
+                      <p v-else class="muted benchmark-boxplot-note">
+                        Benchmark su un solo valore ({{ formatNum(benchmarkResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
+                      </p>
+                      <div class="benchmark-stats-grid">
+                        <span>Min {{ formatNum(benchmarkResult.stats.min) }}</span>
+                        <span>Q1 {{ formatNum(benchmarkResult.stats.q1) }}</span>
+                        <span>Mediana {{ formatNum(benchmarkResult.stats.median) }}</span>
+                        <span>Q3 {{ formatNum(benchmarkResult.stats.q3) }}</span>
+                        <span>Max {{ formatNum(benchmarkResult.stats.max) }}</span>
+                        <span v-if="benchmarkResult.roleSalary != null">Ruolo {{ formatNum(benchmarkResult.roleSalary) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="benchmark-col benchmark-col-sources">
+                    <div v-if="benchmarkResult.announcements.length" class="benchmark-list">
+                      <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
+                      <ul class="benchmark-list-ul">
+                        <li v-for="(a, idx) in benchmarkResult.announcements" :key="'bm-' + idx" class="benchmark-item">
+                          <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
+                          <span v-else>{{ a.title || 'Annuncio' }}</span>
+                          <span class="muted">
+                            — {{ a.salaryText || 'RAL non testuale' }}
+                            <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
+                          </span>
+                        </li>
+                      </ul>
+                    </div>
+                    <p v-else class="muted">Nessun annuncio con RAL in chiaro trovato per questa ricerca.</p>
                   </div>
                 </div>
-
-                <div v-if="benchmarkResult.announcements.length" class="benchmark-list">
-                  <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
-                  <ul class="benchmark-list-ul">
-                    <li v-for="(a, idx) in benchmarkResult.announcements" :key="'bm-' + idx" class="benchmark-item">
-                      <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
-                      <span v-else>{{ a.title || 'Annuncio' }}</span>
-                      <span class="muted">
-                        — {{ a.salaryText || 'RAL non testuale' }}
-                        <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
-                      </span>
-                    </li>
-                  </ul>
-                </div>
-                <p v-else class="muted">Nessun annuncio con RAL in chiaro trovato per questa ricerca.</p>
               </template>
             </div>
 
@@ -2886,6 +2941,76 @@ function exportJobGradingPdf() {
         <div class="mapping-actions">
           <button class="btn-secondary" @click="loadStorico">Aggiorna</button>
         </div>
+      </div>
+    </template>
+
+    <!-- Benchmark test rapido (senza analisi completa) -->
+    <template v-else-if="showBenchmarkLab">
+      <div class="analisi-content benchmark-lab-panel">
+        <h2 class="analisi-title">Benchmark test rapido</h2>
+        <p class="analisi-desc">
+          Prova la funzione benchmark per ruoli predefiniti senza caricare il file Excel o avviare l'analisi retributiva completa.
+        </p>
+        <div class="benchmark-lab-controls">
+          <label class="benchmark-lab-label" for="benchmark-test-role">Ruolo di test</label>
+          <select id="benchmark-test-role" v-model="benchmarkTestRole" class="mapping-select benchmark-lab-select" :disabled="benchmarkTestLoading">
+            <option v-for="r in BENCHMARK_TEST_ROLES" :key="r" :value="r">{{ r }}</option>
+          </select>
+          <button type="button" class="btn-primary" :disabled="benchmarkTestLoading" @click="runBenchmarkTestAnalysis">
+            <span v-if="benchmarkTestLoading">Analizzo annunci...</span>
+            <span v-else>Avvia analisi benchmark</span>
+          </button>
+        </div>
+        <p v-if="benchmarkTestError" class="upload-error">{{ benchmarkTestError }}</p>
+
+        <template v-if="benchmarkTestResult">
+          <div class="benchmark-summary muted">
+            <strong>Ruolo:</strong> {{ benchmarkTestResult.role || benchmarkTestRole }}
+            · <strong>Italia</strong> (ricerca Serper)
+            · <strong>Annunci validi:</strong> {{ benchmarkTestResult.announcements.length }}
+          </div>
+          <div class="benchmark-two-col">
+            <div class="benchmark-col benchmark-col-chart">
+              <div v-if="benchmarkTestResult.stats" class="benchmark-boxplot-wrap">
+                <template v-if="benchmarkTestResult.stats.max > benchmarkTestResult.stats.min">
+                  <VueApexCharts
+                    class="benchmark-apex"
+                    type="boxPlot"
+                    height="280"
+                    :options="benchmarkChartOptions"
+                    :series="benchmarkTestChartSeries"
+                  />
+                </template>
+                <p v-else class="muted benchmark-boxplot-note">
+                  Benchmark su un solo valore ({{ formatNum(benchmarkTestResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
+                </p>
+                <div class="benchmark-stats-grid">
+                  <span>Min {{ formatNum(benchmarkTestResult.stats.min) }}</span>
+                  <span>Q1 {{ formatNum(benchmarkTestResult.stats.q1) }}</span>
+                  <span>Mediana {{ formatNum(benchmarkTestResult.stats.median) }}</span>
+                  <span>Q3 {{ formatNum(benchmarkTestResult.stats.q3) }}</span>
+                  <span>Max {{ formatNum(benchmarkTestResult.stats.max) }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="benchmark-col benchmark-col-sources">
+              <div v-if="benchmarkTestResult.announcements.length" class="benchmark-list">
+                <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
+                <ul class="benchmark-list-ul">
+                  <li v-for="(a, idx) in benchmarkTestResult.announcements" :key="'bm-test-' + idx" class="benchmark-item">
+                    <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
+                    <span v-else>{{ a.title || 'Annuncio' }}</span>
+                    <span class="muted">
+                      — {{ a.salaryText || 'RAL non testuale' }}
+                      <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+              <p v-else class="muted">Nessun annuncio con RAL in chiaro trovato per questo ruolo.</p>
+            </div>
+          </div>
+        </template>
       </div>
     </template>
 
@@ -4263,10 +4388,49 @@ function exportJobGradingPdf() {
   font-size: 0.8rem;
   line-height: 1.45;
 }
+.benchmark-lab-panel {
+  max-width: 1080px;
+}
+.benchmark-lab-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: end;
+  margin-bottom: 0.75rem;
+}
+.benchmark-lab-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  min-width: 8rem;
+}
+.benchmark-lab-select {
+  min-width: 20rem;
+  max-width: 32rem;
+}
 .benchmark-summary {
   font-size: 0.8rem;
   margin-bottom: 0.65rem;
   line-height: 1.45;
+}
+.benchmark-two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+.benchmark-col {
+  min-width: 0;
+}
+.benchmark-col-sources .benchmark-list {
+  margin-top: 0;
+  max-height: 26rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+@media (max-width: 1040px) {
+  .benchmark-two-col {
+    grid-template-columns: 1fr;
+  }
 }
 .benchmark-boxplot-wrap {
   margin: 0.5rem 0 0.75rem;
