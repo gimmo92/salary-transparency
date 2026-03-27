@@ -253,6 +253,21 @@ function roleAliases(role) {
   if (map[norm]) {
     map[norm].forEach((a) => aliases.add(a))
   }
+  // Varianti comuni per ruoli composti (es. "Direttore/Responsabile E-COMMERCE")
+  const raw = String(role || '')
+  raw
+    .split(/[\/|,-]/g)
+    .map((x) => normalizeText(x))
+    .filter((x) => x && x.length >= 3)
+    .forEach((x) => aliases.add(x))
+  if (/\be\s*commerce\b|\becommerce\b/.test(norm)) {
+    aliases.add('ecommerce')
+    aliases.add('e commerce')
+    aliases.add('e-commerce')
+    aliases.add('responsabile ecommerce')
+    aliases.add('ecommerce manager')
+    aliases.add('head of ecommerce')
+  }
   return Array.from(aliases)
 }
 
@@ -262,7 +277,9 @@ function roleMatch(text, terms) {
   return (terms || []).some((t) => {
     const tokens = normalizeText(t).split(' ').filter((x) => x.length >= 2)
     if (!tokens.length) return false
-    return tokens.every((tk) => hay.includes(tk))
+    const matched = tokens.filter((tk) => hay.includes(tk)).length
+    if (tokens.length <= 2) return matched >= 1
+    return matched >= Math.max(2, Math.ceil(tokens.length * 0.6))
   })
 }
 
@@ -271,7 +288,12 @@ function isRelevantJobLink(link) {
   return (
     u.includes('linkedin.com/jobs/view') ||
     u.includes('indeed.com/viewjob') ||
-    u.includes('indeed.com/job')
+    u.includes('indeed.com/job') ||
+    u.includes('infojobs.it') ||
+    u.includes('glassdoor.') ||
+    u.includes('monster.') ||
+    u.includes('jobrapido.') ||
+    u.includes('jooble.')
   )
 }
 
@@ -345,9 +367,17 @@ export default async function handler(req, res) {
     let organic = await fetchSerperQueries(salaryQueries, 15)
     if (!organic.length) organic = await fetchSerperQueries(fallbackQueries, 15)
 
-    const filtered = organic
+    let filtered = organic
       .filter((r) => isRelevantJobLink(r?.link))
       .filter((r) => roleMatch(`${r?.title || ''} ${r?.snippet || ''}`, roleTerms))
+    // Fallback meno restrittivo: se il match testuale è troppo stretto, tieni i job-link.
+    if (!filtered.length) {
+      filtered = organic.filter((r) => isRelevantJobLink(r?.link))
+    }
+    // Ultimo fallback: mantieni tutti i risultati, sarà Gemini a filtrare per ruolo+RAL.
+    if (!filtered.length) {
+      filtered = organic
+    }
     const dedup = Array.from(new Map(filtered.map((r) => [String(r.link || ''), r])).values())
       .filter((r) => String(r.link || '').trim())
       .slice(0, 30)
