@@ -648,6 +648,7 @@ const justifyAiLoading = ref(false)
 const benchmarkLoading = ref(false)
 const benchmarkError = ref('')
 const benchmarkResult = ref(null)
+const benchmarkExcludedKeys = ref([])
 const BENCHMARK_TEST_ROLES = [
   'Product Manager',
   'Controller',
@@ -664,6 +665,7 @@ const benchmarkTestRole = ref(BENCHMARK_TEST_ROLES[0])
 const benchmarkTestLoading = ref(false)
 const benchmarkTestError = ref('')
 const benchmarkTestResult = ref(null)
+const benchmarkTestExcludedKeys = ref([])
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -781,6 +783,69 @@ function benchmarkSalaryPoint(a) {
   return null
 }
 
+function benchmarkSourceKey(a) {
+  return String(a?.link || a?.title || a?.i || '')
+}
+
+function benchmarkPercentileSorted(sorted, p) {
+  if (!sorted.length) return null
+  const idx = (sorted.length - 1) * p
+  const lo = Math.floor(idx)
+  const hi = Math.ceil(idx)
+  if (lo === hi) return sorted[lo]
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
+}
+
+function benchmarkStatsFromAnnouncements(announcements) {
+  const values = (announcements || [])
+    .map((a) => benchmarkSalaryPoint(a))
+    .filter((v) => Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b)
+  if (!values.length) return null
+  return {
+    n: values.length,
+    min: values[0],
+    q1: benchmarkPercentileSorted(values, 0.25),
+    median: benchmarkPercentileSorted(values, 0.5),
+    q3: benchmarkPercentileSorted(values, 0.75),
+    max: values[values.length - 1],
+  }
+}
+
+function applyBenchmarkExclusions(result, excludedKeys) {
+  if (!result) return null
+  const excluded = new Set(excludedKeys || [])
+  const announcements = (result.announcements || []).filter((a) => !excluded.has(benchmarkSourceKey(a)))
+  return {
+    ...result,
+    announcements,
+    stats: benchmarkStatsFromAnnouncements(announcements),
+  }
+}
+
+const benchmarkDisplayResult = computed(() =>
+  applyBenchmarkExclusions(benchmarkResult.value, benchmarkExcludedKeys.value),
+)
+const benchmarkTestDisplayResult = computed(() =>
+  applyBenchmarkExclusions(benchmarkTestResult.value, benchmarkTestExcludedKeys.value),
+)
+
+function excludeBenchmarkAnnouncement(a) {
+  const key = benchmarkSourceKey(a)
+  if (!key) return
+  if (!benchmarkExcludedKeys.value.includes(key)) {
+    benchmarkExcludedKeys.value = [...benchmarkExcludedKeys.value, key]
+  }
+}
+
+function excludeBenchmarkTestAnnouncement(a) {
+  const key = benchmarkSourceKey(a)
+  if (!key) return
+  if (!benchmarkTestExcludedKeys.value.includes(key)) {
+    benchmarkTestExcludedKeys.value = [...benchmarkTestExcludedKeys.value, key]
+  }
+}
+
 function boxMarkerPct(stats, roleSalary) {
   if (!stats || !Number.isFinite(Number(roleSalary))) return null
   const min = Number(stats.min)
@@ -815,8 +880,8 @@ function buildBenchmarkChartSeries(result) {
   return series
 }
 
-const benchmarkChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkResult.value))
-const benchmarkTestChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkTestResult.value))
+const benchmarkChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkDisplayResult.value))
+const benchmarkTestChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkTestDisplayResult.value))
 
 const benchmarkChartOptions = computed(() => ({
   chart: {
@@ -870,6 +935,7 @@ async function runSalaryBenchmarkAnalysis() {
   if (!justifyingPerson.value || benchmarkLoading.value) return
   benchmarkLoading.value = true
   benchmarkError.value = ''
+  benchmarkExcludedKeys.value = []
   try {
     const j = justifyingPerson.value
     const payload = {
@@ -901,6 +967,7 @@ async function runBenchmarkTestAnalysis() {
   if (!role || benchmarkTestLoading.value) return
   benchmarkTestLoading.value = true
   benchmarkTestError.value = ''
+  benchmarkTestExcludedKeys.value = []
   try {
     const data = await benchmarkRoleMarketWithSerper({
       role,
@@ -1001,6 +1068,7 @@ function savePersonJustify() {
   justifyText.value = ''
   benchmarkResult.value = null
   benchmarkError.value = ''
+  benchmarkExcludedKeys.value = []
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
 }
@@ -1011,6 +1079,7 @@ function cancelPersonJustify() {
   justifyText.value = ''
   benchmarkResult.value = null
   benchmarkError.value = ''
+  benchmarkExcludedKeys.value = []
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
 }
@@ -2666,44 +2735,45 @@ function exportJobGradingPdf() {
               </p>
               <p v-if="benchmarkError" class="upload-error">{{ benchmarkError }}</p>
 
-              <template v-if="benchmarkResult">
+              <template v-if="benchmarkDisplayResult">
                 <div class="benchmark-summary muted">
-                  <strong>Ruolo:</strong> {{ benchmarkResult.role || '–' }}
+                  <strong>Ruolo:</strong> {{ benchmarkDisplayResult.role || '–' }}
                   · <strong>Italia</strong> (ricerca Serper)
-                  · <strong>Annunci validi:</strong> {{ benchmarkResult.announcements.length }}
+                  · <strong>Annunci validi:</strong> {{ benchmarkDisplayResult.announcements.length }}
                 </div>
                 <div class="benchmark-two-col">
                   <div class="benchmark-col benchmark-col-chart">
-                    <div v-if="benchmarkResult.stats" class="benchmark-boxplot-wrap">
-                      <template v-if="benchmarkResult.stats.max > benchmarkResult.stats.min">
-                        <VueApexCharts
-                          class="benchmark-apex"
-                          type="boxPlot"
-                          height="280"
-                          :options="benchmarkChartOptions"
-                          :series="benchmarkChartSeries"
-                        />
-                      </template>
-                      <p v-else class="muted benchmark-boxplot-note">
-                        Benchmark su un solo valore ({{ formatNum(benchmarkResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
+                    <div v-if="benchmarkDisplayResult.stats" class="benchmark-boxplot-wrap">
+                      <VueApexCharts
+                        class="benchmark-apex"
+                        type="boxPlot"
+                        height="280"
+                        :options="benchmarkChartOptions"
+                        :series="benchmarkChartSeries"
+                      />
+                      <p v-if="benchmarkDisplayResult.stats.n === 1" class="muted benchmark-boxplot-note">
+                        Un solo annuncio con RAL disponibile: il boxplot mostra un valore unico ({{ formatNum(benchmarkDisplayResult.stats.median) }} EUR).
                       </p>
                       <div class="benchmark-stats-grid">
-                        <span>Min {{ formatNum(benchmarkResult.stats.min) }}</span>
-                        <span>Q1 {{ formatNum(benchmarkResult.stats.q1) }}</span>
-                        <span>Mediana {{ formatNum(benchmarkResult.stats.median) }}</span>
-                        <span>Q3 {{ formatNum(benchmarkResult.stats.q3) }}</span>
-                        <span>Max {{ formatNum(benchmarkResult.stats.max) }}</span>
-                        <span v-if="benchmarkResult.roleSalary != null">Ruolo {{ formatNum(benchmarkResult.roleSalary) }}</span>
+                        <span>Min {{ formatNum(benchmarkDisplayResult.stats.min) }}</span>
+                        <span>Q1 {{ formatNum(benchmarkDisplayResult.stats.q1) }}</span>
+                        <span>Mediana {{ formatNum(benchmarkDisplayResult.stats.median) }}</span>
+                        <span>Q3 {{ formatNum(benchmarkDisplayResult.stats.q3) }}</span>
+                        <span>Max {{ formatNum(benchmarkDisplayResult.stats.max) }}</span>
+                        <span v-if="benchmarkDisplayResult.roleSalary != null">Ruolo {{ formatNum(benchmarkDisplayResult.roleSalary) }}</span>
                       </div>
                     </div>
                   </div>
                   <div class="benchmark-col benchmark-col-sources">
-                    <div v-if="benchmarkResult.announcements.length" class="benchmark-list">
+                    <div v-if="benchmarkDisplayResult.announcements.length" class="benchmark-list">
                       <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
                       <ul class="benchmark-list-ul">
-                        <li v-for="(a, idx) in benchmarkResult.announcements" :key="'bm-' + idx" class="benchmark-item">
-                          <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
-                          <span v-else>{{ a.title || 'Annuncio' }}</span>
+                        <li v-for="(a, idx) in benchmarkDisplayResult.announcements" :key="'bm-' + idx" class="benchmark-item">
+                          <div class="benchmark-item-head">
+                            <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
+                            <span v-else>{{ a.title || 'Annuncio' }}</span>
+                            <button type="button" class="btn-benchmark-exclude" @click="excludeBenchmarkAnnouncement(a)">Escludi</button>
+                          </div>
                           <span class="muted">
                             — {{ a.salaryText || 'RAL non testuale' }}
                             <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
@@ -2963,43 +3033,44 @@ function exportJobGradingPdf() {
         </div>
         <p v-if="benchmarkTestError" class="upload-error">{{ benchmarkTestError }}</p>
 
-        <template v-if="benchmarkTestResult">
+        <template v-if="benchmarkTestDisplayResult">
           <div class="benchmark-summary muted">
-            <strong>Ruolo:</strong> {{ benchmarkTestResult.role || benchmarkTestRole }}
+            <strong>Ruolo:</strong> {{ benchmarkTestDisplayResult.role || benchmarkTestRole }}
             · <strong>Italia</strong> (ricerca Serper)
-            · <strong>Annunci validi:</strong> {{ benchmarkTestResult.announcements.length }}
+            · <strong>Annunci validi:</strong> {{ benchmarkTestDisplayResult.announcements.length }}
           </div>
           <div class="benchmark-two-col">
             <div class="benchmark-col benchmark-col-chart">
-              <div v-if="benchmarkTestResult.stats" class="benchmark-boxplot-wrap">
-                <template v-if="benchmarkTestResult.stats.max > benchmarkTestResult.stats.min">
-                  <VueApexCharts
-                    class="benchmark-apex"
-                    type="boxPlot"
-                    height="280"
-                    :options="benchmarkChartOptions"
-                    :series="benchmarkTestChartSeries"
-                  />
-                </template>
-                <p v-else class="muted benchmark-boxplot-note">
-                  Benchmark su un solo valore ({{ formatNum(benchmarkTestResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
+              <div v-if="benchmarkTestDisplayResult.stats" class="benchmark-boxplot-wrap">
+                <VueApexCharts
+                  class="benchmark-apex"
+                  type="boxPlot"
+                  height="280"
+                  :options="benchmarkChartOptions"
+                  :series="benchmarkTestChartSeries"
+                />
+                <p v-if="benchmarkTestDisplayResult.stats.n === 1" class="muted benchmark-boxplot-note">
+                  Un solo annuncio con RAL disponibile: il boxplot mostra un valore unico ({{ formatNum(benchmarkTestDisplayResult.stats.median) }} EUR).
                 </p>
                 <div class="benchmark-stats-grid">
-                  <span>Min {{ formatNum(benchmarkTestResult.stats.min) }}</span>
-                  <span>Q1 {{ formatNum(benchmarkTestResult.stats.q1) }}</span>
-                  <span>Mediana {{ formatNum(benchmarkTestResult.stats.median) }}</span>
-                  <span>Q3 {{ formatNum(benchmarkTestResult.stats.q3) }}</span>
-                  <span>Max {{ formatNum(benchmarkTestResult.stats.max) }}</span>
+                  <span>Min {{ formatNum(benchmarkTestDisplayResult.stats.min) }}</span>
+                  <span>Q1 {{ formatNum(benchmarkTestDisplayResult.stats.q1) }}</span>
+                  <span>Mediana {{ formatNum(benchmarkTestDisplayResult.stats.median) }}</span>
+                  <span>Q3 {{ formatNum(benchmarkTestDisplayResult.stats.q3) }}</span>
+                  <span>Max {{ formatNum(benchmarkTestDisplayResult.stats.max) }}</span>
                 </div>
               </div>
             </div>
             <div class="benchmark-col benchmark-col-sources">
-              <div v-if="benchmarkTestResult.announcements.length" class="benchmark-list">
+              <div v-if="benchmarkTestDisplayResult.announcements.length" class="benchmark-list">
                 <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
                 <ul class="benchmark-list-ul">
-                  <li v-for="(a, idx) in benchmarkTestResult.announcements" :key="'bm-test-' + idx" class="benchmark-item">
-                    <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
-                    <span v-else>{{ a.title || 'Annuncio' }}</span>
+                  <li v-for="(a, idx) in benchmarkTestDisplayResult.announcements" :key="'bm-test-' + idx" class="benchmark-item">
+                    <div class="benchmark-item-head">
+                      <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
+                      <span v-else>{{ a.title || 'Annuncio' }}</span>
+                      <button type="button" class="btn-benchmark-exclude" @click="excludeBenchmarkTestAnnouncement(a)">Escludi</button>
+                    </div>
                     <span class="muted">
                       — {{ a.salaryText || 'RAL non testuale' }}
                       <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
@@ -4474,6 +4545,28 @@ function exportJobGradingPdf() {
 }
 .benchmark-item {
   margin-bottom: 0.35rem;
+}
+.benchmark-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.btn-benchmark-exclude {
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.3rem 0.45rem;
+  cursor: pointer;
+}
+.btn-benchmark-exclude:hover {
+  border-color: #d97706;
+  color: #b45309;
+  background: #fff7ed;
 }
 
 .justify-ai-row {
