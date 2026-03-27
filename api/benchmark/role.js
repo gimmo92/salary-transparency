@@ -305,6 +305,30 @@ function pointSalary(a) {
   return a.salaryMinAnnualEur ?? a.salaryMaxAnnualEur ?? null
 }
 
+function announcementsFromRawByRegex(rawEntries) {
+  return (rawEntries || [])
+    .map((r, idx) => {
+      const title = String(r.title || '')
+      const snippet = String(r.snippet || '')
+      const salaryText = snippet
+      const extracted = extractAnnualRangeFromText(`${title} ${snippet}`)
+      if (!extracted) return null
+      return {
+        i: idx + 1,
+        title,
+        link: String(r.link || ''),
+        source: String(r.source || ''),
+        salaryText,
+        salaryMinAnnualEur: extracted.min,
+        salaryMaxAnnualEur: extracted.max,
+        salaryAnnualEur:
+          extracted.min === extracted.max ? extracted.min : Math.round((extracted.min + extracted.max) / 2),
+        note: 'fallback-regex',
+      }
+    })
+    .filter((x) => x && pointSalary(x) != null && pointSalary(x) > 0)
+}
+
 function percentileSorted(sorted, p) {
   if (!sorted.length) return null
   const idx = (sorted.length - 1) * p
@@ -445,45 +469,51 @@ Regole:
           : 'Risposta Gemini vuota o incompleta.',
       )
     }
-    const parsed = extractJson(text)
-    const announcements = (Array.isArray(parsed) ? parsed : [])
-      .map((a) => {
-        const salaryText = String(a.salaryText || '')
-        const title = String(a.title || '')
-        let salaryMinAnnualEur = parseEurAmount(a.salaryMinAnnualEur)
-        let salaryMaxAnnualEur = parseEurAmount(a.salaryMaxAnnualEur)
-        let salaryAnnualEur = parseEurAmount(a.salaryAnnualEur)
-        const idx = typeof a.i === 'number' ? a.i : parseInt(String(a.i), 10)
-        let row = {
-          i: Number.isFinite(idx) ? idx : null,
-          title,
-          link: String(a.link || ''),
-          source: String(a.source || ''),
-          salaryText,
-          salaryMinAnnualEur,
-          salaryMaxAnnualEur,
-          salaryAnnualEur,
-          note: String(a.note || ''),
-        }
-        let pt = pointSalary(row)
-        if (pt == null || pt === 0) {
-          const fromText = extractAnnualRangeFromText(`${salaryText} ${title}`)
-          if (fromText) {
-            row = {
-              ...row,
-              salaryMinAnnualEur: fromText.min,
-              salaryMaxAnnualEur: fromText.max,
-              salaryAnnualEur: null,
+    let announcements = []
+    try {
+      const parsed = extractJson(text)
+      announcements = (Array.isArray(parsed) ? parsed : [])
+        .map((a) => {
+          const salaryText = String(a.salaryText || '')
+          const title = String(a.title || '')
+          let salaryMinAnnualEur = parseEurAmount(a.salaryMinAnnualEur)
+          let salaryMaxAnnualEur = parseEurAmount(a.salaryMaxAnnualEur)
+          let salaryAnnualEur = parseEurAmount(a.salaryAnnualEur)
+          const idx = typeof a.i === 'number' ? a.i : parseInt(String(a.i), 10)
+          let row = {
+            i: Number.isFinite(idx) ? idx : null,
+            title,
+            link: String(a.link || ''),
+            source: String(a.source || ''),
+            salaryText,
+            salaryMinAnnualEur,
+            salaryMaxAnnualEur,
+            salaryAnnualEur,
+            note: String(a.note || ''),
+          }
+          let pt = pointSalary(row)
+          if (pt == null || pt === 0) {
+            const fromText = extractAnnualRangeFromText(`${salaryText} ${title}`)
+            if (fromText) {
+              row = {
+                ...row,
+                salaryMinAnnualEur: fromText.min,
+                salaryMaxAnnualEur: fromText.max,
+                salaryAnnualEur: null,
+              }
             }
           }
-        }
-        return row
-      })
-      .filter((a) => {
-        if (!a.title) return false
-        const p = pointSalary(a)
-        return p != null && p > 0
-      })
+          return row
+        })
+        .filter((a) => {
+          if (!a.title) return false
+          const p = pointSalary(a)
+          return p != null && p > 0
+        })
+    } catch (parseErr) {
+      console.error('Benchmark Gemini JSON parse failed, fallback regex', parseErr?.message || parseErr)
+      announcements = announcementsFromRawByRegex(raw)
+    }
 
     const values = announcements
       .map(pointSalary)
