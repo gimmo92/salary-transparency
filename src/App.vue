@@ -35,6 +35,7 @@ import {
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import VueApexCharts from 'vue3-apexcharts'
 
 const activeSection = ref('analisi')
 
@@ -770,6 +771,79 @@ function boxMarkerPct(stats, roleSalary) {
   const pct = ((Number(roleSalary) - min) / (max - min)) * 100
   return Math.max(0, Math.min(100, pct))
 }
+
+const benchmarkChartSeries = computed(() => {
+  const s = benchmarkResult.value?.stats
+  if (!s) return []
+  const min = Number(s.min)
+  const q1 = Number(s.q1)
+  const median = Number(s.median)
+  const q3 = Number(s.q3)
+  const max = Number(s.max)
+  if (![min, q1, median, q3, max].every((n) => Number.isFinite(n))) return []
+  const series = [
+    {
+      type: 'boxPlot',
+      data: [{ x: 'Benchmark', y: [min, q1, median, q3, max] }],
+    },
+  ]
+  const roleSalary = Number(benchmarkResult.value?.roleSalary)
+  if (Number.isFinite(roleSalary)) {
+    series.push({
+      type: 'scatter',
+      data: [{ x: 'Benchmark', y: roleSalary }],
+    })
+  }
+  return series
+})
+
+const benchmarkChartOptions = computed(() => ({
+  chart: {
+    type: 'boxPlot',
+    toolbar: { show: false },
+    animations: { enabled: true },
+    fontFamily: 'Open Sans, system-ui, sans-serif',
+  },
+  stroke: { width: 1.4 },
+  plotOptions: {
+    boxPlot: {
+      colors: {
+        upper: '#7eb3e8',
+        lower: '#0A6CD2',
+      },
+    },
+  },
+  markers: {
+    size: [0, 7],
+    strokeWidth: 1,
+    strokeColors: '#ffffff',
+    colors: ['#0A6CD2', '#c2410c'],
+  },
+  xaxis: {
+    labels: { show: false },
+    axisBorder: { show: false },
+    axisTicks: { show: false },
+    tooltip: { enabled: false },
+  },
+  yaxis: {
+    labels: {
+      formatter: (val) => formatNum(val),
+    },
+  },
+  tooltip: {
+    shared: false,
+    intersect: false,
+    custom: ({ seriesIndex, dataPointIndex, w }) => {
+      if (seriesIndex === 0) {
+        const y = w.globals.initialSeries[0].data[dataPointIndex]?.y || []
+        return `<div class="benchmark-chart-tip"><strong>Benchmark</strong><br/>Min ${formatNum(y[0])}<br/>Q1 ${formatNum(y[1])}<br/>Mediana ${formatNum(y[2])}<br/>Q3 ${formatNum(y[3])}<br/>Max ${formatNum(y[4])}</div>`
+      }
+      const roleSalary = Number(benchmarkResult.value?.roleSalary)
+      return `<div class="benchmark-chart-tip"><strong>Ruolo</strong><br/>${formatNum(roleSalary)}</div>`
+    },
+  },
+  legend: { show: false },
+}))
 
 async function runSalaryBenchmarkAnalysis() {
   if (!justifyingPerson.value || benchmarkLoading.value) return
@@ -2550,30 +2624,13 @@ function exportJobGradingPdf() {
 
                 <div v-if="benchmarkResult.stats" class="benchmark-boxplot-wrap">
                   <template v-if="benchmarkResult.stats.max > benchmarkResult.stats.min">
-                    <div class="benchmark-boxplot" aria-label="Boxplot benchmark RAL">
-                      <div class="benchmark-axis"></div>
-                      <div
-                        class="benchmark-whisker"
-                        :style="{ left: '0%', width: '100%' }"
-                      ></div>
-                      <div
-                        class="benchmark-box"
-                        :style="{
-                          left: ((benchmarkResult.stats.q1 - benchmarkResult.stats.min) / (benchmarkResult.stats.max - benchmarkResult.stats.min) * 100) + '%',
-                          width: ((benchmarkResult.stats.q3 - benchmarkResult.stats.q1) / (benchmarkResult.stats.max - benchmarkResult.stats.min) * 100) + '%',
-                        }"
-                      ></div>
-                      <div
-                        class="benchmark-median"
-                        :style="{ left: ((benchmarkResult.stats.median - benchmarkResult.stats.min) / (benchmarkResult.stats.max - benchmarkResult.stats.min) * 100) + '%' }"
-                      ></div>
-                      <div
-                        v-if="benchmarkResult.roleSalary != null && boxMarkerPct(benchmarkResult.stats, benchmarkResult.roleSalary) != null"
-                        class="benchmark-role-marker"
-                        :style="{ left: boxMarkerPct(benchmarkResult.stats, benchmarkResult.roleSalary) + '%' }"
-                        :title="'Retribuzione ruolo: ' + formatNum(benchmarkResult.roleSalary)"
-                      ></div>
-                    </div>
+                    <VueApexCharts
+                      class="benchmark-apex"
+                      type="boxPlot"
+                      height="280"
+                      :options="benchmarkChartOptions"
+                      :series="benchmarkChartSeries"
+                    />
                   </template>
                   <p v-else class="muted benchmark-boxplot-note">
                     Benchmark su un solo valore ({{ formatNum(benchmarkResult.stats.median) }} EUR). Il boxplot richiede almeno due annunci con RAL diversi.
@@ -4214,60 +4271,16 @@ function exportJobGradingPdf() {
 .benchmark-boxplot-wrap {
   margin: 0.5rem 0 0.75rem;
 }
-.benchmark-boxplot {
-  position: relative;
-  height: 44px;
-  margin: 0.35rem 0 0.5rem;
-  border-radius: 6px;
-  background: linear-gradient(90deg, var(--bg-card) 0%, rgba(10, 108, 210, 0.06) 50%, var(--bg-card) 100%);
+.benchmark-apex {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 0.4rem 0.35rem 0.15rem;
 }
-.benchmark-axis {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: var(--border);
-  opacity: 0.85;
-}
-.benchmark-whisker {
-  position: absolute;
-  top: 50%;
-  height: 2px;
-  margin-top: -1px;
-  background: var(--text-muted);
-  opacity: 0.45;
-}
-.benchmark-box {
-  position: absolute;
-  top: 10px;
-  height: 24px;
-  margin-left: 0;
-  border-radius: 4px;
-  background: rgba(10, 108, 210, 0.35);
-  border: 1px solid var(--accent-blue);
-  box-sizing: border-box;
-}
-.benchmark-median {
-  position: absolute;
-  top: 8px;
-  width: 3px;
-  height: 28px;
-  margin-left: -1.5px;
-  border-radius: 1px;
-  background: var(--accent-blue);
-  z-index: 2;
-}
-.benchmark-role-marker {
-  position: absolute;
-  top: 2px;
-  width: 0;
-  height: 0;
-  margin-left: -6px;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-bottom: 10px solid #c2410c;
-  z-index: 3;
+:deep(.benchmark-chart-tip) {
+  padding: 0.5rem 0.65rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 .benchmark-boxplot-note {
   margin: 0 0 0.5rem;
