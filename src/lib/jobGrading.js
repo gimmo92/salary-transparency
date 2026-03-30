@@ -128,8 +128,13 @@ function pctGap(maleAvg, femaleAvg) {
   return ((maleAvg - femaleAvg) / maleAvg) * 100
 }
 
-function clamp15(n) {
-  return Math.max(1, Math.min(5, Math.round(Number(n) || 0)))
+function clamp0100(n) {
+  return Math.max(0, Math.min(100, Math.round(Number(n) || 0)))
+}
+
+function score15to100(n) {
+  const s = Math.max(1, Math.min(5, Math.round(Number(n) || 0)))
+  return Math.round(((s - 1) / 4) * 100)
 }
 
 function keywordHits(text, list) {
@@ -138,7 +143,7 @@ function keywordHits(text, list) {
 
 function scoreFromText(text, keywords, base = 2) {
   const h = keywordHits(text, keywords)
-  return clamp15(base + Math.min(3, h))
+  return score15to100(base + Math.min(3, h))
 }
 
 function levelNormBoost(levelRaw) {
@@ -156,26 +161,17 @@ function normalizeGender(raw) {
 
 const WEIGHTS = transparencyWeightsMap()
 
-/**
- * Fascia da punteggio pesato 1–5 (mezzi passi per raggruppare ruoli simili).
- * key/min/max restano sulla scala 1–5; la label UI usa la scala parametrica /100 (×20).
- */
+/** Fascia da punteggio 0–100 (passi da 5 punti per cluster omogenei). */
 function fasciaFromWeightedScore(w) {
-  const x = Math.min(5, Math.max(1, Math.round(Number(w) * 2) / 2))
+  const x = Math.min(100, Math.max(0, Math.round(Number(w) / 5) * 5))
   return { min: x, max: x, key: String(x) }
-}
-
-/** Da media pesata 1–5 a punteggio parametrico /100 (Σ %×voto/5 con pesi al 100%). */
-function parametric100FromWeighted15(w) {
-  const x = Math.min(5, Math.max(1, Number(w) || 0))
-  return Math.round(x * 20)
 }
 
 /**
  * @param {object} person - record normalizzato job grading
  * @param {object} opts
  * @param {string} [opts.companyContext]
- * @param {Record<string, number>|null} [opts.override] - punteggi 1–5 per id fattore (es. titoliConoscenze)
+ * @param {Record<string, number>|null} [opts.override] - punteggi 0–100 per id fattore (es. titoliConoscenze)
  */
 export function computeTransparencyScoresForPerson(person, { companyContext = '', override = null } = {}) {
   const text = `${person.role || ''} ${person.description || ''} ${person.category || ''} ${companyContext}`.toLowerCase()
@@ -186,7 +182,7 @@ export function computeTransparencyScoresForPerson(person, { companyContext = ''
 
   const heuristic = {
     titoliConoscenze: scoreFromText(text, KW_TITOLI, 2 + Math.min(1, Math.floor(descLen / 400))),
-    esperienza: clamp15(
+    esperienza: score15to100(
       2 + (senNum != null && senNum >= 10 ? 2 : senNum != null && senNum >= 5 ? 1 : 0) + lb + (keywordHits(text, KW_ESPERIENZA) ? 1 : 0),
     ),
     competenzeTrasversali: scoreFromText(text, KW_TRASVERSALI, 2 + Math.min(1, lb)),
@@ -201,7 +197,7 @@ export function computeTransparencyScoresForPerson(person, { companyContext = ''
 
   const out = {}
   for (const id of TRANSPARENCY_FACTOR_IDS) {
-    const v = override && override[id] != null ? clamp15(override[id]) : heuristic[id]
+    const v = override && override[id] != null ? clamp0100(override[id]) : heuristic[id]
     out[trFieldName(id)] = v
   }
 
@@ -462,7 +458,7 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
 
 /**
  * @param {Array} normalizedData
- * @param {Record<string, Record<string, number>>} [roleOverrides] chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: 1–5 }
+ * @param {Record<string, Record<string, number>>} [roleOverrides] chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: 0-100 }
  */
 export function groupByLevel(normalizedData, roleOverrides = {}) {
   const companyContext = [...new Set(normalizedData.map((p) => p.category).filter(Boolean))].slice(0, 8).join(' ')
@@ -542,10 +538,10 @@ export function groupByLevel(normalizedData, roleOverrides = {}) {
       }
     })
 
-    // 2) Raggruppa ruoli per punteggio pesato (scala 1–5, passi da 0,5); label fascia in /100
+    // 2) Raggruppa ruoli per punteggio pesato (scala 0–100, passi da 5)
     const hayMap = new Map()
     for (const roleProfile of roleProfiles) {
-      const bucket = fasciaFromWeightedScore(roleProfile.trWeightedScore ?? 3)
+      const bucket = fasciaFromWeightedScore(roleProfile.trWeightedScore ?? 50)
       if (!hayMap.has(bucket.key)) {
         hayMap.set(bucket.key, {
           ...bucket,
@@ -586,14 +582,13 @@ export function groupByLevel(normalizedData, roleOverrides = {}) {
 
         const bandTrMeans = meanTransparencyScores(allPeople) || {}
 
-        const score100 = parametric100FromWeighted15(hb.min)
         return {
           id: `Fascia ${idx + 1}`,
-          label: `Punteggio ${score100}/100`,
+          label: `Punteggio ${Math.round(hb.min)}/100`,
           minScore: hb.min,
           maxScore: hb.max,
-          minScore100: score100,
-          maxScore100: score100,
+          minScore100: hb.min,
+          maxScore100: hb.max,
           n: people.length,
           nValid: valid.length,
           nRoles: hb.roles.length,

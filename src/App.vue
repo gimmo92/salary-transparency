@@ -65,7 +65,7 @@ const indicatorsSource = ref('locale')
 
 const jobResults = ref([])
 
-/** Override punteggi 1–5 per ruolo: chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: number } */
+/** Override punteggi 0–100 per ruolo: chiave `${livelloCCNL}|${nomeRuolo}` → { factorId: number } */
 const transparencyRoleOverrides = ref({})
 const jobGradingCriteriaModalOpen = ref(false)
 /** Popup scheda punteggi fattori per ruolo: { level, subLabel, roleName } */
@@ -507,7 +507,7 @@ async function confirmMapping() {
 
     // Salvataggio DB
     try {
-      const saved = await saveAnalysis({
+      await saveAnalysis({
         analysisType: 'combined',
         sourceUrl: excelUrl.value,
         headers: excelHeaders.value,
@@ -516,7 +516,7 @@ async function confirmMapping() {
         results: { gender: indicatorsResult.value, jobGrading: jobResults.value },
         calculationSource: `gender:${indicatorsSource.value},job:locale`,
       })
-      saveStatus.value = `Analisi salvata nel database (ID: ${saved.id})`
+      saveStatus.value = ''
     } catch (saveErr) {
       saveStatus.value = `Analisi non salvata: ${saveErr.message || String(saveErr)}`
     }
@@ -561,18 +561,18 @@ function formatGapMforF(gap, rettificato = false) {
 function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 }) }
 function clampScoreInput(v) {
   const n = Number(v)
-  if (!Number.isFinite(n)) return 1
-  return Math.max(1, Math.min(100, Math.round(n)))
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.min(100, Math.round(n)))
 }
 function clampTrScore(v) {
   const n = Number(v)
-  if (!Number.isFinite(n)) return 3
-  return Math.max(1, Math.min(5, Math.round(n)))
+  if (!Number.isFinite(n)) return 50
+  return Math.max(0, Math.min(100, Math.round(n)))
 }
 function emptyRoleTransparencyForm() {
   const o = {}
   for (const f of TRANSPARENCY_FLAT_FACTORS) {
-    o[f.id] = 3
+    o[f.id] = 50
   }
   return o
 }
@@ -582,7 +582,7 @@ function roleTr(role, factorId) {
   if (!role) return null
   return role[trFieldName(factorId)]
 }
-/** Punti parametrici 0–100 per macro-area: Σ (% peso fattore × voto 1–5 / 5). */
+/** Punti parametrici 0–100 per macro-area: Σ (% peso fattore × punteggio / 100). */
 function roleMacroAreaParametricPoints(role, area) {
   if (!role || !area?.factors?.length) return null
   let pts = 0
@@ -602,7 +602,7 @@ function macroAreaParametricTooltip(role, area) {
   const pts = roleMacroAreaParametricPoints(role, area)
   if (pts == null) return ''
   const max = macroAreaMaxParametricPoints(area)
-  return `Punti parametrici (scala 0–100): Σ (% peso × voto / 5) per i fattori dell’area. Massimo ${max} se tutti i voti sono 5.`
+  return `Punti parametrici (scala 0–100): Σ (% peso × punteggio / 100) per i fattori dell’area. Massimo ${max} se tutti i punteggi sono 100.`
 }
 function formatMacroAreaScore(role, area) {
   const s = roleMacroAreaParametricPoints(role, area)
@@ -627,7 +627,7 @@ function formatFactorParametricContributionFromForm(factor) {
   const v = transparencyParametricPointsFromFactor(clampTrScore(roleValuationForm.value[factor.id]), factor.weightPct)
   return formatNum(v)
 }
-/** Contributo singolo fattore su scala 100: % peso × voto / 5 */
+/** Contributo singolo fattore su scala 100: % peso × punteggio / 100 */
 function formatFactorParametricContribution(role, factor) {
   const s = roleTr(role, factor.id)
   if (s == null || !Number.isFinite(Number(s))) return '–'
@@ -2398,7 +2398,6 @@ function exportJobGradingPdf() {
             </div>
           </div>
           <div class="job-grading-tab-head">
-            <p class="result-source job-grading-tab-head__text">Raggruppamento per <strong>Livello CCNL</strong> · voto 1–5 per fattore; <strong>punteggio parametrico 0–100</strong> = Σ (% peso × voto / 5)</p>
             <button type="button" class="btn-jg-criteria" @click="jobGradingCriteriaModalOpen = true">Info analisi</button>
           </div>
 
@@ -2459,8 +2458,8 @@ function exportJobGradingPdf() {
                       class="jg-tr-col-head jg-tr-col-area"
                       :title="area.label + ' — punti parametrici (0–100) nell’area; peso area sul totale: ' + area.weightPct + '%'"
                     >{{ area.label }}</span>
-                    <span class="jg-tr-col-head jg-tr-col-head-punteggio" title="Punteggio parametrico 0–100: Σ (% peso × voto 1–5 / 5) su tutti i fattori">Punteggio</span>
-                    <span class="jg-tr-col-head jg-tr-col-head-detail" title="Apri la scheda con macro-aree, fattori e punteggi 1–5">Dettaglio</span>
+                    <span class="jg-tr-col-head jg-tr-col-head-punteggio" title="Punteggio parametrico 0–100: Σ (% peso × punteggio / 100) su tutti i fattori">Punteggio</span>
+                    <span class="jg-tr-col-head jg-tr-col-head-detail" title="Apri la scheda con macro-aree, fattori e punteggi 0–100">Dettaglio</span>
                     <span>N</span>
                     <span>Media retrib.</span>
                   </div>
@@ -2616,12 +2615,12 @@ function exportJobGradingPdf() {
                 </p>
               </div>
               <div class="person-justify-summary-card person-justify-summary-card--hay">
-                <h4 class="person-justify-summary-title">Punteggi ruolo (1–5)</h4>
+                <h4 class="person-justify-summary-title">Punteggi ruolo (0–100)</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
                   <li v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id">
                     <strong>{{ f.label }}:</strong> {{ roleTr(justifyingPerson.roleScoresBlock, f.id) ?? '–' }}
                   </li>
-                  <li><strong>Punteggio parametrico:</strong> {{ justifyingPerson.trParametricScore100 != null ? formatNum(justifyingPerson.trParametricScore100) + '/100' : '–' }} <span class="muted">(media 1–5: {{ justifyingPerson.trWeightedScore != null ? formatNum(justifyingPerson.trWeightedScore) : '–' }})</span></li>
+                  <li><strong>Punteggio parametrico:</strong> {{ justifyingPerson.trParametricScore100 != null ? formatNum(justifyingPerson.trParametricScore100) + '/100' : '–' }} <span class="muted">(media pesata 0–100: {{ justifyingPerson.trWeightedScore != null ? formatNum(justifyingPerson.trWeightedScore) : '–' }})</span></li>
                 </ul>
               </div>
             </div>
@@ -2841,7 +2840,7 @@ function exportJobGradingPdf() {
           <div class="justify-modal justify-modal--wide jg-role-valuation-modal" role="dialog" aria-modal="true" aria-labelledby="jg-role-val-title">
             <h3 id="jg-role-val-title">Dettaglio valutazione — {{ roleValuationModal.roleName }}</h3>
             <p class="justify-hint jg-role-valuation-edit-hint">
-              Modifica i <strong>voti (1–5)</strong> per ogni fattore e salva. Apri <strong>Info analisi</strong> per le definizioni dei livelli.
+              Modifica i <strong>punteggi (0–100)</strong> per ogni fattore e salva. Apri <strong>Info analisi</strong> per le definizioni dei livelli.
             </p>
             <template v-if="roleValuationModalRb">
               <div class="jg-role-valuation-table-wrap">
@@ -2850,7 +2849,7 @@ function exportJobGradingPdf() {
                     <tr>
                       <th>Macro-area (peso sul totale)</th>
                       <th>Fattore (peso sull’area)</th>
-                      <th>Voto (1–5)</th>
+                      <th>Punteggio (0–100)</th>
                       <th>Contributo (pt /100)</th>
                     </tr>
                   </thead>
@@ -2869,15 +2868,15 @@ function exportJobGradingPdf() {
                           <input
                             v-model.number="roleValuationForm[f.id]"
                             type="number"
-                            min="1"
-                            max="5"
+                            min="0"
+                            max="100"
                             step="1"
                             class="mapping-select jg-rv-input"
-                            :aria-label="'Voto ' + f.label"
+                            :aria-label="'Punteggio ' + f.label"
                             @click.stop
                           />
                         </td>
-                        <td class="jg-rv-pt" title="% peso sul totale × voto / 5">{{ formatFactorParametricContributionFromForm(f) }}</td>
+                        <td class="jg-rv-pt" title="% peso sul totale × punteggio / 100">{{ formatFactorParametricContributionFromForm(f) }}</td>
                       </tr>
                     </template>
                   </tbody>
@@ -2887,14 +2886,14 @@ function exportJobGradingPdf() {
                       <td class="muted">—</td>
                       <td class="jg-rv-foot-score">
                         <strong>{{ formatNum(previewValuationFormParametric100()) }}</strong>
-                        <span class="muted jg-rv-foot-hint">Σ (% peso × voto / 5); es. 10% e voto 4 → 8 pt</span>
+                        <span class="muted jg-rv-foot-hint">Σ (% peso × punteggio / 100); es. 10% e punteggio 80 → 8 pt</span>
                       </td>
                     </tr>
                     <tr class="jg-rv-foot jg-rv-foot--sub">
-                      <td colspan="2"><strong>Media pesata (scala 1–5)</strong></td>
+                      <td colspan="2"><strong>Media pesata (scala 0–100)</strong></td>
                       <td colspan="2" class="jg-rv-foot-score">
                         <strong>{{ formatNum(previewValuationFormWeighted()) }}</strong>
-                        <span class="muted jg-rv-foot-hint">Σ (voto × peso fattore)</span>
+                        <span class="muted jg-rv-foot-hint">Σ (punteggio × peso fattore)</span>
                       </td>
                     </tr>
                   </tfoot>
@@ -2918,7 +2917,7 @@ function exportJobGradingPdf() {
           <div class="jg-criteria-modal" role="dialog" aria-modal="true" aria-labelledby="jg-crit-title">
             <h3 id="jg-crit-title">Criteri valutativi — trasparenza retributiva</h3>
             <p class="jg-criteria-intro muted">
-              Quattro macro-aree con peso sul totale. Ogni fattore ha peso proprio e una scala da <strong>1</strong> (minimo) a <strong>5</strong> (massimo).
+              Quattro macro-aree con peso sul totale. Ogni fattore ha peso proprio e una scala da <strong>0</strong> (minimo) a <strong>100</strong> (massimo).
             </p>
             <div class="jg-criteria-table-wrap">
               <table class="jg-criteria-table">
@@ -2927,11 +2926,11 @@ function exportJobGradingPdf() {
                     <th>Macro-area</th>
                     <th>Fattore (peso)</th>
                     <th>In sintesi</th>
-                    <th>1</th>
-                    <th>2</th>
-                    <th>3</th>
-                    <th>4</th>
-                    <th>5</th>
+                    <th>0</th>
+                    <th>25</th>
+                    <th>50</th>
+                    <th>75</th>
+                    <th>100</th>
                   </tr>
                 </thead>
                 <tbody>
