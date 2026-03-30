@@ -666,6 +666,8 @@ const benchmarkTestLoading = ref(false)
 const benchmarkTestError = ref('')
 const benchmarkTestResult = ref(null)
 const benchmarkTestExcludedKeys = ref([])
+/** Errore ultima esportazione PDF benchmark (giustificativo o tab test) */
+const benchmarkPdfExportError = ref('')
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -723,6 +725,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
   const gapPct = hayBandAdjustedGapPct(hayBand)
   benchmarkResult.value = null
   benchmarkError.value = ''
+  benchmarkPdfExportError.value = ''
 
   justifyingPerson.value = {
     key,
@@ -935,6 +938,7 @@ async function runSalaryBenchmarkAnalysis() {
   if (!justifyingPerson.value || benchmarkLoading.value) return
   benchmarkLoading.value = true
   benchmarkError.value = ''
+  benchmarkPdfExportError.value = ''
   benchmarkExcludedKeys.value = []
   try {
     const j = justifyingPerson.value
@@ -967,6 +971,7 @@ async function runBenchmarkTestAnalysis() {
   if (!role || benchmarkTestLoading.value) return
   benchmarkTestLoading.value = true
   benchmarkTestError.value = ''
+  benchmarkPdfExportError.value = ''
   benchmarkTestExcludedKeys.value = []
   try {
     const data = await benchmarkRoleMarketWithSerper({
@@ -989,6 +994,135 @@ async function runBenchmarkTestAnalysis() {
     benchmarkTestResult.value = null
   } finally {
     benchmarkTestLoading.value = false
+  }
+}
+
+function slugForBenchmarkPdfFilename(s) {
+  const raw = String(s || 'benchmark')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+  return raw.slice(0, 48) || 'benchmark'
+}
+
+/**
+ * Esporta in PDF il risultato benchmark corrente (annunci inclusi dopo eventuali esclusioni).
+ * @param result Oggetto come benchmarkDisplayResult / benchmarkTestDisplayResult
+ * @param options.source 'justify' | 'lab'
+ */
+function exportBenchmarkPdf(result, options = {}) {
+  try {
+    benchmarkPdfExportError.value = ''
+    if (!result) {
+      benchmarkPdfExportError.value = 'Nessun risultato benchmark da esportare.'
+      return
+    }
+    const sourceLabel =
+      options.source === 'lab' ? 'Benchmark test rapido' : 'Giustificativo dipendente'
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const pageWidth = doc.internal.pageSize.getWidth()
+    let y = 16
+
+    doc.setFontSize(15)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Analisi benchmark retributivi', pageWidth / 2, y, { align: 'center' })
+    y += 6
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`${sourceLabel} · ${new Date().toLocaleString('it-IT')}`, pageWidth / 2, y, { align: 'center' })
+    y += 9
+
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Riepilogo', 14, y)
+    y += 5
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Ruolo ricercato: ${result.role || '–'}`, 14, y)
+    y += 5
+    doc.text('Paese: Italia · Fonte annunci: ricerca web (Serper)', 14, y)
+    y += 5
+    const nAds = (result.announcements || []).length
+    doc.text(`Annunci inclusi nell’analisi: ${nAds}`, 14, y)
+    y += 5
+    if (result.roleSalary != null && Number.isFinite(Number(result.roleSalary))) {
+      doc.text(`Retribuzione di riferimento (persona / ruolo): ${formatNum(result.roleSalary)} EUR`, 14, y)
+      y += 5
+    }
+    y += 3
+
+    const st = result.stats
+    if (st && Number.isFinite(Number(st.min))) {
+      autoTable(doc, {
+        startY: y,
+        head: [['Indicatore', 'Valore (EUR)']],
+        body: [
+          ['N annunci', String(st.n ?? nAds)],
+          ['Min', formatNum(st.min)],
+          ['Q1', formatNum(st.q1)],
+          ['Mediana', formatNum(st.median)],
+          ['Q3', formatNum(st.q3)],
+          ['Max', formatNum(st.max)],
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [10, 108, 210], fontSize: 9 },
+        bodyStyles: { fontSize: 9 },
+        margin: { left: 14, right: 14 },
+      })
+      y = doc.lastAutoTable.finalY + 10
+    } else {
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'italic')
+      doc.setTextColor(90, 90, 90)
+      doc.text('Statistiche di distribuzione non disponibili (nessun RAL numerico utilizzabile).', 14, y)
+      doc.setTextColor(0, 0, 0)
+      y += 8
+    }
+
+    const announcements = result.announcements || []
+    if (announcements.length) {
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Annunci inclusi', 14, y)
+      y += 5
+      const body = announcements.map((a, i) => {
+        const title = String(a.title || '–').slice(0, 400)
+        const salTxt = String(a.salaryText || '–').slice(0, 200)
+        const norm = a.benchmarkSalary != null ? formatNum(a.benchmarkSalary) : '–'
+        const link = String(a.link || '–').slice(0, 500)
+        return [String(i + 1), title, salTxt, norm, link]
+      })
+      autoTable(doc, {
+        startY: y,
+        head: [['#', 'Titolo', 'RAL testuale', 'RAL norm.', 'Link']],
+        body,
+        theme: 'grid',
+        headStyles: { fillColor: [10, 108, 210], fontSize: 7 },
+        bodyStyles: { fontSize: 6.5, overflow: 'linebreak' },
+        columnStyles: {
+          0: { cellWidth: 9, halign: 'center' },
+          1: { cellWidth: 42 },
+          2: { cellWidth: 28 },
+          3: { halign: 'right', cellWidth: 22 },
+          4: { cellWidth: 'auto' },
+        },
+        margin: { left: 14, right: 14 },
+      })
+    } else {
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'italic')
+      doc.setTextColor(90, 90, 90)
+      doc.text('Nessun annuncio con RAL utilizzabile nella selezione corrente.', 14, y)
+      doc.setTextColor(0, 0, 0)
+    }
+
+    const day = new Date().toISOString().slice(0, 10)
+    doc.save(`benchmark-${slugForBenchmarkPdfFilename(result.role)}-${day}.pdf`)
+  } catch (err) {
+    benchmarkPdfExportError.value =
+      'Esportazione PDF benchmark non riuscita: ' + (err?.message || String(err))
   }
 }
 
@@ -1068,6 +1202,7 @@ function savePersonJustify() {
   justifyText.value = ''
   benchmarkResult.value = null
   benchmarkError.value = ''
+  benchmarkPdfExportError.value = ''
   benchmarkExcludedKeys.value = []
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
@@ -1079,6 +1214,7 @@ function cancelPersonJustify() {
   justifyText.value = ''
   benchmarkResult.value = null
   benchmarkError.value = ''
+  benchmarkPdfExportError.value = ''
   benchmarkExcludedKeys.value = []
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
@@ -1123,72 +1259,6 @@ function onPersonJustifyFilesSelected(ev) {
   const cur = justifyText.value.trim()
   justifyText.value = cur ? `${cur}\n\n${note}` : note
   input.value = ''
-}
-
-/** Suggerimenti strutturati per il giustificativo persona (click per inserire nel testo) */
-const PERSON_JUSTIFY_SUGGESTION_CATEGORIES = [
-  {
-    id: 'temporal',
-    title: '1. Esperienza e anzianità (criteri temporali)',
-    intro: 'Tra i più facili da documentare e i più comuni.',
-    highRisk: false,
-    items: [
-      { label: 'Anzianità di servizio', snippet: 'Anzianità di servizio: anni trascorsi in azienda o nello specifico ruolo, con riferimento a scatti di anzianità o progressioni automatiche documentate.' },
-      { label: 'Esperienza pregressa pertinente', snippet: 'Esperienza pregressa pertinente: anni di esperienza in ruoli simili prima dell\'assunzione, che giustificano una RAL di ingresso più elevata.' },
-      { label: 'Curva di apprendimento', snippet: 'Curva di apprendimento: differenza tra un neo-assunto e un dipendente che ricopre il ruolo da tempo, fino a quando la produttività non si allinea.' },
-    ],
-  },
-  {
-    id: 'skills',
-    title: '2. Competenze e formazione (criteri qualitativi)',
-    intro: 'Il bagaglio che il dipendente porta nel ruolo.',
-    highRisk: false,
-    items: [
-      { label: 'Istruzione / titoli di studio', snippet: 'Livello di istruzione e titoli di studio: possesso di master, dottorato o lauree specifiche non strettamente obbligatorie ma a valore aggiunto documentabile.' },
-      { label: 'Certificazioni tecniche', snippet: 'Certificazioni tecniche: possesso di certificazioni rare o di alto livello (es. certificazioni cloud, legali, linguistiche avanzate).' },
-      { label: 'Soft skills certificate', snippet: 'Soft skills certificate: competenze di leadership o negoziazione verificate tramite assessment oggettivi.' },
-    ],
-  },
-  {
-    id: 'performance',
-    title: '3. Performance e merito (criteri di risultato)',
-    intro: 'Richiedono un sistema di valutazione delle prestazioni solido e documentazione.',
-    highRisk: false,
-    items: [
-      { label: 'Raggiungimento KPI', snippet: 'Raggiungimento dei KPI: storico dei risultati individuali documentato (es. superamento target di vendita o obiettivi tecnici).' },
-      { label: 'Valutazione del potenziale', snippet: 'Valutazione del potenziale: risultati di assessment interni che identificano il dipendente come high potential.' },
-      { label: 'Premi e bonus storici', snippet: 'Premi e bonus storici: componenti variabili una tantum legate a progetti specifici conclusi con successo.' },
-    ],
-  },
-  {
-    id: 'conditions',
-    title: '4. Caratteristiche del lavoro (criteri di condizione)',
-    intro: 'Differenze legate a come e dove si svolge il lavoro.',
-    highRisk: false,
-    items: [
-      { label: 'Turni / notturno', snippet: 'Lavoro a turni o notturno: maggiorazioni legate a orari disagiati o rischiosi, documentate in busta paga / accordi.' },
-      { label: 'Trasferta / sede', snippet: 'Indennità di trasferta o sede: differenze legate al costo della vita tra sedi o alla disponibilità costante a viaggiare.' },
-      { label: 'Responsabilità aggiuntive', snippet: 'Responsabilità aggiuntive: incarichi temporanei o ad interim che non modificano il grado Hay ma comportano un incremento retributivo documentato.' },
-    ],
-  },
-  {
-    id: 'market',
-    title: '5. Fattori di mercato (criteri esterni)',
-    intro: 'Possono essere sensibili in sede di audit: documentare con evidenze solide.',
-    highRisk: false,
-    items: [
-      { label: 'Scarsità di talenti (shortage)', snippet: '[ALTO RISCHIO AUDIT] Scarsità di talenti sul mercato: difficoltà documentata nel reperire la specifica figura professionale, con evidenze di mercato e processo di recruiting.' },
-      { label: 'Retention / controfferta', snippet: '[ALTO RISCHIO AUDIT] Retention: controfferta formulata per evitare dimissioni di dipendente chiave, con documentazione della minaccia competitiva e dell\'approvazione interna.' },
-    ],
-  },
-]
-
-function appendPersonJustifySnippet(snippet) {
-  const s = String(snippet || '').trim()
-  if (!s) return
-  const cur = justifyText.value.trim()
-  if (cur.includes(s)) return
-  justifyText.value = cur ? `${cur}\n\n• ${s}` : `• ${s}`
 }
 
 // Gender gap dashboard
@@ -2608,12 +2678,6 @@ function exportJobGradingPdf() {
                   <li><strong>Genere:</strong> {{ justifyingPerson.gender === 'M' ? 'M' : justifyingPerson.gender === 'F' ? 'F' : '–' }}</li>
                 </ul>
               </div>
-              <div class="person-justify-summary-card">
-                <h4 class="person-justify-summary-title">Gap M/F nella fascia</h4>
-                <p class="person-justify-gap-line">
-                  <span :class="euGapSeverityClass(justifyingPerson.gapFasciaPct)">{{ justifyingPerson.gapFasciaFormatted }}</span>
-                </p>
-              </div>
               <div class="person-justify-summary-card person-justify-summary-card--hay">
                 <h4 class="person-justify-summary-title">Punteggi ruolo (0–100)</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
@@ -2663,41 +2727,8 @@ function exportJobGradingPdf() {
                   </span>
                 </p>
               </div>
-              <div class="justify-metric-card justify-metric-card--upload">
-                <div class="justify-metric-title">Carica documento</div>
-                <div class="justify-upload-toolbar">
-                  <input
-                    ref="personJustifyFileInput"
-                    type="file"
-                    class="person-justify-file-input"
-                    multiple
-                    accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,application/pdf,image/*"
-                    @change="onPersonJustifyFilesSelected"
-                  />
-                  <button type="button" class="btn-secondary justify-upload-btn" @click="triggerPersonJustifyFile">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    Carica documento giustificativo
-                  </button>
-                  <div class="justify-doc-info-wrap">
-                    <button
-                      type="button"
-                      class="justify-info-trigger"
-                      aria-label="Informazioni sui documenti da allegare"
-                      aria-describedby="person-justify-doc-tooltip-tab"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-                    </button>
-                    <div id="person-justify-doc-tooltip-tab" class="justify-doc-tooltip" role="tooltip">
-                      <p class="justify-doc-tooltip-title">Documentazione utile per categoria</p>
-                      <p v-for="(sec, idx) in PERSON_JUSTIFY_DOC_INFO_SECTIONS" :key="idx" class="justify-doc-tooltip-p">
-                        <strong>{{ sec.title }}:</strong> {{ sec.body }}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
-            <p class="justify-hint">Inserisci un giustificativo rispetto al gap retributivo M/F nella fascia (puoi richiamare anzianità e performance come elementi oggettivi, se coerenti con i dati).</p>
+            <p class="justify-hint">Inserisci un giustificativo sulla posizione retributiva (puoi richiamare anzianità e performance come elementi oggettivi, se coerenti con i dati).</p>
             <div v-if="canSuggestPersonJustifyAI()" class="justify-ai-row">
               <button
                 type="button"
@@ -2719,19 +2750,28 @@ function exportJobGradingPdf() {
             <div class="person-justify-benchmark">
               <div class="person-justify-benchmark-head">
                 <h3 class="person-justify-benchmark-title">Analisi benchmark retributivi</h3>
-                <button
-                  type="button"
-                  class="btn-secondary"
-                  :disabled="benchmarkLoading"
-                  @click="runSalaryBenchmarkAnalysis"
-                >
-                  <span v-if="benchmarkLoading">Analizzo annunci...</span>
-                  <span v-else>Avvia analisi</span>
-                </button>
+                <div class="person-justify-benchmark-actions">
+                  <button
+                    type="button"
+                    class="btn-secondary"
+                    :disabled="benchmarkLoading"
+                    @click="runSalaryBenchmarkAnalysis"
+                  >
+                    <span v-if="benchmarkLoading">Analizzo annunci...</span>
+                    <span v-else>Avvia analisi</span>
+                  </button>
+                  <button
+                    v-if="benchmarkDisplayResult"
+                    type="button"
+                    class="btn-secondary"
+                    @click="exportBenchmarkPdf(benchmarkDisplayResult, { source: 'justify' })"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="benchmark-pdf-icon" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+                    Esporta PDF
+                  </button>
+                </div>
               </div>
-              <p class="muted person-justify-benchmark-lead">
-                Ricerca annunci in Italia per il ruolo con RAL in chiaro (Serper), normalizzazione con Gemini e confronto con la retribuzione del ruolo.
-              </p>
+              <p v-if="benchmarkPdfExportError" class="upload-error">{{ benchmarkPdfExportError }}</p>
               <p v-if="benchmarkError" class="upload-error">{{ benchmarkError }}</p>
 
               <template v-if="benchmarkDisplayResult">
@@ -2786,31 +2826,53 @@ function exportJobGradingPdf() {
               </template>
             </div>
 
-            <div class="person-justify-suggestions">
-              <p class="person-justify-suggestions-title">Suggerimenti — clic per aggiungere al testo</p>
-              <details
-                v-for="cat in PERSON_JUSTIFY_SUGGESTION_CATEGORIES"
-                :key="cat.id"
-                class="person-justify-cat"
-              >
-                <summary class="person-justify-cat-summary">{{ cat.title }}</summary>
-                <p v-if="cat.intro" class="person-justify-cat-intro">{{ cat.intro }}</p>
-                <div class="person-justify-chips">
+            <div class="person-justify-textarea-block">
+              <label class="person-justify-textarea-label" for="person-justify-textarea">Testo del giustificativo</label>
+              <div class="person-justify-textarea-with-upload">
+                <textarea
+                  id="person-justify-textarea"
+                  v-model="justifyText"
+                  class="justify-textarea person-justify-textarea-field"
+                  rows="6"
+                  placeholder="Motivo..."
+                ></textarea>
+                <div class="person-justify-textarea-actions" role="group" aria-label="Allegati e informazioni documenti">
+                  <input
+                    ref="personJustifyFileInput"
+                    type="file"
+                    class="person-justify-file-input"
+                    multiple
+                    accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,application/pdf,image/*"
+                    @change="onPersonJustifyFilesSelected"
+                  />
                   <button
-                    v-for="(item, i) in cat.items"
-                    :key="`${cat.id}-${i}`"
                     type="button"
-                    class="person-justify-chip"
-                    @click="appendPersonJustifySnippet(item.snippet)"
+                    class="person-justify-icon-btn"
+                    title="Carica documento giustificativo"
+                    aria-label="Carica documento giustificativo"
+                    @click="triggerPersonJustifyFile"
                   >
-                    {{ item.label }}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                   </button>
+                  <div class="justify-doc-info-wrap">
+                    <button
+                      type="button"
+                      class="justify-info-trigger"
+                      aria-label="Informazioni sui documenti da allegare"
+                      aria-describedby="person-justify-doc-tooltip-tab"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    </button>
+                    <div id="person-justify-doc-tooltip-tab" class="justify-doc-tooltip" role="tooltip">
+                      <p class="justify-doc-tooltip-title">Documentazione utile per categoria</p>
+                      <p v-for="(sec, idx) in PERSON_JUSTIFY_DOC_INFO_SECTIONS" :key="idx" class="justify-doc-tooltip-p">
+                        <strong>{{ sec.title }}:</strong> {{ sec.body }}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-              </details>
+              </div>
             </div>
-
-            <label class="person-justify-textarea-label">Testo del giustificativo</label>
-            <textarea v-model="justifyText" class="justify-textarea" rows="6" placeholder="Motivo..."></textarea>
             <div class="justify-actions justify-actions-tab">
               <button type="button" class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
               <button type="button" class="btn-primary" @click="savePersonJustify">Salva giustificativo</button>
@@ -3029,7 +3091,17 @@ function exportJobGradingPdf() {
             <span v-if="benchmarkTestLoading">Analizzo annunci...</span>
             <span v-else>Avvia analisi benchmark</span>
           </button>
+          <button
+            v-if="benchmarkTestDisplayResult"
+            type="button"
+            class="btn-secondary"
+            @click="exportBenchmarkPdf(benchmarkTestDisplayResult, { source: 'lab' })"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="benchmark-pdf-icon" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+            Esporta PDF
+          </button>
         </div>
+        <p v-if="benchmarkPdfExportError" class="upload-error">{{ benchmarkPdfExportError }}</p>
         <p v-if="benchmarkTestError" class="upload-error">{{ benchmarkTestError }}</p>
 
         <template v-if="benchmarkTestDisplayResult">
@@ -4426,11 +4498,6 @@ function exportJobGradingPdf() {
     columns: 2;
   }
 }
-.person-justify-gap-line {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 700;
-}
 
 .person-justify-benchmark {
   margin: 1rem 0 1.1rem;
@@ -4447,16 +4514,21 @@ function exportJobGradingPdf() {
   gap: 0.65rem;
   margin-bottom: 0.5rem;
 }
+.person-justify-benchmark-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.benchmark-pdf-icon {
+  vertical-align: -3px;
+  margin-right: 0.35rem;
+}
 .person-justify-benchmark-title {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 700;
   color: var(--text-primary);
-}
-.person-justify-benchmark-lead {
-  margin: 0 0 0.65rem;
-  font-size: 0.8rem;
-  line-height: 1.45;
 }
 .benchmark-lab-panel {
   max-width: 1080px;
@@ -5688,7 +5760,7 @@ function exportJobGradingPdf() {
 
 .justify-person-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
   margin: 0 0 1rem;
 }
@@ -5703,9 +5775,6 @@ function exportJobGradingPdf() {
 .justify-metric-card--mock {
   background: rgba(234, 179, 8, 0.08);
   border-color: rgba(202, 138, 4, 0.35);
-}
-.justify-metric-card--upload {
-  background: rgba(10, 108, 210, 0.05);
 }
 .justify-metric-title {
   font-weight: 700;
@@ -5759,27 +5828,53 @@ function exportJobGradingPdf() {
   white-space: nowrap;
   border: 0;
 }
-.justify-upload-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
+.person-justify-textarea-block {
   margin: 0;
 }
-.justify-upload-btn {
+.person-justify-textarea-with-upload {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.person-justify-textarea-field {
+  flex: 1;
+  min-width: 0;
+}
+.person-justify-textarea-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  padding-top: 0.15rem;
+}
+.person-justify-icon-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-}
-.justify-metric-card--upload .justify-upload-toolbar {
-  flex-direction: column;
-  align-items: stretch;
-}
-.justify-metric-card--upload .justify-upload-btn {
   justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  background: var(--bg-page);
+  color: var(--accent-blue, #2563eb);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
-.justify-metric-card--upload .justify-doc-info-wrap {
-  align-self: flex-start;
+.person-justify-icon-btn:hover,
+.person-justify-icon-btn:focus-visible {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+@media (max-width: 520px) {
+  .person-justify-textarea-with-upload {
+    flex-direction: column;
+  }
+  .person-justify-textarea-actions {
+    flex-direction: row;
+    align-items: center;
+    padding-top: 0;
+  }
 }
 .justify-doc-info-wrap {
   position: relative;
@@ -6316,99 +6411,6 @@ function exportJobGradingPdf() {
   align-items: center;
   gap: 0.75rem;
   margin-top: 1rem;
-}
-
-.person-justify-suggestions {
-  margin: 0 0 1rem;
-  padding: 0.75rem 0.85rem;
-  background: var(--bg-page);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-}
-
-.person-justify-suggestions-title {
-  margin: 0 0 0.65rem;
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-}
-
-.person-justify-cat {
-  margin-bottom: 0.35rem;
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  background: var(--bg-card);
-  overflow: hidden;
-}
-
-.person-justify-cat--risk {
-  border-color: rgba(220, 38, 38, 0.35);
-}
-
-.person-justify-cat-summary {
-  cursor: pointer;
-  padding: 0.5rem 0.65rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  list-style: none;
-}
-
-.person-justify-cat-summary::-webkit-details-marker {
-  display: none;
-}
-
-.person-justify-cat-summary::before {
-  content: '▸ ';
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-}
-
-.person-justify-cat[open] .person-justify-cat-summary::before {
-  content: '▾ ';
-}
-
-.person-justify-cat-intro {
-  margin: 0 0.65rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-
-.person-justify-risk-banner {
-  margin: 0 0.65rem 0.5rem;
-  padding: 0.45rem 0.55rem;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: #991b1b;
-  background: rgba(220, 38, 38, 0.1);
-  border-radius: 6px;
-}
-
-.person-justify-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0 0.65rem 0.65rem;
-}
-
-.person-justify-chip {
-  font-size: 0.72rem;
-  padding: 0.35rem 0.55rem;
-  border: 1px solid var(--border-light);
-  border-radius: 999px;
-  background: var(--bg-page);
-  color: var(--text-primary);
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.12s, background 0.12s;
-}
-
-.person-justify-chip:hover {
-  border-color: var(--accent-blue);
-  background: rgba(10, 108, 210, 0.06);
 }
 
 .person-justify-textarea-label {
