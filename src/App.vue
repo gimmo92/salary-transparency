@@ -39,10 +39,11 @@ import VueApexCharts from 'vue3-apexcharts'
 
 const activeSection = ref('analisi')
 
-/** Tab principali (Revisione salariale nascosta per ora) */
+/** Tab principali */
 const sections = [
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
+  { id: 'salaryReview', label: 'Salary Review', icon: 'chart' },
   { id: 'benchmark_lab', label: 'Benchmark test', icon: 'chart' },
 ]
 
