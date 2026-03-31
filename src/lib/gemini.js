@@ -35,8 +35,7 @@ export async function scoreJobRolesWithGemini(roles) {
 }
 
 export async function suggestJustificationWithGemini(roleData) {
-  const data = await postJson('/api/gemini/justify', roleData)
-  return data.suggestion || ''
+  return postJson('/api/gemini/justify', roleData)
 }
 
 export async function benchmarkRoleMarketWithSerper(payload) {

@@ -44,7 +44,6 @@ const sections = [
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
   { id: 'salaryReview', label: 'Salary Review', icon: 'chart' },
-  { id: 'benchmark_lab', label: 'Benchmark test', icon: 'chart' },
 ]
 
 // Flusso unificato
@@ -113,7 +112,7 @@ const resultsTab = ref('eu_dashboard')
 /** Tab risultati da ripristinare dopo chiusura giustificativo persona */
 const resultsTabBeforeJustify = ref('job_grading')
 /** Retribuzione per KPI dashboard: base o totale */
-const euDashboardSalaryMode = ref('total')
+const euDashboardSalaryMode = ref('base')
 
 /** Giustificativi outlier quartile: chiave = index dipendente; testo non vuoto = escluso dall'analisi */
 const quartileOutlierJustifications = ref({})
@@ -370,7 +369,7 @@ function startNuovaAnalisi() {
   transparencyRoleOverrides.value = {}
   bandGenderJustifications.value = {}
   resultsTab.value = 'eu_dashboard'
-  euDashboardSalaryMode.value = 'total'
+  euDashboardSalaryMode.value = 'base'
   justifyingPerson.value = null
 }
 
@@ -646,6 +645,7 @@ const justifyText = ref('')
 const personJustifications = ref({})
 const justifyingPerson = ref(null)
 const justifyAiLoading = ref(false)
+const justifyAiOptions = ref([])
 const benchmarkLoading = ref(false)
 const benchmarkError = ref('')
 const benchmarkResult = ref(null)
@@ -727,6 +727,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
   benchmarkResult.value = null
   benchmarkError.value = ''
   benchmarkPdfExportError.value = ''
+  justifyAiOptions.value = []
 
   justifyingPerson.value = {
     key,
@@ -776,6 +777,13 @@ function canSuggestPersonJustifyAI() {
   return !!justifyingPerson.value
 }
 
+function applyAiSuggestionOption(text) {
+  const t = String(text || '').trim()
+  if (!t) return
+  const cur = justifyText.value.trim()
+  justifyText.value = cur ? `${cur}\n\n${t}` : t
+}
+
 function benchmarkSalaryPoint(a) {
   if (!a) return null
   if (Number.isFinite(Number(a.salaryAnnualEur))) return Number(a.salaryAnnualEur)
@@ -789,6 +797,100 @@ function benchmarkSalaryPoint(a) {
 
 function benchmarkSourceKey(a) {
   return String(a?.link || a?.title || a?.i || '')
+}
+
+function pdfClamp(v, min, max) {
+  return Math.max(min, Math.min(max, v))
+}
+
+function pdfEnsureSpace(doc, y, needed, top = 16, bottom = 14) {
+  const pageHeight = doc.internal.pageSize.getHeight()
+  if (y + needed > pageHeight - bottom) {
+    doc.addPage()
+    return top
+  }
+  return y
+}
+
+function drawBenchmarkBoxplotPdf(doc, x, y, width, height, stats, roleSalary) {
+  const min = Number(stats?.min)
+  const q1 = Number(stats?.q1)
+  const median = Number(stats?.median)
+  const q3 = Number(stats?.q3)
+  const max = Number(stats?.max)
+  if (![min, q1, median, q3, max].every((n) => Number.isFinite(n))) return 0
+  const span = max - min
+  const rel = (v) => (span <= 0 ? 0.5 : (v - min) / span)
+  const mapX = (v) => x + pdfClamp(rel(v), 0, 1) * width
+
+  const yMid = y + height / 2
+  const boxTop = y + height * 0.28
+  const boxBottom = y + height * 0.72
+
+  doc.setDrawColor(148, 163, 184)
+  doc.setLineWidth(0.5)
+  doc.line(x, yMid, x + width, yMid)
+
+  doc.setDrawColor(10, 108, 210)
+  doc.setLineWidth(1)
+  doc.line(mapX(min), yMid, mapX(max), yMid)
+
+  doc.setFillColor(126, 179, 232)
+  doc.rect(mapX(q1), boxTop, Math.max(1, mapX(q3) - mapX(q1)), boxBottom - boxTop, 'FD')
+
+  doc.setDrawColor(15, 23, 42)
+  doc.setLineWidth(1)
+  doc.line(mapX(median), boxTop, mapX(median), boxBottom)
+  doc.line(mapX(min), boxTop + 1, mapX(min), boxBottom - 1)
+  doc.line(mapX(max), boxTop + 1, mapX(max), boxBottom - 1)
+
+  const role = Number(roleSalary)
+  if (Number.isFinite(role)) {
+    const rx = mapX(role)
+    doc.setFillColor(194, 65, 12)
+    doc.circle(pdfClamp(rx, x, x + width), yMid, 1.6, 'F')
+  }
+
+  doc.setFontSize(7)
+  doc.setTextColor(71, 85, 105)
+  doc.text(`Min ${formatNum(min)}`, x, y + height + 4)
+  doc.text(`Q1 ${formatNum(q1)}`, mapX(q1), y + height + 4, { align: 'center' })
+  doc.text(`Med ${formatNum(median)}`, mapX(median), y + height + 7, { align: 'center' })
+  doc.text(`Q3 ${formatNum(q3)}`, mapX(q3), y + height + 4, { align: 'center' })
+  doc.text(`Max ${formatNum(max)}`, x + width, y + height + 4, { align: 'right' })
+  doc.setTextColor(0, 0, 0)
+  return height + 10
+}
+
+function drawLevelGapBarsPdf(doc, x, y, width, rowHeight, rows) {
+  const valid = (rows || []).filter((r) => Number.isFinite(Number(r.gap)))
+  if (!valid.length) return 0
+  const maxAbs = Math.max(5, ...valid.map((r) => Math.abs(Number(r.gap))))
+  const barMaxWidth = width - 64
+  let curY = y
+  doc.setFontSize(10)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Grafico gap per livello CCNL', x, curY)
+  curY += 5
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  for (const r of valid.slice(0, 10)) {
+    const gap = Number(r.gap)
+    const label = String(r.levelLabel || r.band || '–')
+    const barW = (Math.abs(gap) / maxAbs) * barMaxWidth
+    doc.setTextColor(30, 41, 59)
+    doc.text(label, x, curY + 3)
+    doc.setFillColor(226, 232, 240)
+    doc.rect(x + 34, curY, barMaxWidth, 4, 'F')
+    if (gap >= 0) doc.setFillColor(217, 119, 6)
+    else doc.setFillColor(37, 99, 235)
+    doc.rect(x + 34, curY, barW, 4, 'F')
+    doc.setTextColor(51, 65, 85)
+    doc.text(formatPct(gap), x + 34 + barMaxWidth + 2, curY + 3)
+    curY += rowHeight
+  }
+  doc.setTextColor(0, 0, 0)
+  return curY - y + 2
 }
 
 function benchmarkPercentileSorted(sorted, p) {
@@ -1073,6 +1175,14 @@ function exportBenchmarkPdf(result, options = {}) {
         margin: { left: 14, right: 14 },
       })
       y = doc.lastAutoTable.finalY + 10
+
+      y = pdfEnsureSpace(doc, y, 30)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Grafico distribuzione benchmark (boxplot)', 14, y)
+      y += 4
+      const usedH = drawBenchmarkBoxplotPdf(doc, 14, y, pageWidth - 28, 16, st, result.roleSalary)
+      y += Math.max(18, usedH) + 2
     } else {
       doc.setFontSize(9)
       doc.setFont('helvetica', 'italic')
@@ -1084,6 +1194,7 @@ function exportBenchmarkPdf(result, options = {}) {
 
     const announcements = result.announcements || []
     if (announcements.length) {
+      y = pdfEnsureSpace(doc, y, 26)
       doc.setFontSize(11)
       doc.setFont('helvetica', 'bold')
       doc.text('Annunci inclusi', 14, y)
@@ -1130,15 +1241,19 @@ function exportBenchmarkPdf(result, options = {}) {
 async function suggestPersonJustifyAI() {
   if (!justifyingPerson.value || justifyAiLoading.value) return
   justifyAiLoading.value = true
+  justifyAiOptions.value = []
   try {
     const j = justifyingPerson.value
-    const suggestion = await suggestJustificationWithGemini({
+    const bm = benchmarkDisplayResult.value?.stats || null
+    const suggestionData = await suggestJustificationWithGemini({
       role: j.roleName,
       level: j.levelLabel,
       bandId: j.fasciaId,
       bandRangeLabel: j.fasciaRange,
       employeeName: j.displayName,
       gender: j.gender,
+      personBaseSalary: j.baseSalary,
+      personVariableComponents: j.variableComponents,
       personTotalSalary: j.totalSalary,
       avgFasciaSalary: j.avgFasciaSalary,
       personDeviationFromFasciaPct: j.personDeviationFromFasciaPct,
@@ -1151,18 +1266,21 @@ async function suggestPersonJustifyAI() {
       trWeightedScore: j.trWeightedScore,
       seniorityPctVsFascia: j.seniorityPctVsFascia,
       performancePctVsFascia: j.performancePctVsFascia,
+      benchmarkN: bm?.n ?? null,
+      benchmarkMedian: bm?.median ?? null,
+      benchmarkQ1: bm?.q1 ?? null,
+      benchmarkQ3: bm?.q3 ?? null,
+      optionsCount: 3,
     })
-    const text = String(suggestion || '').trim()
-    if (text) {
-      const cur = justifyText.value.trim()
-      justifyText.value = cur ? `${cur}\n\n${text}` : text
-      await nextTick()
-      const box = mainWrapRef.value
-      if (box && typeof box.scrollTo === 'function') {
-        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' })
-      }
-      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
-    }
+    const optionsRaw = Array.isArray(suggestionData?.suggestions)
+      ? suggestionData.suggestions
+      : [suggestionData?.suggestion || suggestionData]
+    const options = optionsRaw
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+      .slice(0, 3)
+    if (!options.length) return
+    justifyAiOptions.value = options
   } catch (err) {
     uploadError.value = `Suggerimento AI non riuscito: ${err?.message || String(err)}`
   } finally {
@@ -1201,6 +1319,7 @@ function savePersonJustify() {
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
+  justifyAiOptions.value = []
   benchmarkResult.value = null
   benchmarkError.value = ''
   benchmarkPdfExportError.value = ''
@@ -1213,6 +1332,7 @@ function cancelPersonJustify() {
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
+  justifyAiOptions.value = []
   benchmarkResult.value = null
   benchmarkError.value = ''
   benchmarkPdfExportError.value = ''
@@ -2015,6 +2135,15 @@ function exportJobGradingPdf() {
     })
     nextY = doc.lastAutoTable.finalY + 8
 
+    const levelGapRowsForChart = (dash.levelRows || [])
+      .filter((r) => Number.isFinite(Number(r?.gap)))
+      .map((r) => ({ levelLabel: r.levelLabel || r.band || '–', gap: Number(r.gap) }))
+    if (levelGapRowsForChart.length) {
+      nextY = pdfEnsureSpace(doc, nextY, 62, 16, 14)
+      const used = drawLevelGapBarsPdf(doc, 14, nextY, pageWidth - 28, 6, levelGapRowsForChart)
+      nextY += used + 5
+    }
+
     const quartRows = (dash.quartiles || []).map((q) => [
       `Q${q.quartile}`,
       q.totale ?? 0,
@@ -2777,10 +2906,26 @@ function exportJobGradingPdf() {
                   <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14z"/>
                   <path d="M5 14l.7 1.6L7.3 16l-1.6.7L5 18.3l-.7-1.6L2.7 16l1.6-.7L5 14z"/>
                 </svg>
-                <span v-if="justifyAiLoading">Elaboro frase con AI...</span>
-                <span v-else>Suggerisci giustificativo AI</span>
+                <span v-if="justifyAiLoading">Genero opzioni con AI...</span>
+                <span v-else>Suggerisci opzioni AI</span>
               </button>
               <span v-if="!geminiEnabled" class="muted justify-ai-note">Gemini non attivo in questo ambiente.</span>
+            </div>
+            <div v-if="justifyAiOptions.length" class="justify-ai-options">
+              <div class="justify-ai-options-head">
+                <strong>Opzioni suggerite</strong>
+                <span class="muted">Scegli quella da inserire nel testo</span>
+              </div>
+              <div
+                v-for="(opt, idx) in justifyAiOptions"
+                :key="`ai-opt-${idx}`"
+                class="justify-ai-option-card"
+              >
+                <p class="justify-ai-option-text">{{ opt }}</p>
+                <button type="button" class="btn-outline btn-sm" @click="applyAiSuggestionOption(opt)">
+                  Inserisci opzione {{ idx + 1 }}
+                </button>
+              </div>
             </div>
 
             <div class="person-justify-benchmark">
@@ -4693,6 +4838,37 @@ function exportJobGradingPdf() {
 }
 .justify-ai-note {
   font-size: 0.78rem;
+}
+.justify-ai-options {
+  margin: -0.25rem 0 0.95rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-page);
+}
+.justify-ai-options-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  align-items: baseline;
+  margin-bottom: 0.55rem;
+  font-size: 0.8rem;
+}
+.justify-ai-option-card {
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+  padding: 0.6rem 0.65rem;
+  margin-bottom: 0.5rem;
+}
+.justify-ai-option-card:last-child {
+  margin-bottom: 0;
+}
+.justify-ai-option-text {
+  margin: 0 0 0.45rem;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: var(--text-primary);
 }
 .justify-actions-tab {
   display: flex;

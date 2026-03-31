@@ -10,6 +10,22 @@ function fmtPct(n) {
   return `${Number(n).toFixed(2)}%`
 }
 
+function parseSuggestionOptions(rawText) {
+  const txt = String(rawText || '').trim()
+  if (!txt) return []
+  const fenceJson = txt.match(/```json\s*([\s\S]*?)```/i)
+  const candidate = fenceJson?.[1] || txt
+  try {
+    const parsed = JSON.parse(candidate)
+    if (Array.isArray(parsed)) return parsed.map((s) => String(s || '').trim()).filter(Boolean)
+    if (Array.isArray(parsed?.suggestions)) return parsed.suggestions.map((s) => String(s || '').trim()).filter(Boolean)
+  } catch {}
+  return txt
+    .split(/\n{2,}|(?:^|\n)\s*(?:Opzione|Option)\s*\d+\s*[:.)-]?\s*/i)
+    .map((s) => s.replace(/^\s*[-*]\s*/, '').trim())
+    .filter((s) => s.length > 20)
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -29,6 +45,8 @@ export default async function handler(req, res) {
       bandRangeLabel,
       employeeName,
       gender,
+      personBaseSalary,
+      personVariableComponents,
       personTotalSalary,
       avgFasciaSalary,
       personDeviationFromFasciaPct,
@@ -41,9 +59,16 @@ export default async function handler(req, res) {
       trWeightedScore,
       seniorityPctVsFascia,
       performancePctVsFascia,
+      benchmarkN,
+      benchmarkMedian,
+      benchmarkQ1,
+      benchmarkQ3,
+      optionsCount,
     } = b
 
-    const prompt = `Sei un consulente del lavoro e HR. Devi scrivere un testo breve di GIUSTIFICATIVO (report interno / documentazione trasparenza retributiva, riferimento Direttiva UE 2023/970 e principi di non discriminazione).
+    const nOptions = Math.min(5, Math.max(2, Number(optionsCount) || 3))
+
+    const prompt = `Sei un consulente del lavoro e HR. Devi proporre possibili GIUSTIFICATIVI (report interno / documentazione trasparenza retributiva, riferimento Direttiva UE 2023/970 e principi di non discriminazione).
 
 CONTESTO (stessa fascia di job grading: stesso punteggio parametrico / stesso bucket retributivo atteso):
 - Ruolo: ${role || 'N/D'}
@@ -55,6 +80,8 @@ CONTESTO (stessa fascia di job grading: stesso punteggio parametrico / stesso bu
 DIPENDENTE PER CUI SI REDIGE IL GIUSTIFICATIVO:
 - Nome o etichetta: ${employeeName || 'N/D'}
 - Genere (M/F): ${gender || 'N/D'}
+- Retribuzione base: € ${fmt(personBaseSalary)}
+- Variabile: € ${fmt(personVariableComponents)}
 - Retribuzione totale del dipendente: € ${fmt(personTotalSalary)} (questo è il reddito del singolo, NON la media di fascia)
 
 DATI DELLA FASCIA (tutti i ruoli con lo stesso punteggio nella stessa analisi):
@@ -68,16 +95,18 @@ DATI DELLA FASCIA (tutti i ruoli con lo stesso punteggio nella stessa analisi):
 ELEMENTI OPZIONALI (se disponibili, puoi citarli solo se coerenti):
 - Scostamento anzianità vs media fascia: ${seniorityPctVsFascia != null ? fmtPct(seniorityPctVsFascia) : 'n/d'}
 - Scostamento performance vs media fascia: ${performancePctVsFascia != null ? fmtPct(performancePctVsFascia) : 'n/d'}
+- Benchmark esterno annunci (se presente): n=${benchmarkN ?? 'n/d'}, mediana € ${fmt(benchmarkMedian)}, Q1 € ${fmt(benchmarkQ1)}, Q3 € ${fmt(benchmarkQ3)}
 
 ISTRUZIONI DI SCRITTURA (OBBLIGATORIE):
 1) Scrivi in ITALIANO, tono professionale e neutro.
-2) Tra 3 e 5 frasi COMPLETE: ogni frase deve finire con un punto fermo. Non interrompere a metà parola o a metà frase.
-3) Spiega in modo chiaro il contesto del gap di genere nella fascia (medie M vs F) e, se utile, la posizione del dipendente rispetto alla media della fascia. NON scrivere che la "mediana di banda" sia la retribuzione del dipendente: sono concetti diversi.
-4) Non inventare cifre: usa solo i dati sopra o formulazioni generiche ("ove applicabile").
-5) Non usare elenchi puntati; solo paragrafo di testo continuo.
-6) Non aggiungere titoli, prefissi tipo "Ecco il testo:" o conclusioni tipo "Spero sia utile". Solo il testo del giustificativo.
-
-Rispondi ESCLUSIVAMENTE con il paragrafo del giustificativo, nient'altro.`
+2) Genera ${nOptions} OPZIONI ALTERNATIVE, ciascuna composta da 3-5 frasi complete.
+3) Ogni opzione deve evidenziare un taglio diverso (es. focus performance, focus anzianità, focus mercato/benchmark).
+4) Spiega il contesto del gap di genere nella fascia (medie M vs F) e, quando utile, la posizione del dipendente rispetto alla media.
+5) Non inventare cifre: usa solo i dati sopra o formulazioni prudenti ("ove applicabile").
+6) Non usare formule discriminatorie o causali sensibili non documentate.
+7) Rispondi SOLO con JSON valido nel formato:
+{"suggestions":["opzione 1","opzione 2","opzione 3"]}
+Nessun testo extra fuori dal JSON.`
 
     const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
       method: 'POST',
@@ -105,12 +134,14 @@ Rispondi ESCLUSIVAMENTE con il paragrafo del giustificativo, nient'altro.`
     let out = String(text).trim()
     if (finish === 'MAX_TOKENS' && out.length > 0 && !/[.!?]\s*$/.test(out)) {
       const lastPeriod = Math.max(out.lastIndexOf('.'), out.lastIndexOf('!'), out.lastIndexOf('?'))
-      if (lastPeriod > 40) {
-        out = out.slice(0, lastPeriod + 1).trim()
-      }
+      if (lastPeriod > 40) out = out.slice(0, lastPeriod + 1).trim()
     }
-
-    return res.status(200).json({ suggestion: out })
+    let suggestions = parseSuggestionOptions(out).slice(0, nOptions)
+    if (!suggestions.length && out) suggestions = [out]
+    return res.status(200).json({
+      suggestion: suggestions[0] || '',
+      suggestions,
+    })
   } catch (err) {
     console.error('Gemini justify error:', err)
     return res.status(500).json({ error: err.message || 'Gemini justify failed' })
