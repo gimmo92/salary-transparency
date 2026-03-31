@@ -1502,6 +1502,31 @@ const sampleUserData = {
   'Alessandro Marino': { role: 'Finance Controller', performanceScore: 75, objectives: ['Chiusura bilancio', 'Forecast trimestrale'], objectivesReached: ['Chiusura bilancio', 'Forecast trimestrale'] },
 }
 
+const SR_OBJECTIVE_EXAMPLES = [
+  'Delivery Q1',
+  'Riduzione bug 30%',
+  'Mentoring junior',
+  'Lancio prodotto X',
+  'NPS +10',
+  'Design system v2',
+  'User testing 50 utenti',
+  'Dashboard analytics',
+  'Report mensili',
+  'Onboarding revamp',
+  'Retention +5%',
+  'Survey clima',
+  'Migrazione API',
+  'Copertura test 80%',
+  'Campagna brand',
+  'Lead gen +20%',
+  'CI/CD pipeline',
+  'Infra cost -15%',
+  'Target fatturato',
+  'Nuovi clienti 10',
+  'Chiusura bilancio',
+  'Forecast trimestrale',
+]
+
 const srReviewStatuses = ref({})
 const srViewingReview = ref(null)
 
@@ -1623,11 +1648,13 @@ async function loadRules() {
 
 function startCreateRule() {
   srCurrentRule.value = newRuleTemplate()
+  srObjInput.value = ''
   srView.value = 'editRule'
 }
 
 function editRule(rule) {
   srCurrentRule.value = JSON.parse(JSON.stringify(rule))
+  srObjInput.value = ''
   srView.value = 'editRule'
 }
 
@@ -1636,6 +1663,7 @@ function duplicateRule(rule) {
   copy.id = null
   copy.name = (copy.name || 'Regola') + ' (copia)'
   srCurrentRule.value = copy
+  srObjInput.value = ''
   srView.value = 'editRule'
 }
 
@@ -1677,12 +1705,19 @@ async function removeRule(id) {
 
 function cancelRuleEdit() {
   srCurrentRule.value = null
+  srObjInput.value = ''
   srView.value = 'list'
 }
 
 function addPill(arr, val) {
   const v = (typeof val === 'string' ? val : val?.value || '').trim()
   if (v && !arr.includes(v)) arr.push(v)
+}
+
+function addSelectedObjective() {
+  if (!srCurrentRule.value) return
+  addPill(srCurrentRule.value.objectives, srObjInput.value)
+  srObjInput.value = ''
 }
 
 function removePill(arr, idx) {
@@ -3394,19 +3429,21 @@ function exportJobGradingPdf() {
                 <input type="radio" v-model="srCurrentRule.triggerType" value="objectives" />
                 <span>Obiettivi specifici raggiunti</span>
               </label>
-              <div v-if="srCurrentRule.triggerType === 'objectives'" class="sr-indent">
+              <div v-if="srCurrentRule.triggerType === 'objectives'" class="sr-indent sr-objectives-wrap">
                 <div class="pills-wrap">
                   <span v-for="(o, i) in srCurrentRule.objectives" :key="i" class="pill">
                     {{ o }}
                     <button type="button" class="pill-x" @click="removePill(srCurrentRule.objectives, i)">&times;</button>
                   </span>
-                  <input
-                    v-model="srObjInput"
-                    type="text"
-                    class="pill-input"
-                    placeholder="Aggiungi obiettivo e premi Invio"
-                    @keydown.enter.prevent="addPill(srCurrentRule.objectives, srObjInput); srObjInput = '';"
-                  />
+                </div>
+                <div class="sr-objective-add-row">
+                  <select v-model="srObjInput" class="sr-select">
+                    <option value="">Seleziona obiettivo esempio...</option>
+                    <option v-for="obj in SR_OBJECTIVE_EXAMPLES" :key="obj" :value="obj">{{ obj }}</option>
+                  </select>
+                  <button type="button" class="btn-outline" :disabled="!srObjInput" @click="addSelectedObjective">
+                    Aggiungi
+                  </button>
                 </div>
               </div>
             </div>
@@ -3811,6 +3848,18 @@ function exportJobGradingPdf() {
   align-items: center;
   gap: 0.5rem;
 }
+.sr-objectives-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.sr-objective-add-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.sr-objective-add-row .sr-select {
+  flex: 1;
+}
 
 .sr-hint {
   font-size: 0.8rem;
@@ -3873,17 +3922,6 @@ function exportJobGradingPdf() {
 
 .pill-x:hover {
   opacity: 1;
-}
-
-.pill-input {
-  border: none;
-  outline: none;
-  flex: 1;
-  min-width: 140px;
-  font-size: 0.85rem;
-  color: var(--text-primary);
-  background: transparent;
-  padding: 0.2rem 0;
 }
 
 /* Workflow steps */
