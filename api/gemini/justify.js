@@ -13,17 +13,27 @@ function fmtPct(n) {
 function parseSuggestionOptions(rawText) {
   const txt = String(rawText || '').trim()
   if (!txt) return []
-  const fenceJson = txt.match(/```json\s*([\s\S]*?)```/i)
-  const candidate = fenceJson?.[1] || txt
+  const fenceJson = txt.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const candidate = (fenceJson?.[1] || txt).trim()
   try {
     const parsed = JSON.parse(candidate)
     if (Array.isArray(parsed)) return parsed.map((s) => String(s || '').trim()).filter(Boolean)
     if (Array.isArray(parsed?.suggestions)) return parsed.suggestions.map((s) => String(s || '').trim()).filter(Boolean)
   } catch {}
+  const suggestionsArrayMatch = candidate.match(/"suggestions"\s*:\s*\[(?<arr>[\s\S]*?)\]/i)
+  if (suggestionsArrayMatch?.groups?.arr) {
+    const arrRaw = `[${suggestionsArrayMatch.groups.arr}]`
+    try {
+      const arr = JSON.parse(arrRaw)
+      if (Array.isArray(arr)) return arr.map((s) => String(s || '').trim()).filter(Boolean)
+    } catch {}
+  }
   return txt
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
     .split(/\n{2,}|(?:^|\n)\s*(?:Opzione|Option)\s*\d+\s*[:.)-]?\s*/i)
     .map((s) => s.replace(/^\s*[-*]\s*/, '').trim())
-    .filter((s) => s.length > 20)
+    .filter((s) => s.length > 20 && !/^\{?\s*"suggestions"\s*:/i.test(s))
 }
 
 export default async function handler(req, res) {

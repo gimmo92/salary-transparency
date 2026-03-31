@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import {
   parseExcelFromUrl,
+  parseExcelFromFile,
   detectColumnRoles,
   buildNormalizedData,
   COLUMN_ROLES,
@@ -52,6 +53,8 @@ const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
 const excelUrl = ref('')
+const excelFile = ref(null)
+const excelFileInputRef = ref(null)
 const uploadError = ref('')
 /** Avviso informativo (non errore) su mapping euristico / Gemini */
 const geminiInfoNotice = ref('')
@@ -357,6 +360,9 @@ function startNuovaAnalisi() {
   activeSection.value = 'analisi'
   analisiStep.value = 'upload'
   uploadError.value = ''
+  excelUrl.value = ''
+  excelFile.value = null
+  if (excelFileInputRef.value) excelFileInputRef.value.value = ''
   geminiInfoNotice.value = ''
   indicatorsResult.value = null
   jobResults.value = []
@@ -394,6 +400,40 @@ async function onLoadFromUrl() {
   geminiLoading.value = false
   try {
     const { rows, headers } = await parseExcelFromUrl(url)
+    excelFile.value = null
+    if (excelFileInputRef.value) excelFileInputRef.value.value = ''
+    await processLoadedWorkbook(rows, headers)
+  } catch (err) {
+    uploadError.value = err.message || 'Impossibile leggere il file.'
+  } finally { uploadLoading.value = false }
+}
+
+async function onLoadFromFile() {
+  if (uploadLoading.value || geminiLoading.value) return
+  const file = excelFile.value
+  if (!file) {
+    uploadError.value = 'Seleziona un file Excel o CSV.'
+    return
+  }
+  uploadError.value = ''
+  geminiInfoNotice.value = ''
+  uploadLoading.value = true
+  geminiLoading.value = false
+  try {
+    const { rows, headers } = await parseExcelFromFile(file)
+    excelUrl.value = ''
+    await processLoadedWorkbook(rows, headers)
+  } catch (err) {
+    uploadError.value = err.message || 'Impossibile leggere il file selezionato.'
+  } finally { uploadLoading.value = false }
+}
+
+function onExcelFileChange(ev) {
+  const file = ev?.target?.files?.[0] || null
+  excelFile.value = file
+}
+
+async function processLoadedWorkbook(rows, headers) {
     excelRows.value = rows
     excelHeaders.value = headers
     quartileOutlierJustifications.value = {}
@@ -420,9 +460,6 @@ async function onLoadFromUrl() {
     }
     columnMapping.value = suggested
     analisiStep.value = 'mapping'
-  } catch (err) {
-    uploadError.value = err.message || 'Impossibile leggere il file.'
-  } finally { uploadLoading.value = false }
 }
 
 async function confirmMapping() {
@@ -509,7 +546,7 @@ async function confirmMapping() {
     try {
       await saveAnalysis({
         analysisType: 'combined',
-        sourceUrl: excelUrl.value,
+        sourceUrl: excelUrl.value || (excelFile.value ? `file:${excelFile.value.name}` : ''),
         headers: excelHeaders.value,
         mapping: columnMapping.value,
         rows: excelRows.value.slice(0, 500),
@@ -782,6 +819,42 @@ function applyAiSuggestionOption(text) {
   if (!t) return
   const cur = justifyText.value.trim()
   justifyText.value = cur ? `${cur}\n\n${t}` : t
+}
+
+function normalizeAiSuggestionOptions(payload) {
+  const direct = Array.isArray(payload?.suggestions)
+    ? payload.suggestions
+    : [payload?.suggestion || payload]
+  const cleaned = direct
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+    .map((s) => s.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim())
+  const out = []
+  for (const s of cleaned) {
+    try {
+      const parsed = JSON.parse(s)
+      if (Array.isArray(parsed?.suggestions)) {
+        out.push(...parsed.suggestions.map((y) => String(y || '').trim()).filter(Boolean))
+        continue
+      }
+      if (Array.isArray(parsed)) {
+        out.push(...parsed.map((y) => String(y || '').trim()).filter(Boolean))
+        continue
+      }
+    } catch {}
+    const match = s.match(/"suggestions"\s*:\s*\[(?<arr>[\s\S]*?)\]/i)
+    if (match?.groups?.arr) {
+      try {
+        const arr = JSON.parse(`[${match.groups.arr}]`)
+        if (Array.isArray(arr)) {
+          out.push(...arr.map((y) => String(y || '').trim()).filter(Boolean))
+          continue
+        }
+      } catch {}
+    }
+    out.push(s)
+  }
+  return [...new Set(out.filter((x) => x && !/^\{?\s*"suggestions"\s*:/i.test(x)))].slice(0, 3)
 }
 
 function benchmarkSalaryPoint(a) {
@@ -1272,13 +1345,7 @@ async function suggestPersonJustifyAI() {
       benchmarkQ3: bm?.q3 ?? null,
       optionsCount: 3,
     })
-    const optionsRaw = Array.isArray(suggestionData?.suggestions)
-      ? suggestionData.suggestions
-      : [suggestionData?.suggestion || suggestionData]
-    const options = optionsRaw
-      .map((x) => String(x || '').trim())
-      .filter(Boolean)
-      .slice(0, 3)
+    const options = normalizeAiSuggestionOptions(suggestionData)
     if (!options.length) return
     justifyAiOptions.value = options
   } catch (err) {
@@ -2369,7 +2436,7 @@ function exportJobGradingPdf() {
       <!-- Step 1: Link Excel -->
       <div v-if="analisiStep === 'upload'" class="analisi-content">
         <h2 class="analisi-title">Collegamento al file Excel</h2>
-        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud. L'app mapperà automaticamente le colonne per la valutazione dei lavori di pari valore (job grading).</p>
+        <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud oppure carica un file locale (.xlsx, .xls, .csv). L'app mapperà automaticamente le colonne per la valutazione dei lavori di pari valore (job grading).</p>
         <div class="url-input-wrap">
           <input v-model="excelUrl" type="url" class="url-input" placeholder="https://... file.xlsx" :disabled="uploadLoading || geminiLoading" @keydown.enter="onLoadFromUrl" />
           <button type="button" class="btn-primary" :disabled="uploadLoading || geminiLoading || !excelUrl.trim()" @click="onLoadFromUrl">
@@ -2378,6 +2445,23 @@ function exportJobGradingPdf() {
             <span v-else>Carica e mappa colonne</span>
           </button>
         </div>
+        <div class="upload-alt-divider"><span>oppure</span></div>
+        <div class="url-input-wrap">
+          <input
+            ref="excelFileInputRef"
+            type="file"
+            class="url-input"
+            accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+            :disabled="uploadLoading || geminiLoading"
+            @change="onExcelFileChange"
+          />
+          <button type="button" class="btn-secondary" :disabled="uploadLoading || geminiLoading || !excelFile" @click="onLoadFromFile">
+            <span v-if="uploadLoading">Caricamento…</span>
+            <span v-else-if="geminiLoading">Riconoscimento colonne…</span>
+            <span v-else>Usa file selezionato</span>
+          </button>
+        </div>
+        <p v-if="excelFile" class="url-hint">File selezionato: <strong>{{ excelFile.name }}</strong></p>
         <p class="api-key-warn">
           Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong>
           <span v-if="geminiApiUnreachable" class="muted"> (API non raggiungibile in questo ambiente)</span>
@@ -6252,6 +6336,21 @@ function exportJobGradingPdf() {
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: 0.5rem;
+}
+.upload-alt-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.3rem 0 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.upload-alt-divider::before,
+.upload-alt-divider::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: var(--border-light);
 }
 
 .url-input {

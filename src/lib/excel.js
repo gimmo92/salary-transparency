@@ -88,13 +88,7 @@ function expandSheetRangeIfNeeded(sheet) {
   }
 }
 
-export async function parseExcelFromUrl(url) {
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Download non riuscito (${response.status})`)
-  }
-  const contentType = (response.headers.get('content-type') || '').toLowerCase()
-  const arrayBuffer = await response.arrayBuffer()
+function parseExcelArrayBuffer(arrayBuffer, contentType = '') {
   const bytes = new Uint8Array(arrayBuffer)
   const startsWithZip =
     bytes.length >= 2 &&
@@ -157,6 +151,23 @@ export async function parseExcelFromUrl(url) {
     headers: best.headers,
     rows: best.rows,
   }
+}
+
+export async function parseExcelFromUrl(url) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Download non riuscito (${response.status})`)
+  }
+  const contentType = (response.headers.get('content-type') || '').toLowerCase()
+  const arrayBuffer = await response.arrayBuffer()
+  return parseExcelArrayBuffer(arrayBuffer, contentType)
+}
+
+export async function parseExcelFromFile(file) {
+  if (!file) throw new Error('Nessun file selezionato.')
+  const arrayBuffer = await file.arrayBuffer()
+  const contentType = String(file.type || '').toLowerCase()
+  return parseExcelArrayBuffer(arrayBuffer, contentType)
 }
 
 export function detectColumnRoles(headers, rows) {
