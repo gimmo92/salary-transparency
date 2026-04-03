@@ -106,14 +106,20 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
   const gapMedian =
     mVals.length && fVals.length ? pctGap(median(mVals), median(fVals)) : null
 
-  // Quartili su popolazione con retribuzione valida nel campo scelto
+  // Quartili su popolazione con retribuzione valida nel campo scelto:
+  // per ogni quartile: conteggi + media retributiva M e F (non % composizione di genere)
   const quartiles = [1, 2, 3, 4].map((quartile) => ({
     quartile,
     maschile: 0,
     femminile: 0,
     totale: 0,
-    maschilePct: 0,
-    femminilePct: 0,
+    /** Media retribuzione (campo scelto) uomini nel quartile; null se nessun uomo */
+    avgMaschile: null,
+    /** Media retribuzione (campo scelto) donne nel quartile; null se nessuna donna */
+    avgFemminile: null,
+    /** Altezza barra 0–100 per confronto visivo M vs F nello stesso quartile */
+    barPctM: 0,
+    barPctF: 0,
   }))
 
   const sortedForQ = norm.filter((r) => validSalary(r, field)).sort((a, b) => a[field] - b[field])
@@ -124,13 +130,25 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
       const qIndex = Math.min(3, Math.floor(idx / qSize))
       const bucket = quartiles[qIndex]
       bucket.totale += 1
-      if (r.gender === 'M') bucket.maschile += 1
-      else if (r.gender === 'F') bucket.femminile += 1
+      const sal = r[field]
+      if (r.gender === 'M') {
+        bucket.maschile += 1
+        bucket._mSum = (bucket._mSum || 0) + sal
+      } else if (r.gender === 'F') {
+        bucket.femminile += 1
+        bucket._fSum = (bucket._fSum || 0) + sal
+      }
     })
     quartiles.forEach((q) => {
-      const t = q.totale || 1
-      q.maschilePct = (q.maschile / t) * 100
-      q.femminilePct = (q.femminile / t) * 100
+      q.avgMaschile = q.maschile > 0 ? (q._mSum || 0) / q.maschile : null
+      q.avgFemminile = q.femminile > 0 ? (q._fSum || 0) / q.femminile : null
+      delete q._mSum
+      delete q._fSum
+      const maxAvg = Math.max(q.avgMaschile ?? 0, q.avgFemminile ?? 0)
+      if (maxAvg > 0) {
+        q.barPctM = q.avgMaschile != null ? (q.avgMaschile / maxAvg) * 100 : 0
+        q.barPctF = q.avgFemminile != null ? (q.avgFemminile / maxAvg) * 100 : 0
+      }
     })
   }
 

@@ -2216,27 +2216,27 @@ function exportJobGradingPdf() {
       q.totale ?? 0,
       q.maschile ?? 0,
       q.femminile ?? 0,
-      formatPct(q.maschilePct),
-      formatPct(q.femminilePct),
+      q.avgMaschile != null ? formatNum(q.avgMaschile) : 'n/d',
+      q.avgFemminile != null ? formatNum(q.avgFemminile) : 'n/d',
     ])
     if (quartRows.length) {
       nextY = newPageIfNeeded(nextY)
       doc.setFontSize(10)
       doc.setFont('helvetica', 'bold')
-      doc.text('Distribuzione per quartili', 14, nextY)
+      doc.text('Quartili: medie retributive M vs F', 14, nextY)
       nextY += 5
       autoTable(doc, {
         ...tableOptsText,
         startY: nextY,
-        head: [['Quartile', 'Totale', 'M', 'F', '% M', '% F']],
+        head: [['Q', 'Tot.', 'n M', 'n F', 'Media M (€)', 'Media F (€)']],
         body: quartRows,
         columnStyles: {
-          0: { cellWidth: 18, halign: 'center' },
-          1: { cellWidth: 18, halign: 'center' },
+          0: { cellWidth: 12, halign: 'center' },
+          1: { cellWidth: 14, halign: 'center' },
           2: { cellWidth: 12, halign: 'center' },
           3: { cellWidth: 12, halign: 'center' },
-          4: { cellWidth: 14, halign: 'right' },
-          5: { cellWidth: 14, halign: 'right' },
+          4: { cellWidth: 28, halign: 'right' },
+          5: { cellWidth: 28, halign: 'right' },
         },
       })
       nextY = doc.lastAutoTable.finalY + 8
@@ -2589,25 +2589,28 @@ function exportJobGradingPdf() {
             <div class="eu-charts-row">
               <div class="eu-panel">
                 <h4 class="eu-panel-title">Quartili retributivi</h4>
-                <p class="eu-panel-desc">Quattro gruppi uguali (dal 25% più basso al 25% più alto). Percentuali di uomini e donne <em>all’interno</em> di ciascun quartile.</p>
+                <p class="eu-panel-desc">
+                  Quattro gruppi uguali (dal 25% più basso al 25% più alto). Per ciascun quartile: <strong>media retributiva</strong> uomini vs donne
+                  ({{ euDashboardSalaryMode === 'base' ? 'retribuzione base' : 'retribuzione totale' }}). Le barre confrontano M e F <em>nello stesso quartile</em>.
+                </p>
                 <div class="eu-quartile-chart">
                   <div v-for="q in euDashboard.quartiles" :key="q.quartile" class="eu-quartile-col">
                     <div class="eu-q-label">Q{{ q.quartile }}</div>
                     <div class="eu-q-pair">
                       <div class="eu-q-bar-col">
                         <div class="eu-q-bar-bg">
-                          <div class="eu-q-bar eu-q-bar-m" :style="{ height: (q.totale ? q.maschilePct : 0) + '%' }"></div>
+                          <div class="eu-q-bar eu-q-bar-m" :style="{ height: (q.totale ? q.barPctM : 0) + '%' }"></div>
                         </div>
-                        <span class="eu-q-pct">M {{ (q.totale ? q.maschilePct : 0).toFixed(0) }}%</span>
+                        <span class="eu-q-pct eu-q-avg">M {{ q.avgMaschile != null ? formatNum(q.avgMaschile) + ' €' : 'n/d' }}</span>
                       </div>
                       <div class="eu-q-bar-col">
                         <div class="eu-q-bar-bg">
-                          <div class="eu-q-bar eu-q-bar-f" :style="{ height: (q.totale ? q.femminilePct : 0) + '%' }"></div>
+                          <div class="eu-q-bar eu-q-bar-f" :style="{ height: (q.totale ? q.barPctF : 0) + '%' }"></div>
                         </div>
-                        <span class="eu-q-pct">F {{ (q.totale ? q.femminilePct : 0).toFixed(0) }}%</span>
+                        <span class="eu-q-pct eu-q-avg">F {{ q.avgFemminile != null ? formatNum(q.avgFemminile) + ' €' : 'n/d' }}</span>
                       </div>
                     </div>
-                    <div class="eu-q-meta">n = {{ q.totale }}</div>
+                    <div class="eu-q-meta">n = {{ q.totale }} ({{ q.maschile }} M · {{ q.femminile }} F)</div>
                   </div>
                 </div>
               </div>
@@ -5264,7 +5267,7 @@ function exportJobGradingPdf() {
 }
 .eu-q-bar-col {
   flex: 1;
-  max-width: 48px;
+  max-width: 72px;
 }
 .eu-q-bar-bg {
   height: 100px;
@@ -5295,6 +5298,10 @@ function exportJobGradingPdf() {
   color: var(--text-secondary);
   margin-top: 0.25rem;
   line-height: 1.2;
+}
+.eu-q-avg {
+  font-size: 0.62rem;
+  word-break: break-word;
 }
 .eu-q-meta {
   font-size: 0.72rem;
