@@ -596,6 +596,15 @@ function formatGapMforF(gap, rettificato = false) {
   return `${lead}${body}`
 }
 function formatNum(n) { return n == null ? '–' : Number(n).toLocaleString('it-IT', { maximumFractionDigits: 2 }) }
+
+/** Altezza barra quartili in px (evita % errate nei flex item) */
+const EU_QUARTILE_BAR_TRACK_PX = 100
+function quartileBarHeightPx(pct) {
+  const p = Number(pct)
+  if (!Number.isFinite(p) || p <= 0) return '2px'
+  const px = Math.round((p / 100) * EU_QUARTILE_BAR_TRACK_PX)
+  return `${Math.max(2, px)}px`
+}
 function clampScoreInput(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 0
@@ -2218,6 +2227,7 @@ function exportJobGradingPdf() {
       q.femminile ?? 0,
       q.avgMaschile != null ? formatNum(q.avgMaschile) : 'n/d',
       q.avgFemminile != null ? formatNum(q.avgFemminile) : 'n/d',
+      q.gapPct == null ? 'n/d' : formatGapMforF(q.gapPct),
     ])
     if (quartRows.length) {
       nextY = newPageIfNeeded(nextY)
@@ -2228,15 +2238,16 @@ function exportJobGradingPdf() {
       autoTable(doc, {
         ...tableOptsText,
         startY: nextY,
-        head: [['Q', 'Tot.', 'n M', 'n F', 'Media M (€)', 'Media F (€)']],
+        head: [['Q', 'Tot.', 'n M', 'n F', 'Media M (€)', 'Media F (€)', 'Gap M vs F']],
         body: quartRows,
         columnStyles: {
-          0: { cellWidth: 12, halign: 'center' },
-          1: { cellWidth: 14, halign: 'center' },
-          2: { cellWidth: 12, halign: 'center' },
-          3: { cellWidth: 12, halign: 'center' },
-          4: { cellWidth: 28, halign: 'right' },
-          5: { cellWidth: 28, halign: 'right' },
+          0: { cellWidth: 11, halign: 'center' },
+          1: { cellWidth: 12, halign: 'center' },
+          2: { cellWidth: 10, halign: 'center' },
+          3: { cellWidth: 10, halign: 'center' },
+          4: { cellWidth: 24, halign: 'right' },
+          5: { cellWidth: 24, halign: 'right' },
+          6: { cellWidth: 26, halign: 'right' },
         },
       })
       nextY = doc.lastAutoTable.finalY + 8
@@ -2596,19 +2607,40 @@ function exportJobGradingPdf() {
                 <div class="eu-quartile-chart">
                   <div v-for="q in euDashboard.quartiles" :key="q.quartile" class="eu-quartile-col">
                     <div class="eu-q-label">Q{{ q.quartile }}</div>
-                    <div class="eu-q-pair">
-                      <div class="eu-q-bar-col">
-                        <div class="eu-q-bar-bg">
-                          <div class="eu-q-bar eu-q-bar-m" :style="{ height: (q.totale ? q.barPctM : 0) + '%' }"></div>
+                    <div class="eu-q-chart-body">
+                      <div class="eu-q-pair">
+                        <div class="eu-q-bar-col">
+                          <div class="eu-q-bar-track">
+                            <div
+                              class="eu-q-bar eu-q-bar-m"
+                              :style="{ height: q.totale ? quartileBarHeightPx(q.barPctM) : '2px' }"
+                            ></div>
+                          </div>
                         </div>
-                        <span class="eu-q-pct eu-q-avg">M {{ q.avgMaschile != null ? formatNum(q.avgMaschile) + ' €' : 'n/d' }}</span>
-                      </div>
-                      <div class="eu-q-bar-col">
-                        <div class="eu-q-bar-bg">
-                          <div class="eu-q-bar eu-q-bar-f" :style="{ height: (q.totale ? q.barPctF : 0) + '%' }"></div>
+                        <div class="eu-q-bar-col">
+                          <div class="eu-q-bar-track">
+                            <div
+                              class="eu-q-bar eu-q-bar-f"
+                              :style="{ height: q.totale ? quartileBarHeightPx(q.barPctF) : '2px' }"
+                            ></div>
+                          </div>
                         </div>
-                        <span class="eu-q-pct eu-q-avg">F {{ q.avgFemminile != null ? formatNum(q.avgFemminile) + ' €' : 'n/d' }}</span>
                       </div>
+                      <div class="eu-q-amounts">
+                        <div class="eu-q-amt">
+                          <span class="eu-q-amt-lbl">M</span>
+                          <span class="eu-q-amt-val">{{ q.avgMaschile != null ? formatNum(q.avgMaschile) + ' €' : 'n/d' }}</span>
+                        </div>
+                        <div class="eu-q-amt">
+                          <span class="eu-q-amt-lbl">F</span>
+                          <span class="eu-q-amt-val">{{ q.avgFemminile != null ? formatNum(q.avgFemminile) + ' €' : 'n/d' }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="eu-q-deviation" :class="euGapSeverityClass(q.gapPct)">
+                      <span class="eu-q-deviation-label">Dev. media M vs F</span>
+                      <span class="eu-q-deviation-val">{{ q.gapPct == null ? 'n/d' : formatGapMforF(q.gapPct) }}</span>
+                      <span v-if="q.gapPct != null && Math.abs(q.gapPct) > EU_GAP_THRESHOLD_PCT" class="eu-q-deviation-flag">oltre {{ EU_GAP_THRESHOLD_PCT }}%</span>
                     </div>
                     <div class="eu-q-meta">n = {{ q.totale }} ({{ q.maschile }} M · {{ q.femminile }} F)</div>
                   </div>
@@ -5245,31 +5277,43 @@ function exportJobGradingPdf() {
 .eu-quartile-chart {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
-  gap: 0.75rem;
-  min-height: 160px;
+  align-items: flex-start;
+  gap: 0.65rem;
 }
 .eu-quartile-col {
   flex: 1;
   text-align: center;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 .eu-q-label {
   font-weight: 700;
   font-size: 0.85rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+.eu-q-chart-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  flex: 1;
+  min-height: 0;
 }
 .eu-q-pair {
   display: flex;
-  gap: 0.35rem;
+  gap: 0.45rem;
   justify-content: center;
   align-items: flex-end;
+  flex-shrink: 0;
 }
 .eu-q-bar-col {
-  flex: 1;
-  max-width: 72px;
+  flex: 0 0 44px;
+  display: flex;
+  justify-content: center;
 }
-.eu-q-bar-bg {
+.eu-q-bar-track {
+  width: 100%;
   height: 100px;
   display: flex;
   align-items: flex-end;
@@ -5279,12 +5323,14 @@ function exportJobGradingPdf() {
   border: 1px solid var(--border-light);
   border-bottom: none;
   overflow: hidden;
+  box-sizing: border-box;
 }
 .eu-q-bar {
   width: 100%;
   min-height: 2px;
   border-radius: 4px 4px 0 0;
   transition: height 0.2s ease;
+  flex-shrink: 0;
 }
 .eu-q-bar-m {
   background: linear-gradient(180deg, #3b82f6, #1d4ed8);
@@ -5292,16 +5338,70 @@ function exportJobGradingPdf() {
 .eu-q-bar-f {
   background: linear-gradient(180deg, #ec4899, #be185d);
 }
-.eu-q-pct {
-  display: block;
+.eu-q-amounts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 2.5rem;
   font-size: 0.65rem;
+  line-height: 1.25;
   color: var(--text-secondary);
-  margin-top: 0.25rem;
-  line-height: 1.2;
 }
-.eu-q-avg {
-  font-size: 0.62rem;
-  word-break: break-word;
+.eu-q-amt {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0.2rem;
+  min-height: 1.25rem;
+}
+.eu-q-amt-lbl {
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 0.75rem;
+  text-align: right;
+}
+.eu-q-amt-val {
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+.eu-q-deviation {
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.35rem;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border: 1px solid transparent;
+}
+.eu-q-deviation-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.85;
+}
+.eu-q-deviation-val {
+  font-variant-numeric: tabular-nums;
+}
+.eu-q-deviation-flag {
+  font-size: 0.58rem;
+  font-weight: 700;
+}
+.eu-q-deviation.gap-severity-red {
+  background: rgba(220, 38, 38, 0.1);
+  border-color: rgba(220, 38, 38, 0.35);
+}
+.eu-q-deviation.gap-severity-yellow {
+  background: rgba(202, 138, 4, 0.12);
+  border-color: rgba(202, 138, 4, 0.35);
+}
+.eu-q-deviation.gap-severity-green {
+  background: rgba(22, 163, 74, 0.08);
+  border-color: rgba(22, 163, 74, 0.25);
 }
 .eu-q-meta {
   font-size: 0.72rem;

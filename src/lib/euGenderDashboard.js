@@ -120,6 +120,8 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
     /** Altezza barra 0–100 per confronto visivo M vs F nello stesso quartile */
     barPctM: 0,
     barPctF: 0,
+    /** Gap % tra media M e media F: (M−F)/M×100 come resto dashboard; null se non calcolabile */
+    gapPct: null,
   }))
 
   const sortedForQ = norm.filter((r) => validSalary(r, field)).sort((a, b) => a[field] - b[field])
@@ -148,6 +150,17 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
       if (maxAvg > 0) {
         q.barPctM = q.avgMaschile != null ? (q.avgMaschile / maxAvg) * 100 : 0
         q.barPctF = q.avgFemminile != null ? (q.avgFemminile / maxAvg) * 100 : 0
+      }
+      if (
+        q.avgMaschile != null &&
+        q.avgFemminile != null &&
+        Number.isFinite(q.avgMaschile) &&
+        Number.isFinite(q.avgFemminile) &&
+        q.avgMaschile > 0
+      ) {
+        q.gapPct = pctGap(q.avgMaschile, q.avgFemminile)
+      } else {
+        q.gapPct = null
       }
     })
   }
