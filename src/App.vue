@@ -2676,7 +2676,7 @@ function exportJobGradingPdf() {
                 Con un giustificativo testuale il dipendente viene <strong>escluso dall’analisi</strong> (KPI, quartili, gap per livello, fasce job grading).
               </p>
               <div v-if="quartileOutlierRows.length === 0" class="muted">
-                Nessun outlier rilevato (o dati insufficienti: servono almeno 8 persone con retribuzione valida).
+                Nessun outlier rilevato (o dati insufficienti: servono almeno 2 persone con retribuzione valida).
               </div>
               <div v-else class="eu-outlier-table-wrap">
                 <table class="eu-outlier-table">

@@ -39,7 +39,7 @@ export function computeQuartileOutliers(normalized, salaryMode) {
   const norm = (normalized || []).filter(
     (r) => (r.gender === 'M' || r.gender === 'F') && validSalary(r, field),
   )
-  if (norm.length < 8) return []
+  if (norm.length < 2) return []
 
   const sorted = [...norm].sort((a, b) => a[field] - b[field])
   const len = sorted.length
@@ -50,7 +50,7 @@ export function computeQuartileOutliers(normalized, salaryMode) {
     const start = qi * qSize
     const end = Math.min(len, (qi + 1) * qSize)
     const chunk = sorted.slice(start, end)
-    if (chunk.length < 4) continue
+    if (chunk.length < 2) continue
 
     const vals = chunk.map((r) => r[field]).sort((a, b) => a - b)
     const q1 = percentileSorted(vals, 0.25)
@@ -68,7 +68,9 @@ export function computeQuartileOutliers(normalized, salaryMode) {
           gender: r.gender,
           salary: v,
           quartile: qi + 1,
-          reason: v < low ? 'Sotto la soglia inferiore (IQR)' : 'Sopra la soglia superiore (IQR)',
+          reason: v < low
+            ? `Q${qi + 1}: sotto soglia inferiore (IQR: ${Math.round(low).toLocaleString('it-IT')} – ${Math.round(high).toLocaleString('it-IT')})`
+            : `Q${qi + 1}: sopra soglia superiore (IQR: ${Math.round(low).toLocaleString('it-IT')} – ${Math.round(high).toLocaleString('it-IT')})`,
         })
       }
     }
