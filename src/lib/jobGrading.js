@@ -191,8 +191,8 @@ export function computeTransparencyScoresForPerson(person, { companyContext = ''
     gestioneRisorseUmane: scoreFromText(text, KW_GESTIONE_RH, 2 + lb),
     sforzoMentale: scoreFromText(text, KW_SFORZO_MENTALE, 2 + Math.min(2, Math.floor(descLen / 200))),
     tensioneEmotiva: scoreFromText(text, KW_TENSIONE, 2),
-    ambienteFisico: scoreFromText(text, KW_AMBIENTE, 1 + (keywordHits(text, KW_AMBIENTE) ? 2 : 0)),
-    disagioOrganizzativo: scoreFromText(text, KW_DISAGIO_ORG, 1 + (keywordHits(text, KW_DISAGIO_ORG) ? 2 : 0)),
+    ambienteFisico: scoreFromText(text, KW_AMBIENTE, 2 + (keywordHits(text, KW_AMBIENTE) ? 1 : 0)),
+    disagioOrganizzativo: scoreFromText(text, KW_DISAGIO_ORG, 2 + (keywordHits(text, KW_DISAGIO_ORG) ? 1 : 0)),
   }
 
   const out = {}
