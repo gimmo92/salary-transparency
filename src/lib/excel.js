@@ -12,6 +12,10 @@ export const COLUMN_ROLES = {
   description: 'description',
   /** Anni di servizio, data ingresso o simile (utile come giustificativo oggettivo) */
   seniority: 'seniority',
+  /** Anzianità nel ruolo attuale (anni o data) */
+  roleSeniority: 'roleSeniority',
+  /** Punteggio performance (0–100) */
+  performanceScore: 'performanceScore',
 }
 
 export function getRoleLabel(role) {
@@ -26,6 +30,8 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.level]: 'Livello contrattuale (es. Q, B1, C3)',
     [COLUMN_ROLES.description]: 'Descrizione ruolo',
     [COLUMN_ROLES.seniority]: 'Anzianità (anni, data ingresso o simile)',
+    [COLUMN_ROLES.roleSeniority]: 'Anzianità nel ruolo (anni o data)',
+    [COLUMN_ROLES.performanceScore]: 'Punteggio performance (0–100)',
   }
   return labels[role] ?? role
 }
@@ -207,6 +213,14 @@ export function detectColumnRoles(headers, rows) {
   const senIdx = find('anzian', 'anzianit', 'seniority', 'anz. servizio', 'data assunzione', 'data ingresso', 'anni servizio')
   if (senIdx >= 0) result[COLUMN_ROLES.seniority] = senIdx
 
+  const roleSenIdx = lower.findIndex((h) =>
+    (h.includes('anzian') || h.includes('seniority')) && (h.includes('ruolo') || h.includes('role') || h.includes('posizione')),
+  )
+  if (roleSenIdx >= 0 && roleSenIdx !== senIdx) result[COLUMN_ROLES.roleSeniority] = roleSenIdx
+
+  const perfIdx = find('performance', 'punteggio', 'valutazione', 'rating', 'score')
+  if (perfIdx >= 0) result[COLUMN_ROLES.performanceScore] = perfIdx
+
   return result
 }
 
@@ -225,6 +239,8 @@ export function buildNormalizedData(rows, headers, mapping) {
   const roleIdx = idx(COLUMN_ROLES.role)
   const levelIdx = idx(COLUMN_ROLES.level)
   const descIdx = idx(COLUMN_ROLES.description)
+  const roleSenIdx = idx(COLUMN_ROLES.roleSeniority)
+  const perfIdx = idx(COLUMN_ROLES.performanceScore)
 
   const parseNumber = (value) => {
     if (value == null || value === '') return 0
@@ -267,6 +283,8 @@ export function buildNormalizedData(rows, headers, mapping) {
         role: roleIdx != null ? row[roleIdx] : null,
         level: levelIdx != null ? row[levelIdx] : null,
         description: descIdx != null ? row[descIdx] : null,
+        roleSeniority: roleSenIdx != null ? row[roleSenIdx] : null,
+        performanceScore: perfIdx != null ? parseNumber(row[perfIdx]) || null : null,
       }
     })
     .filter((r) => r.gender === 'M' || r.gender === 'F')

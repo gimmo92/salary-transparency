@@ -574,12 +574,9 @@ function formatPctSigned(n) {
 function formatDeviationVsBandMean(p) {
   return formatPctSigned(p?.deviationFromHayBandMeanPct)
 }
-/** Punteggio performance mock (40–100), deterministico per indice dipendente */
-function mockPerformanceScoreForPerson(personIndex) {
-  const k = Number(personIndex) || 0
-  const x = Math.sin(k * 12.9898) * 43758.5453
-  const frac = x - Math.floor(x)
-  return Math.round(40 + frac * 55)
+function personPerformanceScore(person) {
+  const v = Number(person?.performanceScore)
+  return Number.isFinite(v) && v > 0 ? v : null
 }
 
 /** Gap da pctGap / media M vs F: positivo = uomini pagati di più, negativo = donne pagate di più */
@@ -755,9 +752,24 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
       ? ((seniorityYearsRaw - fascAvgSeniorityYears) / fascAvgSeniorityYears) * 100
       : null
 
-  const perfScores = peopleInFascia.map((p) => mockPerformanceScoreForPerson(p.index))
+  const perfScores = peopleInFascia.map((p) => personPerformanceScore(p)).filter((v) => v != null)
   const fascAvgPerformance = perfScores.length ? meanLocal(perfScores) : null
-  const performanceScore = mockPerformanceScoreForPerson(person?.index)
+  const performanceScore = personPerformanceScore(person)
+
+  const roleSeniorityYearsRaw = seniorityToYearsNumeric(person?.roleSeniority)
+  const roleSeniorityYearsList = peopleInFascia
+    .map((p) => seniorityToYearsNumeric(p.roleSeniority))
+    .filter((n) => n != null && Number.isFinite(n) && n >= 0)
+  const fascAvgRoleSeniorityYears = roleSeniorityYearsList.length
+    ? meanLocal(roleSeniorityYearsList)
+    : null
+  const roleSeniorityPctVsFascia =
+    fascAvgRoleSeniorityYears != null &&
+    fascAvgRoleSeniorityYears > 0 &&
+    roleSeniorityYearsRaw != null &&
+    Number.isFinite(roleSeniorityYearsRaw)
+      ? ((roleSeniorityYearsRaw - fascAvgRoleSeniorityYears) / fascAvgRoleSeniorityYears) * 100
+      : null
   const performancePctVsFascia =
     fascAvgPerformance != null &&
     fascAvgPerformance > 0 &&
@@ -783,6 +795,10 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     seniorityYearsRaw,
     fascAvgSeniorityYears,
     seniorityPctVsFascia,
+    roleSeniority: person?.roleSeniority || null,
+    roleSeniorityYearsRaw,
+    fascAvgRoleSeniorityYears,
+    roleSeniorityPctVsFascia,
     performanceScore,
     fascAvgPerformance,
     performancePctVsFascia,
@@ -1528,11 +1544,15 @@ function openQuartileOutlierJustifyTab(row) {
       key,
       displayName: row.name && String(row.name).trim() ? String(row.name).trim() : `Dipendente #${key}`,
       label: `Outlier quartile · #${key}`,
-      seniority: null,
+      seniority: fullRow?.seniority || null,
       seniorityYearsRaw: null,
       fascAvgSeniorityYears: null,
       seniorityPctVsFascia: null,
-      performanceScore: mockPerformanceScoreForPerson(row.index),
+      roleSeniority: fullRow?.roleSeniority || null,
+      roleSeniorityYearsRaw: null,
+      fascAvgRoleSeniorityYears: null,
+      roleSeniorityPctVsFascia: null,
+      performanceScore: personPerformanceScore(fullRow),
       fascAvgPerformance: null,
       performancePctVsFascia: null,
       roleName: fullRow?.role != null && String(fullRow.role).trim() ? String(fullRow.role).trim() : 'N/D',
@@ -2999,11 +3019,31 @@ function exportJobGradingPdf() {
                   Il confronto % richiede anzianità espressa in anni numerici o data di ingresso; in alcuni formati non è calcolabile.
                 </p>
               </div>
-              <div class="justify-metric-card justify-metric-card--mock">
+              <div class="justify-metric-card">
+                <div class="justify-metric-title">Anzianità nel ruolo</div>
+                <p class="justify-metric-line">
+                  <strong>Da file:</strong>
+                  {{ formatSeniorityDisplay(justifyingPerson.roleSeniority) }}
+                </p>
+                <p class="justify-metric-line">
+                  <strong>Scostamento vs media della fascia:</strong>
+                  <span v-if="justifyingPerson.roleSeniorityPctVsFascia != null" class="justify-metric-pct">
+                    {{ formatPctSigned(justifyingPerson.roleSeniorityPctVsFascia) }}
+                  </span>
+                  <span v-else class="muted">n/d</span>
+                  <span v-if="justifyingPerson.fascAvgRoleSeniorityYears != null" class="justify-metric-ref muted">
+                    (media fascia: {{ justifyingPerson.fascAvgRoleSeniorityYears.toFixed(1) }} anni)
+                  </span>
+                </p>
+                <p v-if="justifyingPerson.roleSeniorityPctVsFascia == null && justifyingPerson.roleSeniority == null" class="justify-metric-note muted">
+                  Colonna non mappata nel file Excel.
+                </p>
+              </div>
+              <div class="justify-metric-card">
                 <div class="justify-metric-title">Performance</div>
                 <p class="justify-metric-line">
                   <strong>Punteggio performance:</strong>
-                  {{ justifyingPerson.performanceScore ?? '–' }} / 100
+                  {{ justifyingPerson.performanceScore != null ? justifyingPerson.performanceScore + ' / 100' : 'Non presente nel file' }}
                 </p>
                 <p class="justify-metric-line">
                   <strong>Scostamento vs media della fascia:</strong>

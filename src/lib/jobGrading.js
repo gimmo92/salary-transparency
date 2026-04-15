@@ -420,6 +420,8 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
   const nameIdx = idx(COLUMN_ROLES.employeeName)
   const totalIdx = idx(COLUMN_ROLES.totalSalary)
   const seniorityIdx = idx(COLUMN_ROLES.seniority)
+  const roleSeniorityIdx = idx(COLUMN_ROLES.roleSeniority)
+  const perfScoreIdx = idx(COLUMN_ROLES.performanceScore)
 
   const parseNumber = (value) => {
     if (value == null || value === '' || value === 'N/D') return 0
@@ -447,6 +449,8 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       category: categoryIdx != null ? row[categoryIdx] : null,
       gender: genderIdx != null ? normalizeGender(row[genderIdx]) : null,
       seniority: seniorityIdx != null ? parseSeniorityDisplay(row[seniorityIdx]) : null,
+      roleSeniority: roleSeniorityIdx != null ? parseSeniorityDisplay(row[roleSeniorityIdx]) : null,
+      performanceScore: perfScoreIdx != null ? (parseNumber(row[perfScoreIdx]) || null) : null,
       baseSalary: base,
       variableComponents: variable,
       totalSalary: total,
