@@ -143,6 +143,8 @@ const allRoleKeys = [
   COLUMN_ROLES.level,
   COLUMN_ROLES.description,
   COLUMN_ROLES.seniority,
+  COLUMN_ROLES.roleSeniority,
+  COLUMN_ROLES.performanceScore,
 ]
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
