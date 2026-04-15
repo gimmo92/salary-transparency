@@ -2669,10 +2669,11 @@ function exportJobGradingPdf() {
             </div>
 
             <div class="eu-panel eu-outlier-panel">
-              <h4 class="eu-panel-title">Outlier per quartile (IQR)</h4>
+              <h4 class="eu-panel-title">Outlier retributivi (&gt; 5% dalla media)</h4>
               <p class="eu-panel-desc">
-                Regola a scatola (IQR × 1,5) <strong>all’interno di ciascun quartile</strong> sulla
-                {{ euDashboardSalaryMode === 'base' ? 'retribuzione base' : 'retribuzione totale' }}.
+                Dipendenti la cui {{ euDashboardSalaryMode === 'base' ? 'retribuzione base' : 'retribuzione totale' }}
+                si scosta di oltre il <strong>5%</strong> dalla media generale.
+                Per ogni outlier è indicato il quartile di appartenenza e lo scostamento percentuale.
                 Con un giustificativo testuale il dipendente viene <strong>escluso dall’analisi</strong> (KPI, quartili, gap per livello, fasce job grading).
               </p>
               <div v-if="quartileOutlierRows.length === 0" class="muted">
@@ -2686,7 +2687,8 @@ function exportJobGradingPdf() {
                       <th>Nome</th>
                       <th>Genere</th>
                       <th class="eu-outlier-num">{{ euDashboardSalaryMode === 'base' ? 'Base' : 'Totale' }}</th>
-                      <th>Motivo</th>
+                      <th class="eu-outlier-num">Scostamento</th>
+                      <th>Dettaglio</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -2696,6 +2698,9 @@ function exportJobGradingPdf() {
                       <td>{{ row.name || '—' }}</td>
                       <td><span :class="personGenderClass(row.gender)">{{ row.gender }}</span></td>
                       <td class="eu-outlier-num">{{ formatNum(row.salary) }}</td>
+                      <td class="eu-outlier-num" :style="{ color: row.deviationPct > 0 ? 'var(--accent-green, #16a34a)' : 'var(--accent-red, #dc2626)' }">
+                        {{ row.deviationPct > 0 ? '+' : '' }}{{ row.deviationPct.toFixed(1) }}%
+                      </td>
                       <td class="eu-outlier-reason">{{ row.reason }}</td>
                       <td>
                         <button type="button" class="btn-eu-outlier" @click="openQuartileOutlierJustifyTab(row)">Giustificativo</button>

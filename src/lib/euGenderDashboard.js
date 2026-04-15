@@ -30,9 +30,10 @@ function percentileSorted(sortedArr, p) {
 }
 
 /**
- * Outlier per quartile retributivo (stessa suddivisione della dashboard):
- * dentro ogni quartile si applica la regola box-plot IQR (1.5×) sulle retribuzioni.
- * @returns {Array<{ index: number, name: unknown, gender: string, salary: number, quartile: number, reason: string }>}
+ * Outlier retributivi: dipendenti la cui retribuzione si scosta di oltre il 5%
+ * dalla media generale. Per ogni outlier viene indicato il quartile di appartenenza
+ * e la percentuale di scostamento dalla media.
+ * @returns {Array<{ index: number, name: unknown, gender: string, salary: number, quartile: number, deviationPct: number, reason: string }>}
  */
 export function computeQuartileOutliers(normalized, salaryMode) {
   const field = salaryFieldForMode(salaryMode)
@@ -41,42 +42,36 @@ export function computeQuartileOutliers(normalized, salaryMode) {
   )
   if (norm.length < 2) return []
 
+  const avg = norm.reduce((s, r) => s + r[field], 0) / norm.length
+
   const sorted = [...norm].sort((a, b) => a[field] - b[field])
   const len = sorted.length
   const qSize = Math.ceil(len / 4) || 1
+  const quartileOf = (r) => {
+    const pos = sorted.indexOf(r)
+    return Math.min(4, Math.floor(pos / qSize) + 1)
+  }
+
   const outliers = []
-
-  for (let qi = 0; qi < 4; qi++) {
-    const start = qi * qSize
-    const end = Math.min(len, (qi + 1) * qSize)
-    const chunk = sorted.slice(start, end)
-    if (chunk.length < 2) continue
-
-    const vals = chunk.map((r) => r[field]).sort((a, b) => a - b)
-    const q1 = percentileSorted(vals, 0.25)
-    const q3 = percentileSorted(vals, 0.75)
-    const iqr = q3 - q1
-    const low = q1 - 1.5 * iqr
-    const high = q3 + 1.5 * iqr
-
-    for (const r of chunk) {
-      const v = r[field]
-      if (v < low || v > high) {
-        outliers.push({
-          index: r.index,
-          name: r.name,
-          gender: r.gender,
-          salary: v,
-          quartile: qi + 1,
-          reason: v < low
-            ? `Q${qi + 1}: sotto soglia inferiore (IQR: ${Math.round(low).toLocaleString('it-IT')} – ${Math.round(high).toLocaleString('it-IT')})`
-            : `Q${qi + 1}: sopra soglia superiore (IQR: ${Math.round(low).toLocaleString('it-IT')} – ${Math.round(high).toLocaleString('it-IT')})`,
-        })
-      }
+  for (const r of norm) {
+    const v = r[field]
+    const dev = ((v - avg) / avg) * 100
+    if (Math.abs(dev) > 5) {
+      const q = quartileOf(r)
+      const sign = dev > 0 ? '+' : ''
+      outliers.push({
+        index: r.index,
+        name: r.name,
+        gender: r.gender,
+        salary: v,
+        quartile: q,
+        deviationPct: Math.round(dev * 100) / 100,
+        reason: `${sign}${dev.toFixed(1)}% dalla media (${Math.round(avg).toLocaleString('it-IT')})`,
+      })
     }
   }
 
-  return outliers.sort((a, b) => a.quartile - b.quartile || b.salary - a.salary)
+  return outliers.sort((a, b) => Math.abs(b.deviationPct) - Math.abs(a.deviationPct))
 }
 
 function normByIndexMap(normalized) {
