@@ -253,6 +253,14 @@ export function buildNormalizedData(rows, headers, mapping) {
     return Number.isFinite(n) ? n : 0
   }
 
+  function parsePerformanceScore(value) {
+    if (value == null || value === '') return null
+    const raw = typeof value === 'number' ? value : parseNumber(value)
+    if (!raw || !Number.isFinite(raw)) return null
+    if (raw > 0 && raw <= 1) return Math.round(raw * 100)
+    return Math.round(raw)
+  }
+
   function normalizeGender(raw) {
     if (raw == null || raw === '') return null
     const s = String(raw).trim().toLowerCase()
@@ -284,7 +292,7 @@ export function buildNormalizedData(rows, headers, mapping) {
         level: levelIdx != null ? row[levelIdx] : null,
         description: descIdx != null ? row[descIdx] : null,
         roleSeniority: roleSenIdx != null ? row[roleSenIdx] : null,
-        performanceScore: perfIdx != null ? parseNumber(row[perfIdx]) || null : null,
+        performanceScore: perfIdx != null ? parsePerformanceScore(row[perfIdx]) : null,
       }
     })
     .filter((r) => r.gender === 'M' || r.gender === 'F')

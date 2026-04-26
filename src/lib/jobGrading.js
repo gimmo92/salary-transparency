@@ -434,6 +434,14 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
     return Number.isFinite(n) ? n : 0
   }
 
+  function parsePerformanceScore(value) {
+    if (value == null || value === '' || value === 'N/D') return null
+    const raw = typeof value === 'number' ? value : parseNumber(value)
+    if (!raw || !Number.isFinite(raw)) return null
+    if (raw > 0 && raw <= 1) return Math.round(raw * 100)
+    return Math.round(raw)
+  }
+
   return rows.map((row, index) => {
     const base = baseIdx != null ? parseNumber(row[baseIdx]) : 0
     const variable = varIdx != null ? parseNumber(row[varIdx]) : 0
@@ -450,7 +458,7 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       gender: genderIdx != null ? normalizeGender(row[genderIdx]) : null,
       seniority: seniorityIdx != null ? parseSeniorityDisplay(row[seniorityIdx]) : null,
       roleSeniority: roleSeniorityIdx != null ? parseSeniorityDisplay(row[roleSeniorityIdx]) : null,
-      performanceScore: perfScoreIdx != null ? (parseNumber(row[perfScoreIdx]) || null) : null,
+      performanceScore: perfScoreIdx != null ? parsePerformanceScore(row[perfScoreIdx]) : null,
       baseSalary: base,
       variableComponents: variable,
       totalSalary: total,
