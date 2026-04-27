@@ -103,6 +103,24 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
   const gapMedian =
     mVals.length && fVals.length ? pctGap(median(mVals), median(fVals)) : null
 
+  // b) Divario medio componente variabile
+  const mVar = males.filter((r) => Number.isFinite(r.variableComponents)).map((r) => r.variableComponents)
+  const fVar = females.filter((r) => Number.isFinite(r.variableComponents)).map((r) => r.variableComponents)
+  const gapVarMean =
+    mVar.length && fVar.length ? pctGap(mean(mVar), mean(fVar)) : null
+
+  // d) Divario mediano componente variabile
+  const gapVarMedian =
+    mVar.length && fVar.length ? pctGap(median(mVar), median(fVar)) : null
+
+  // e) % lavoratori U/D che ricevono componenti variabili
+  const allM = norm.filter((r) => r.gender === 'M')
+  const allF = norm.filter((r) => r.gender === 'F')
+  const mWithVar = allM.filter((r) => Number.isFinite(r.variableComponents) && r.variableComponents > 0).length
+  const fWithVar = allF.filter((r) => Number.isFinite(r.variableComponents) && r.variableComponents > 0).length
+  const pctMenWithVar = allM.length > 0 ? (mWithVar / allM.length) * 100 : null
+  const pctWomenWithVar = allF.length > 0 ? (fWithVar / allF.length) * 100 : null
+
   // Quartili su popolazione con retribuzione valida nel campo scelto:
   // per ogni quartile: conteggi + media retributiva M e F (non % composizione di genere)
   const quartiles = [1, 2, 3, 4].map((quartile) => ({
@@ -159,6 +177,13 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
       } else {
         q.gapPct = null
       }
+    })
+    // f) % lavoratori U/D per quartile sulla popolazione totale di ciascun genere
+    const totalM = allM.length
+    const totalF = allF.length
+    quartiles.forEach((q) => {
+      q.pctOfTotalM = totalM > 0 ? (q.maschile / totalM) * 100 : null
+      q.pctOfTotalF = totalF > 0 ? (q.femminile / totalF) * 100 : null
     })
   }
 
@@ -262,6 +287,10 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode) {
   return {
     gapMean,
     gapMedian,
+    gapVarMean,
+    gapVarMedian,
+    pctMenWithVar,
+    pctWomenWithVar,
     pctFasceSopraSoglia,
     bandsAboveThreshold,
     bandsComparable,

@@ -2619,6 +2619,25 @@ function exportJobGradingPdf() {
               </div>
             </div>
 
+            <div class="eu-kpi-grid" style="margin-top: 0.5rem;">
+              <div class="eu-kpi-card">
+                <div class="eu-kpi-label">Gap medio comp. variabile</div>
+                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapVarMean)">{{ euDashboard.gapVarMean != null ? formatGapMforF(euDashboard.gapVarMean) : 'n/d' }}</div>
+              </div>
+              <div class="eu-kpi-card">
+                <div class="eu-kpi-label">Gap mediano comp. variabile</div>
+                <div class="eu-kpi-value" :class="euGapSeverityClass(euDashboard.gapVarMedian)">{{ euDashboard.gapVarMedian != null ? formatGapMforF(euDashboard.gapVarMedian) : 'n/d' }}</div>
+              </div>
+              <div class="eu-kpi-card eu-kpi-span">
+                <div class="eu-kpi-label">Lavoratori con componenti variabili</div>
+                <div class="eu-kpi-value-inline">
+                  <strong>Uomini:</strong> {{ euDashboard.pctMenWithVar != null ? euDashboard.pctMenWithVar.toFixed(1) + '%' : 'n/d' }}
+                  &nbsp;·&nbsp;
+                  <strong>Donne:</strong> {{ euDashboard.pctWomenWithVar != null ? euDashboard.pctWomenWithVar.toFixed(1) + '%' : 'n/d' }}
+                </div>
+              </div>
+            </div>
+
             <div class="eu-charts-row">
               <div class="eu-panel">
                 <h4 class="eu-panel-title">Quartili retributivi</h4>
@@ -2667,6 +2686,31 @@ function exportJobGradingPdf() {
                     <div class="eu-q-meta">n = {{ q.totale }} ({{ q.maschile }} M · {{ q.femminile }} F)</div>
                   </div>
                 </div>
+              </div>
+
+              <div class="eu-panel" style="margin-top: 1rem;">
+                <h4 class="eu-panel-title">Composizione quartili per genere</h4>
+                <p class="eu-panel-desc">Percentuale di uomini e donne in ciascun quartile, calcolata sulla popolazione totale di ciascun genere.</p>
+                <table class="eu-outlier-table">
+                  <thead>
+                    <tr>
+                      <th>Quartile</th>
+                      <th class="eu-outlier-num">Uomini nel Q</th>
+                      <th class="eu-outlier-num">% su tot. U</th>
+                      <th class="eu-outlier-num">Donne nel Q</th>
+                      <th class="eu-outlier-num">% su tot. D</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="q in euDashboard.quartiles" :key="'qc-' + q.quartile">
+                      <td>Q{{ q.quartile }}</td>
+                      <td class="eu-outlier-num">{{ q.maschile }}</td>
+                      <td class="eu-outlier-num">{{ q.pctOfTotalM != null ? q.pctOfTotalM.toFixed(1) + '%' : 'n/d' }}</td>
+                      <td class="eu-outlier-num">{{ q.femminile }}</td>
+                      <td class="eu-outlier-num">{{ q.pctOfTotalF != null ? q.pctOfTotalF.toFixed(1) + '%' : 'n/d' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
 
               <div class="eu-panel">
