@@ -2113,6 +2113,139 @@ function exportJobGradingPdf() {
     doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}`, pageWidth / 2, y, { align: 'center' })
     y += 10
 
+    // ======= SEZIONE INDICATORI DIRETTIVA UE (in cima al PDF) =======
+    const ind = indicatorsResult.value || {}
+    const dash0 = euDashboard.value || {}
+
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Indicatori di trasparenza retributiva (Direttiva UE 2023/970)', 14, y)
+    y += 8
+
+    // --- a) Divario retributivo medio di genere ---
+    const aData = ind.a_divarioRetributivoGenere || {}
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('a) Divario retributivo medio di genere', 14, y)
+    y += 4
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.text('Gap: ' + formatPct(aData.percentuale) + '  |  Media M: ' + formatNum(aData.mediaMaschile) + ' \u20ac  |  Media F: ' + formatNum(aData.mediaFemminile) + ' \u20ac  |  N M: ' + (aData.nMaschi ?? 0) + '  N F: ' + (aData.nFemmine ?? 0), 14, y)
+    y += 6
+
+    // --- b) Divario retributivo medio comp. variabile ---
+    const bData = ind.b_divarioComponentiVariabili || {}
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('b) Divario retributivo medio di genere - componente variabile', 14, y)
+    y += 4
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.text('Gap: ' + formatPct(bData.percentuale) + '  |  Media M: ' + formatNum(bData.mediaMaschile) + ' \u20ac  |  Media F: ' + formatNum(bData.mediaFemminile) + ' \u20ac', 14, y)
+    y += 6
+
+    // --- c) Divario retributivo mediano di genere ---
+    const cData = ind.c_divarioMedianoGenere || {}
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('c) Divario retributivo mediano di genere', 14, y)
+    y += 4
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.text('Gap: ' + formatPct(cData.percentuale) + '  |  Mediana M: ' + formatNum(cData.medianaMaschile) + ' \u20ac  |  Mediana F: ' + formatNum(cData.medianaFemminile) + ' \u20ac', 14, y)
+    y += 6
+
+    // --- d) Divario retributivo mediano comp. variabile ---
+    const dData = ind.d_divarioMedianoComponentiVariabili || {}
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('d) Divario retributivo mediano di genere - componente variabile', 14, y)
+    y += 4
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.text('Gap: ' + formatPct(dData.percentuale) + '  |  Mediana M: ' + formatNum(dData.medianaMaschile) + ' \u20ac  |  Mediana F: ' + formatNum(dData.medianaFemminile) + ' \u20ac', 14, y)
+    y += 6
+
+    // --- e) % lavoratori U/D che ricevono componenti variabili ---
+    const eData = ind.e_percentualeConComponentiVariabili || {}
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('e) Percentuale di lavoratori che ricevono componenti variabili', 14, y)
+    y += 4
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.text('Uomini: ' + formatPct(eData.maschile) + '  |  Donne: ' + formatPct(eData.femminile), 14, y)
+    y += 6
+
+    // --- f) % lavoratori U/D per quartile retributivo ---
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('f) Distribuzione di genere per quartile retributivo', 14, y)
+    y += 5
+    {
+      const qData = (dash0.quartiles || [])
+      const totalM = dash0.nMaschi || 1
+      const totalF = dash0.nFemmine || 1
+      autoTable(doc, {
+        startY: y,
+        theme: 'grid',
+        headStyles: { fillColor: [10, 108, 210], fontSize: 7, halign: 'center' },
+        bodyStyles: { fontSize: 7 },
+        margin: { left: 14, right: 14 },
+        head: [['Quartile', 'n Uomini', '% su tot. U', 'n Donne', '% su tot. D']],
+        body: qData.map((q) => [
+          'Q' + q.quartile,
+          q.maschile,
+          totalM > 0 ? ((q.maschile / totalM) * 100).toFixed(1) + '%' : 'n/d',
+          q.femminile,
+          totalF > 0 ? ((q.femminile / totalF) * 100).toFixed(1) + '%' : 'n/d',
+        ]),
+        columnStyles: {
+          0: { cellWidth: 18, halign: 'center' },
+          1: { cellWidth: 20, halign: 'center' },
+          2: { cellWidth: 22, halign: 'right' },
+          3: { cellWidth: 20, halign: 'center' },
+          4: { cellWidth: 22, halign: 'right' },
+        },
+      })
+      y = doc.lastAutoTable.finalY + 6
+    }
+
+    // --- g) Divario per categoria di lavoratori ---
+    const gData = ind.g_divarioPerCategoria || {}
+    const catRows = (gData.perCategoria || [])
+    if (catRows.length) {
+      if (y > 155) { doc.addPage(); y = 16 }
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      doc.text('g) Divario retributivo di genere per categoria - retribuzione fissa e componente variabile', 14, y)
+      y += 5
+      autoTable(doc, {
+        startY: y,
+        theme: 'grid',
+        headStyles: { fillColor: [10, 108, 210], fontSize: 7, halign: 'center' },
+        bodyStyles: { fontSize: 7 },
+        margin: { left: 14, right: 14 },
+        head: [['Categoria', 'N', 'Gap retrib. fissa', 'Gap comp. variabile']],
+        body: catRows.map((r) => [
+          r.categoria || 'N/D',
+          r.n ?? 0,
+          formatPct(r.divarioBase),
+          formatPct(r.divarioVariabile),
+        ]),
+        columnStyles: {
+          0: { cellWidth: 50 },
+          1: { cellWidth: 14, halign: 'center' },
+          2: { cellWidth: 30, halign: 'right' },
+          3: { cellWidth: 30, halign: 'right' },
+        },
+      })
+      y = doc.lastAutoTable.finalY + 6
+    }
+
+    y += 4
+    if (y > 155) { doc.addPage(); y = 16 }
+
     doc.setFontSize(11)
     doc.setFont('helvetica', 'bold')
     doc.text('Riepilogo fasce', 14, y)
