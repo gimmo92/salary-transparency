@@ -1,5 +1,5 @@
 /**
- * Sistema valutativo trasparenza retributiva (griglia 5 aree × fattori, scala 0–100).
+ * Sistema valutativo trasparenza retributiva (griglia 4 aree × fattori, scala 0–100).
  * Riferimento: modello "Trasparenza Retributiva" (Fogli Google).
  */
 
@@ -8,14 +8,14 @@ export const TRANSPARENCY_MACRO_AREAS = [
     id: 'competenze',
     label: 'Competenze',
     shortLabel: 'Comp.',
-    weightPct: 25,
+    weightPct: 31,
     factors: [
       {
         id: 'titoliConoscenze',
         label: 'Titoli e conoscenze',
         shortLabel: 'TC',
         description: 'Istruzione e conoscenze tecniche richieste',
-        weightPct: 8,
+        weightPct: 10,
         levels: [
           'Richiede istruzione di base o addestramento pratico elementare',
           'Richiede diploma di scuola superiore o qualifica professionale specifica',
@@ -28,7 +28,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
         id: 'esperienza',
         label: 'Esperienza',
         description: 'Esperienza necessaria per piena autonomia',
-        weightPct: 9,
+        weightPct: 11,
         levels: [
           'Non è richiesta esperienza pregressa; apprendimento rapido nel ruolo',
           'Richiesta esperienza operativa breve (1–2 anni) in contesti analoghi',
@@ -42,7 +42,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
         label: 'Competenze trasversali',
         shortLabel: 'CTr',
         description: 'Soft skill rilevanti',
-        weightPct: 8,
+        weightPct: 10,
         levels: [
           'Richiede abilità relazionali di base e rispetto delle norme di convivenza',
           'Richiede capacità di ascolto, collaborazione nel team e precisione',
@@ -57,13 +57,13 @@ export const TRANSPARENCY_MACRO_AREAS = [
     id: 'responsabilita',
     label: 'Responsabilità',
     shortLabel: 'Resp.',
-    weightPct: 30,
+    weightPct: 38,
     factors: [
       {
         id: 'autonomiaDelega',
         label: 'Autonomia e delega',
         description: 'Grado di discrezionalità decisionale',
-        weightPct: 12,
+        weightPct: 15,
         levels: [
           'Esegue compiti seguendo istruzioni precise; controllo costante',
           'Opera con autonomia su task routinari; segnala eccezioni al supervisore',
@@ -77,7 +77,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
         label: 'Impatto sugli obiettivi',
         shortLabel: 'Imp',
         description: 'Influenza su risultati economici',
-        weightPct: 10,
+        weightPct: 13,
         levels: [
           'L’impatto è limitato alla correttezza formale della propria attività',
           'Contribuisce al raggiungimento di obiettivi tattici di breve periodo del team',
@@ -91,7 +91,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
         label: 'Gestione risorse umane',
         shortLabel: 'GRU',
         description: 'Numero/complessità risorse gestite',
-        weightPct: 8,
+        weightPct: 10,
         levels: [
           'Non prevede responsabilità di coordinamento verso altri soggetti',
           'Coordina occasionalmente stagisti o supporta l’onboarding di colleghi',
@@ -106,13 +106,13 @@ export const TRANSPARENCY_MACRO_AREAS = [
     id: 'impegno',
     label: 'Impegno',
     shortLabel: 'Impeg.',
-    weightPct: 15,
+    weightPct: 19,
     factors: [
       {
         id: 'sforzoMentale',
         label: 'Sforzo mentale',
         description: 'Complessità analitica e problem solving',
-        weightPct: 8,
+        weightPct: 10,
         levels: [
           'Richiede attenzione visiva o uditiva per compiti semplici e ripetitivi',
           'Richiede concentrazione per la risoluzione di problemi tecnici comuni',
@@ -126,7 +126,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
         label: 'Tensione emotiva',
         shortLabel: 'Ten',
         description: 'Stress relazionale ed emotivo',
-        weightPct: 7,
+        weightPct: 9,
         levels: [
           'Esposizione minima a fattori di stress; relazioni protette e stabili',
           'Gestione di scadenze regolari e interazioni professionali ordinarie',
@@ -138,52 +138,16 @@ export const TRANSPARENCY_MACRO_AREAS = [
     ],
   },
   {
-    id: 'impattoBusiness',
-    label: 'Impatto sul Business',
-    shortLabel: 'Bus.',
-    weightPct: 20,
-    factors: [
-      {
-        id: 'contributoRicavi',
-        label: 'Contributo ai ricavi',
-        shortLabel: 'CRic',
-        description: 'Impatto diretto del ruolo sulla generazione di valore/ricavi aziendali',
-        weightPct: 10,
-        levels: [
-          'Nessun impatto diretto sulla generazione di ricavi o sul valore economico',
-          'Contributo indiretto ai ricavi tramite supporto operativo ad attività generatrici di valore',
-          'Contributo misurabile ai ricavi attraverso la gestione di processi chiave del business',
-          'Responsabile diretto di linee di ricavo, clienti strategici o aree di profitto significative',
-          'Determina la strategia di generazione del valore e la crescita complessiva del business',
-        ],
-      },
-      {
-        id: 'criticitaSettoriale',
-        label: 'Criticità settoriale',
-        shortLabel: 'CSett',
-        description: 'Scarsità e rilevanza strategica del ruolo nel settore di riferimento',
-        weightPct: 10,
-        levels: [
-          'Ruolo facilmente reperibile sul mercato; competenze comuni nel settore',
-          'Ruolo con disponibilità adeguata; competenze diffuse ma con qualche specializzazione',
-          'Ruolo con moderata scarsità nel settore; richiede competenze specifiche non comuni',
-          'Ruolo scarso sul mercato del lavoro settoriale; competenze altamente specializzate e ricercate',
-          'Ruolo critico e rarissimo nel settore; figura chiave il cui mancato presidio genera rischio strategico',
-        ],
-      },
-    ],
-  },
-  {
     id: 'condizioni',
     label: 'Condizioni',
     shortLabel: 'Cond.',
-    weightPct: 10,
+    weightPct: 12,
     factors: [
       {
         id: 'ambienteFisico',
         label: 'Ambiente fisico',
         description: 'Rischi e condizioni ambientali',
-        weightPct: 5,
+        weightPct: 6,
         levels: [
           'Ufficio o ambiente confortevole con condizioni climatiche ottimali',
           'Ambiente con rumore moderato, illuminazione variabile o polvere',
@@ -197,7 +161,7 @@ export const TRANSPARENCY_MACRO_AREAS = [
         label: 'Disagio organizzativo',
         shortLabel: 'Dis',
         description: 'Turni, trasferte, isolamento',
-        weightPct: 5,
+        weightPct: 6,
         levels: [
           'Orario di lavoro regolare; assenza di trasferte o reperibilità',
           'Flessibilità d’orario richiesta raramente; trasferte occasionali',

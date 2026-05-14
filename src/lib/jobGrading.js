@@ -67,17 +67,6 @@ const KW_SFORZO_MENTALE = [
 const KW_TENSIONE = [
   'stress', 'urgenz', 'reclami', 'crisi', 'conflitt', 'pressione', 'deadline',
 ]
-const KW_CONTRIBUTO_RICAVI = [
-  'vendita', 'vendite', 'fatturato', 'ricavi', 'revenue', 'commerciale', 'cliente',
-  'account', 'margine', 'profitto', 'profit', 'pricing', 'business development',
-  'acquisizion', 'portfolio', 'market',
-]
-const KW_CRITICITA_SETTORIALE = [
-  'specialist', 'raro', 'nicchia', 'certificat', 'abilitaz', 'brevett',
-  'compliance', 'regolator', 'normativ', 'sicurezza', 'cyber', 'pharma',
-  'biotech', 'nucleare', 'aerospaz', 'medical', 'fintech', 'blockchain',
-  'AI', 'machine learning', 'data scien',
-]
 const KW_AMBIENTE = [
   'impianto', 'produz', 'rumore', 'cantiere', 'magazzino', 'sicurezza',
   'rischio chimico', 'laboratorio', 'reparto',
@@ -202,8 +191,6 @@ export function computeTransparencyScoresForPerson(person, { companyContext = ''
     gestioneRisorseUmane: scoreFromText(text, KW_GESTIONE_RH, 2 + lb),
     sforzoMentale: scoreFromText(text, KW_SFORZO_MENTALE, 2 + Math.min(2, Math.floor(descLen / 200))),
     tensioneEmotiva: scoreFromText(text, KW_TENSIONE, 2),
-    contributoRicavi: scoreFromText(text, KW_CONTRIBUTO_RICAVI, 2 + lb),
-    criticitaSettoriale: scoreFromText(text, KW_CRITICITA_SETTORIALE, 2 + Math.min(1, lb)),
     ambienteFisico: scoreFromText(text, KW_AMBIENTE, 2 + (keywordHits(text, KW_AMBIENTE) ? 1 : 0)),
     disagioOrganizzativo: scoreFromText(text, KW_DISAGIO_ORG, 2 + (keywordHits(text, KW_DISAGIO_ORG) ? 1 : 0)),
   }
