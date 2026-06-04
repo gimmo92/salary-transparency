@@ -176,53 +176,7 @@ export async function parseExcelFromFile(file) {
   return parseExcelArrayBuffer(arrayBuffer, contentType)
 }
 
-export function detectColumnRoles(headers, rows) {
-  const result = {}
-  const lower = headers.map((h) => String(h || '').toLowerCase())
-
-  const find = (...candidates) =>
-    lower.findIndex((h) => candidates.some((c) => h.includes(c))) ?? -1
-
-  const genderIdx = find('genere', 'gender', 'sesso', 'sex', 'm/f', 'f/m')
-  if (genderIdx >= 0) result[COLUMN_ROLES.gender] = genderIdx
-
-  const nameIdx = find('nome', 'cognome', 'employee')
-  if (nameIdx >= 0) result[COLUMN_ROLES.employeeName] = nameIdx
-
-  const baseIdx = find('base', 'ral', 'retribuzione base')
-  if (baseIdx >= 0) result[COLUMN_ROLES.baseSalary] = baseIdx
-
-  const varIdx = find('variabil', 'bonus', 'premio')
-  if (varIdx >= 0) result[COLUMN_ROLES.variableComponents] = varIdx
-
-  const totIdx = find('totale', 'total')
-  if (totIdx >= 0) result[COLUMN_ROLES.totalSalary] = totIdx
-
-  const catIdx = find('categoria', 'inquadramento')
-  if (catIdx >= 0) result[COLUMN_ROLES.category] = catIdx
-
-  const roleIdx = find('ruolo', 'job title', 'posizione')
-  if (roleIdx >= 0) result[COLUMN_ROLES.role] = roleIdx
-
-  const levelIdx = find('livello', 'grade', 'band')
-  if (levelIdx >= 0) result[COLUMN_ROLES.level] = levelIdx
-
-  const descIdx = find('descrizione', 'description', 'mansione')
-  if (descIdx >= 0) result[COLUMN_ROLES.description] = descIdx
-
-  const senIdx = find('anzian', 'anzianit', 'seniority', 'anz. servizio', 'data assunzione', 'data ingresso', 'anni servizio')
-  if (senIdx >= 0) result[COLUMN_ROLES.seniority] = senIdx
-
-  const roleSenIdx = lower.findIndex((h) =>
-    (h.includes('anzian') || h.includes('seniority')) && (h.includes('ruolo') || h.includes('role') || h.includes('posizione')),
-  )
-  if (roleSenIdx >= 0 && roleSenIdx !== senIdx) result[COLUMN_ROLES.roleSeniority] = roleSenIdx
-
-  const perfIdx = find('performance', 'punteggio', 'valutazione', 'rating', 'score')
-  if (perfIdx >= 0) result[COLUMN_ROLES.performanceScore] = perfIdx
-
-  return result
-}
+export { detectColumnRoles } from './column-mapping.js'
 
 export function buildNormalizedData(rows, headers, mapping) {
   if (!rows?.length || !headers?.length || !mapping) return []

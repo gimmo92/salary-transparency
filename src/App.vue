@@ -8,6 +8,7 @@ import {
   COLUMN_ROLES,
   getRoleLabel,
 } from './lib/excel.js'
+import { mergeColumnMappings } from './lib/column-mapping.js'
 import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './lib/indicators.js'
 import {
   suggestColumnMappingWithGemini,
@@ -445,9 +446,9 @@ async function processLoadedWorkbook(rows, headers) {
     if (geminiEnabled.value) {
       geminiLoading.value = true
       try {
-        const geminiMapping = await suggestColumnMappingWithGemini(headers, rows)
-        if (geminiMapping && Object.keys(geminiMapping).length > 0)
-          suggested = { ...heuristic, ...geminiMapping }
+        const aiMapping = await suggestColumnMappingWithGemini(headers, rows)
+        if (aiMapping && Object.keys(aiMapping).length > 0)
+          suggested = mergeColumnMappings(heuristic, aiMapping, headers)
       } catch (geminiErr) {
         uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Usa il mapping manuale.'
       } finally { geminiLoading.value = false }
