@@ -1,54 +1,13 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
-
-function extractJson(text) {
-  const cleaned = String(text || '').replace(/```json\s*/gi, '').replace(/```/g, '').replace(/^\uFEFF/, '').trim()
-  try {
-    return JSON.parse(cleaned)
-  } catch {}
-
-  const starts = []
-  for (let i = 0; i < cleaned.length; i++) {
-    if (cleaned[i] === '{' || cleaned[i] === '[') starts.push(i)
-  }
-
-  for (const start of starts) {
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let i = start; i < cleaned.length; i++) {
-      const ch = cleaned[i]
-      if (inString) {
-        if (escaped) escaped = false
-        else if (ch === '\\') escaped = true
-        else if (ch === '"') inString = false
-        continue
-      }
-      if (ch === '"') {
-        inString = true
-        continue
-      }
-      if (ch === '{' || ch === '[') depth++
-      if (ch === '}' || ch === ']') depth--
-      if (depth === 0) {
-        const candidate = cleaned.slice(start, i + 1)
-        try {
-          return JSON.parse(candidate)
-        } catch {}
-      }
-    }
-  }
-
-  throw new Error(`Could not parse JSON from Gemini response: ${cleaned.slice(0, 220)}`)
-}
+import { completeText, extractJson, getAnthropicApiKey } from '../lib/claude.js'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const apiKey = process.env.GOOGLE_AI_API_KEY
+  const apiKey = getAnthropicApiKey()
   if (!apiKey) {
-    return res.status(500).json({ error: 'GOOGLE_AI_API_KEY not configured on server.' })
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured on server.' })
   }
 
   try {
@@ -83,28 +42,14 @@ Be consistent: similar roles should have similar scores. Senior/management roles
 
 JSON:`
 
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
-      }),
-    })
-
-    if (!geminiRes.ok) {
-      const errBody = await geminiRes.text()
-      return res.status(502).json({ error: `Gemini API error ${geminiRes.status}: ${errBody.slice(0, 300)}` })
-    }
-
-    const data = await geminiRes.json()
-    const parts = data.candidates?.[0]?.content?.parts || []
-    const text = parts.map((p) => p?.text || '').join('\n').trim()
+    const text = await completeText(apiKey, prompt, { maxTokens: 8192 })
     const scores = extractJson(text)
 
     return res.status(200).json(scores)
   } catch (err) {
-    console.error('Gemini job-scoring error:', err)
-    return res.status(500).json({ error: err.message || 'Gemini job scoring failed' })
+    console.error('Claude job-scoring error:', err)
+    const msg = err.message || 'Job scoring failed'
+    if (msg.startsWith('Claude API error')) return res.status(502).json({ error: msg })
+    return res.status(500).json({ error: msg })
   }
 }

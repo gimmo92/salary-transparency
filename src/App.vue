@@ -56,7 +56,7 @@ const excelUrl = ref('')
 const excelFile = ref(null)
 const excelFileInputRef = ref(null)
 const uploadError = ref('')
-/** Avviso informativo (non errore) su mapping euristico / Gemini */
+/** Avviso informativo (non errore) su mapping euristico / AI (Claude) */
 const geminiInfoNotice = ref('')
 const uploadLoading = ref(false)
 const geminiLoading = ref(false)
@@ -454,10 +454,10 @@ async function processLoadedWorkbook(rows, headers) {
     } else {
       if (geminiApiUnreachable.value) {
         geminiInfoNotice.value =
-          'Gemini non disponibile: in ambiente di sviluppo le route /api/gemini non sono servite da Vite. Usa il mapping euristico oppure avvia il progetto con `vercel dev` (con variabile GOOGLE_AI_API_KEY) oppure configura la chiave sul deploy. Vedi anche .env.example nella cartella del progetto.'
+          'Claude non disponibile: in ambiente di sviluppo le route /api/gemini non sono servite da Vite. Usa il mapping euristico oppure avvia il progetto con `vercel dev` (con variabile ANTHROPIC_API_KEY) oppure configura la chiave sul deploy.'
       } else {
         geminiInfoNotice.value =
-          'Gemini non attivo: imposta la variabile GOOGLE_AI_API_KEY (Google AI Studio) nel pannello Environment Variables del deploy (es. Vercel → Settings → Environment Variables). È attivo il mapping euristico delle colonne.'
+          'Claude non attivo: imposta la variabile ANTHROPIC_API_KEY (console.anthropic.com) nel pannello Environment Variables del deploy (es. Vercel → Settings → Environment Variables). È attivo il mapping euristico delle colonne.'
       }
     }
     columnMapping.value = suggested
@@ -478,42 +478,43 @@ async function confirmMapping() {
         geminiLoading.value = true
         try {
           const aiIndicators = await computeIndicatorsWithGemini(normalizedGender)
+          // I numeri degli indicatori devono restare quelli calcolati in locale: Claude vede solo un campione
+          // e può restituire valori errati (es. N M = 0). Eventuali campi testuali dall'AI restano sotto le chiavi locali.
           indicatorsResult.value = {
             ...localIndicators,
-            ...aiIndicators,
             a_divarioRetributivoGenere: {
-              ...localIndicators.a_divarioRetributivoGenere,
               ...(aiIndicators?.a_divarioRetributivoGenere || {}),
+              ...localIndicators.a_divarioRetributivoGenere,
             },
             b_divarioComponentiVariabili: {
-              ...localIndicators.b_divarioComponentiVariabili,
               ...(aiIndicators?.b_divarioComponentiVariabili || {}),
+              ...localIndicators.b_divarioComponentiVariabili,
             },
             c_divarioMedianoGenere: {
-              ...localIndicators.c_divarioMedianoGenere,
               ...(aiIndicators?.c_divarioMedianoGenere || {}),
+              ...localIndicators.c_divarioMedianoGenere,
             },
             d_divarioMedianoComponentiVariabili: {
-              ...localIndicators.d_divarioMedianoComponentiVariabili,
               ...(aiIndicators?.d_divarioMedianoComponentiVariabili || {}),
+              ...localIndicators.d_divarioMedianoComponentiVariabili,
             },
             e_percentualeConComponentiVariabili: {
-              ...localIndicators.e_percentualeConComponentiVariabili,
               ...(aiIndicators?.e_percentualeConComponentiVariabili || {}),
+              ...localIndicators.e_percentualeConComponentiVariabili,
             },
             f_percentualePerQuartile: {
-              ...localIndicators.f_percentualePerQuartile,
               ...(aiIndicators?.f_percentualePerQuartile || {}),
-              quartili: aiIndicators?.f_percentualePerQuartile?.quartili || localIndicators.f_percentualePerQuartile.quartili,
+              ...localIndicators.f_percentualePerQuartile,
+              quartili: localIndicators.f_percentualePerQuartile.quartili,
             },
             g_divarioPerCategoria: {
-              ...localIndicators.g_divarioPerCategoria,
               ...(aiIndicators?.g_divarioPerCategoria || {}),
-              perCategoria: aiIndicators?.g_divarioPerCategoria?.perCategoria || localIndicators.g_divarioPerCategoria.perCategoria,
+              ...localIndicators.g_divarioPerCategoria,
+              perCategoria: localIndicators.g_divarioPerCategoria.perCategoria,
             },
             h_divarioRetribuzioneBase: {
-              ...localIndicators.h_divarioRetribuzioneBase,
               ...(aiIndicators?.h_divarioRetribuzioneBase || {}),
+              ...localIndicators.h_divarioRetribuzioneBase,
             },
           }
           indicatorsSource.value = 'ai'
@@ -1984,7 +1985,7 @@ onMounted(async () => {
       geminiEnabled.value = false
     } else {
       const data = await res.json()
-      geminiEnabled.value = !!data.geminiEnabled
+      geminiEnabled.value = !!(data.aiEnabled ?? data.geminiEnabled)
     }
   } catch {
     geminiApiUnreachable.value = true
@@ -2114,13 +2115,31 @@ function exportJobGradingPdf() {
     y += 10
 
     // ======= SEZIONE INDICATORI DIRETTIVA UE (in cima al PDF) =======
-    const ind = indicatorsResult.value || {}
+    // Stessi dati della dashboard UE: popolazione filtrata (outlier esclusi) e base/totale come da toggle.
     const dash0 = euDashboard.value || {}
+    const pdfRows = genderNormalizedForAnalysis.value || []
+    const ind =
+      pdfRows.length > 0
+        ? computeIndicators(pdfRows, {
+            primaryField: euDashboardSalaryMode.value === 'base' ? 'baseSalary' : 'totalSalary',
+          })
+        : (indicatorsResult.value || {})
 
     doc.setFontSize(12)
     doc.setFont('helvetica', 'bold')
     doc.text('Indicatori di trasparenza retributiva (Direttiva UE 2023/970)', 14, y)
-    y += 8
+    y += 5
+    doc.setFont('helvetica', 'italic')
+    doc.setFontSize(7.5)
+    const modeLabel = euDashboardSalaryMode.value === 'base' ? 'retribuzione base' : 'retribuzione totale'
+    doc.text(
+      `Calcolo da dati correnti (${pdfRows.length} dipendenti analizzati, esclusi outlier quartili se presenti). Indicatori a, c: ${modeLabel} (allineati al punto f e alla dashboard).`,
+      14,
+      y,
+      { maxWidth: pageWidth - 28 },
+    )
+    y += 6
+    doc.setFont('helvetica', 'normal')
 
     // --- a) Divario retributivo medio di genere ---
     const aData = ind.a_divarioRetributivoGenere || {}
@@ -2214,12 +2233,12 @@ function exportJobGradingPdf() {
     // --- g) Divario per categoria di lavoratori ---
     const gData = ind.g_divarioPerCategoria || {}
     const catRows = (gData.perCategoria || [])
+    if (y > 155) { doc.addPage(); y = 16 }
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('g) Divario retributivo di genere per categoria - retribuzione fissa e componente variabile', 14, y)
+    y += 5
     if (catRows.length) {
-      if (y > 155) { doc.addPage(); y = 16 }
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'bold')
-      doc.text('g) Divario retributivo di genere per categoria - retribuzione fissa e componente variabile', 14, y)
-      y += 5
       autoTable(doc, {
         startY: y,
         theme: 'grid',
@@ -2241,6 +2260,16 @@ function exportJobGradingPdf() {
         },
       })
       y = doc.lastAutoTable.finalY + 6
+    } else {
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.text(
+        'Nessuna categoria distinta (colonna categoria vuota o un solo valore): il punto g non è applicabile.',
+        14,
+        y,
+        { maxWidth: pageWidth - 28 },
+      )
+      y += 8
     }
 
     y += 4
@@ -2629,7 +2658,7 @@ function exportJobGradingPdf() {
         </div>
         <p v-if="excelFile" class="url-hint">File selezionato: <strong>{{ excelFile.name }}</strong></p>
         <p class="api-key-warn">
-          Stato Gemini: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong>
+          Stato Claude: <strong>{{ geminiEnabled ? 'attivo' : 'non attivo' }}</strong>
           <span v-if="geminiApiUnreachable" class="muted"> (API non raggiungibile in questo ambiente)</span>
         </p>
         <p class="url-hint">Puoi incollare un link Google Sheets: verrà convertito in download .xlsx.</p>
@@ -3252,7 +3281,7 @@ function exportJobGradingPdf() {
                 <span v-if="justifyAiLoading">Genero opzioni con AI...</span>
                 <span v-else>Suggerisci opzioni AI</span>
               </button>
-              <span v-if="!geminiEnabled" class="muted justify-ai-note">Gemini non attivo in questo ambiente.</span>
+              <span v-if="!geminiEnabled" class="muted justify-ai-note">Claude non attivo in questo ambiente.</span>
             </div>
             <div v-if="justifyAiOptions.length" class="justify-ai-options">
               <div class="justify-ai-options-head">

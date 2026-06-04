@@ -12,7 +12,8 @@ export function median(values) {
 }
 
 export function pctGap(male, female) {
-  if (!Number.isFinite(male) || male === 0) return 0
+  if (!Number.isFinite(male) || !Number.isFinite(female)) return null
+  if (male === 0) return null
   return ((male - female) / male) * 100
 }
 
@@ -65,7 +66,13 @@ export function computeAdjustedGap(normalized, topPct = 5) {
   }
 }
 
-export function computeIndicators(normalized) {
+/**
+ * @param {Array} normalized
+ * @param {{ primaryField?: 'totalSalary' | 'baseSalary' }} [options] — per (a)(c) e quartili f; default totalSalary
+ */
+export function computeIndicators(normalized, options = {}) {
+  const primaryField = options.primaryField === 'baseSalary' ? 'baseSalary' : 'totalSalary'
+
   const males = normalized.filter((r) => r.gender === 'M')
   const females = normalized.filter((r) => r.gender === 'F')
 
@@ -73,23 +80,20 @@ export function computeIndicators(normalized) {
   const fBase = females.map((r) => r.baseSalary)
   const mVar = males.map((r) => r.variableComponents)
   const fVar = females.map((r) => r.variableComponents)
-  const mTot = males.map((r) => r.totalSalary)
-  const fTot = females.map((r) => r.totalSalary)
+  const mPrimary = males.map((r) => r[primaryField])
+  const fPrimary = females.map((r) => r[primaryField])
 
   const baseMale = mean(mBase)
   const baseFemale = mean(fBase)
   const varMale = mean(mVar)
   const varFemale = mean(fVar)
-  const totMale = mean(mTot)
-  const totFemale = mean(fTot)
-
-  const baseMedM = median(mBase)
-  const baseMedF = median(fBase)
+  const primMale = mean(mPrimary)
+  const primFemale = mean(fPrimary)
   const varMedM = median(mVar)
   const varMedF = median(fVar)
 
-  // (a) gap retributivo su totale
-  const aGap = pctGap(totMale, totFemale)
+  // (a) gap retributivo sulla retribuzione principale (totale o base)
+  const aGap = pctGap(primMale, primFemale)
 
   // (b) gap componenti variabili
   const bGap = pctGap(varMale, varFemale)
@@ -97,8 +101,8 @@ export function computeIndicators(normalized) {
   // (h) gap retribuzione base
   const hGap = pctGap(baseMale, baseFemale)
 
-  // (c) gap mediano totale
-  const cGap = pctGap(median(mTot), median(fTot))
+  // (c) gap mediano sulla retribuzione principale
+  const cGap = pctGap(median(mPrimary), median(fPrimary))
 
   // (d) gap mediano variabile
   const dGap = pctGap(varMedM, varMedF)
@@ -112,7 +116,7 @@ export function computeIndicators(normalized) {
   }))
 
   if (normalized.length) {
-    const sorted = [...normalized].sort((a, b) => a.totalSalary - b.totalSalary)
+    const sorted = [...normalized].sort((a, b) => (a[primaryField] || 0) - (b[primaryField] || 0))
     const qSize = Math.ceil(sorted.length / 4)
     sorted.forEach((r, idx) => {
       const qIndex = Math.min(3, Math.floor(idx / qSize))
@@ -161,8 +165,8 @@ export function computeIndicators(normalized) {
     a_divarioRetributivoGenere: {
       descrizione: 'Divario retributivo medio complessivo tra uomini e donne.',
       percentuale: aGap,
-      mediaMaschile: totMale,
-      mediaFemminile: totFemale,
+      mediaMaschile: primMale,
+      mediaFemminile: primFemale,
       nMaschi: males.length,
       nFemmine: females.length,
     },
@@ -175,8 +179,8 @@ export function computeIndicators(normalized) {
     c_divarioMedianoGenere: {
       descrizione: 'Divario mediano complessivo tra uomini e donne.',
       percentuale: cGap,
-      medianaMaschile: median(mTot),
-      medianaFemminile: median(fTot),
+      medianaMaschile: median(mPrimary),
+      medianaFemminile: median(fPrimary),
     },
     d_divarioMedianoComponentiVariabili: {
       descrizione: 'Divario mediano sulle componenti variabili.',

@@ -16,7 +16,7 @@ export async function checkGeminiAvailable() {
     const res = await fetch('/api/gemini/status')
     if (!res.ok) return false
     const data = await res.json()
-    return !!data.geminiEnabled
+    return !!(data.aiEnabled ?? data.geminiEnabled)
   } catch {
     return false
   }

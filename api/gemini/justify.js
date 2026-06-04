@@ -1,4 +1,4 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+import { completeText, getAnthropicApiKey } from '../lib/claude.js'
 
 function fmt(n) {
   if (n == null || !Number.isFinite(Number(n))) return 'n/d'
@@ -41,9 +41,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const apiKey = process.env.GOOGLE_AI_API_KEY
+  const apiKey = getAnthropicApiKey()
   if (!apiKey) {
-    return res.status(500).json({ error: 'GOOGLE_AI_API_KEY not configured on server.' })
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured on server.' })
   }
 
   try {
@@ -118,31 +118,8 @@ ISTRUZIONI DI SCRITTURA (OBBLIGATORIE):
 {"suggestions":["opzione 1","opzione 2","opzione 3"]}
 Nessun testo extra fuori dal JSON.`
 
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.25,
-          maxOutputTokens: 1200,
-          topP: 0.9,
-        },
-      }),
-    })
-
-    if (!geminiRes.ok) {
-      const errBody = await geminiRes.text()
-      return res.status(502).json({ error: `Gemini API error ${geminiRes.status}: ${errBody.slice(0, 300)}` })
-    }
-
-    const data = await geminiRes.json()
-    const cand = data.candidates?.[0]
-    const text = cand?.content?.parts?.[0]?.text || ''
-    const finish = cand?.finishReason
-
-    let out = String(text).trim()
-    if (finish === 'MAX_TOKENS' && out.length > 0 && !/[.!?]\s*$/.test(out)) {
+    let out = await completeText(apiKey, prompt, { maxTokens: 1200, temperature: 0.25 })
+    if (out.length > 0 && out.length > 800 && !/[.!?]\s*$/.test(out) && !out.trim().endsWith('}')) {
       const lastPeriod = Math.max(out.lastIndexOf('.'), out.lastIndexOf('!'), out.lastIndexOf('?'))
       if (lastPeriod > 40) out = out.slice(0, lastPeriod + 1).trim()
     }
@@ -153,7 +130,9 @@ Nessun testo extra fuori dal JSON.`
       suggestions,
     })
   } catch (err) {
-    console.error('Gemini justify error:', err)
-    return res.status(500).json({ error: err.message || 'Gemini justify failed' })
+    console.error('Claude justify error:', err)
+    const msg = err.message || 'Justify failed'
+    if (msg.startsWith('Claude API error')) return res.status(502).json({ error: msg })
+    return res.status(500).json({ error: msg })
   }
 }

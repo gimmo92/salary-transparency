@@ -1,4 +1,5 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+import { completeText, getAnthropicApiKey } from '../lib/claude.js'
+
 const SERPER_URL = 'https://google.serper.dev/search'
 
 /** Rimuove virgole finali non valide in JSON (errore comune da LLM). */
@@ -45,7 +46,7 @@ function extractBalancedJsonArray(text) {
 }
 
 /**
- * Parsa la risposta Gemini in array di annunci: prova più strategie (JSON mode a volte aggiunge testo).
+ * Parsa la risposta Claude in array di annunci: prova più strategie (JSON mode a volte aggiunge testo).
  */
 function extractJson(text) {
   const cleaned = String(text || '')
@@ -126,7 +127,7 @@ function extractJson(text) {
     }
   }
 
-  throw new Error('Risposta Gemini non in JSON valido')
+  throw new Error('Risposta Claude non in JSON valido')
 }
 
 /** Parsing EUR: numeri puri, stringhe IT (85.000,00) o EN (85,000.00). 0 = assente. */
@@ -342,9 +343,9 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const serperKey = process.env.SERP_API_KEY || process.env.SERPER_API_KEY
-  const geminiKey = process.env.GOOGLE_AI_API_KEY
+  const anthropicKey = getAnthropicApiKey()
   if (!serperKey) return res.status(500).json({ error: 'SERP_API_KEY non configurata sul server.' })
-  if (!geminiKey) return res.status(500).json({ error: 'GOOGLE_AI_API_KEY non configurata sul server.' })
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY non configurata sul server.' })
 
   try {
     const { role, country = 'it', language = 'it' } = req.body || {}
@@ -398,7 +399,7 @@ export default async function handler(req, res) {
     if (!filtered.length) {
       filtered = organic.filter((r) => isRelevantJobLink(r?.link))
     }
-    // Ultimo fallback: mantieni tutti i risultati, sarà Gemini a filtrare per ruolo+RAL.
+    // Ultimo fallback: mantieni tutti i risultati, sarà Claude a filtrare per ruolo+RAL.
     if (!filtered.length) {
       filtered = organic
     }
@@ -445,29 +446,19 @@ Regole:
 - Numeri interi in EUR annui.
 - Nessun testo extra oltre il JSON array.`
 
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${geminiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, responseMimeType: 'application/json', maxOutputTokens: 4096 },
-      }),
-    })
-    if (!geminiRes.ok) {
-      const txt = await geminiRes.text()
-      return res.status(502).json({ error: `Gemini API error ${geminiRes.status}: ${txt.slice(0, 240)}` })
+    let text
+    try {
+      text = await completeText(anthropicKey, prompt, { maxTokens: 4096 })
+    } catch (claudeErr) {
+      const msg = claudeErr.message || String(claudeErr)
+      if (msg.startsWith('Claude API error')) {
+        return res.status(502).json({ error: msg.slice(0, 280) })
+      }
+      throw claudeErr
     }
-    const data = await geminiRes.json()
-    const cand = data.candidates?.[0]
-    const text = (cand?.content?.parts || []).map((p) => p?.text || '').join('\n')
     if (!String(text || '').trim()) {
-      const r = cand?.finishReason || ''
-      console.error('Benchmark Gemini empty text', { finishReason: r, raw: JSON.stringify(data).slice(0, 1200) })
-      throw new Error(
-        r === 'SAFETY'
-          ? 'Gemini ha bloccato la risposta (policy).'
-          : 'Risposta Gemini vuota o incompleta.',
-      )
+      console.error('Benchmark Claude empty text')
+      throw new Error('Risposta Claude vuota o incompleta.')
     }
     let announcements = []
     try {
@@ -511,7 +502,7 @@ Regole:
           return p != null && p > 0
         })
     } catch (parseErr) {
-      console.error('Benchmark Gemini JSON parse failed, fallback regex', parseErr?.message || parseErr)
+      console.error('Benchmark Claude JSON parse failed, fallback regex', parseErr?.message || parseErr)
       announcements = announcementsFromRawByRegex(raw)
     }
 
