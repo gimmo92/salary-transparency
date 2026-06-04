@@ -1,5 +1,6 @@
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
-export const CLAUDE_MODEL = 'claude-3-5-haiku-20241022'
+/** Haiku 4.5 — veloce ed economico; override con env CLAUDE_MODEL */
+export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001'
 
 export function getAnthropicApiKey() {
   return process.env.ANTHROPIC_API_KEY
