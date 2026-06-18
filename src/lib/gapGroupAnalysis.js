@@ -2,7 +2,7 @@
  * Analisi gap M/F per gruppi (livello CCNL, fascia job grading, …).
  */
 import { mean, median, pctGap } from './indicators.js'
-import { classifyGapStatus, MIN_GENDER_SAMPLE } from './salaryMetrics.js'
+import { classifyGapStatus, MIN_GENDER_SAMPLE, EU_GAP_THRESHOLD_PCT } from './salaryMetrics.js'
 
 export function gapStatusCssClass(status) {
   if (status === 'red') return 'gap-status-red'
@@ -82,34 +82,106 @@ export function enrichPeopleWithGenderMeanDeviation(people, getSalary) {
   })
 }
 
+function buildComparisonRow(groupKey, groupLabel, rawPeople, options = {}) {
+  const getSalary = options.getSalary
+  const isExcludedFromGap = options.isExcludedFromGap || (() => false)
+  const hasGroupJustification =
+    options.hasGroupJustification ||
+    ((people) => people.some((p) => options.isPersonJustified?.(p)))
+  const hasJustification = hasGroupJustification(rawPeople)
+  const stats = analyzeGenderPayGap(rawPeople, {
+    getSalary,
+    isExcludedFromGap,
+    hasJustification,
+  })
+  const people = enrichPeopleWithGenderMeanDeviation(rawPeople, getSalary)
+  return {
+    groupKey,
+    groupLabel,
+    people,
+    hasJustification,
+    ...stats,
+  }
+}
+
+/**
+ * Confronto M/F raggruppato per chiave arbitraria (centro di costo, …).
+ */
+export function computeGroupedComparison(peopleList, getGroupKey, options = {}) {
+  const map = new Map()
+  for (const p of peopleList || []) {
+    if (p.gender !== 'M' && p.gender !== 'F') continue
+    const key = getGroupKey(p)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key).push(p)
+  }
+  return Array.from(map.entries())
+    .map(([key, rawPeople]) => buildComparisonRow(key, key, rawPeople, options))
+    .sort((a, b) => String(a.groupLabel).localeCompare(String(b.groupLabel), 'it'))
+}
+
+/**
+ * Confronto M/F per centro di costo (campo category nei dati normalizzati).
+ */
+export function computeCostCenterComparison(normalized, options = {}) {
+  return computeGroupedComparison(
+    normalized,
+    (p) => {
+      const s = String(p.category ?? '').trim()
+      return s || 'N/D'
+    },
+    options,
+  ).map((row) => ({
+    ...row,
+    costCenterKey: row.groupKey,
+    costCenterLabel: row.groupLabel,
+  }))
+}
+
+/**
+ * Top centri/gruppi per |gap| (campione sufficiente) con peso sul totale aziendale.
+ */
+export function computeGapHotspots(rows, { topN = 5, thresholdPct = EU_GAP_THRESHOLD_PCT } = {}) {
+  const allRows = rows || []
+  const companyN = allRows.reduce((s, r) => s + (r.nTotal || 0), 0)
+  const eligible = allRows.filter(
+    (r) =>
+      !r.insufficientSample &&
+      r.gapMean != null &&
+      Number.isFinite(r.gapMean) &&
+      Math.abs(r.gapMean) > thresholdPct,
+  )
+  eligible.sort((a, b) => Math.abs(b.gapMean) - Math.abs(a.gapMean))
+  return eligible.slice(0, topN).map((r, idx) => ({
+    rank: idx + 1,
+    groupKey: r.costCenterKey ?? r.groupKey ?? r.levelKey,
+    groupLabel: r.costCenterLabel ?? r.groupLabel ?? r.levelLabel,
+    gapMean: r.gapMean,
+    gapMedian: r.gapMedian,
+    nTotal: r.nTotal,
+    nM: r.nM,
+    nF: r.nF,
+    status: r.status,
+    hasJustification: r.hasJustification,
+    headcountWeightPct: companyN > 0 ? ((r.nTotal || 0) / companyN) * 100 : 0,
+  }))
+}
+
 /**
  * Confronto M/F per livello CCNL (senza fasce di punteggio).
  * @param {Array} jobResults - output groupByLevel + enrichWithDeviation
  * @param {object} options - getSalary, isExcludedFromGap, hasGroupJustification(people)
  */
 export function computeCcnlLevelComparison(jobResults, options = {}) {
-  const getSalary = options.getSalary
-  const isExcludedFromGap = options.isExcludedFromGap || (() => false)
-  const hasGroupJustification =
-    options.hasGroupJustification || ((people) => people.some((p) => options.isPersonJustified?.(p)))
-
   const rows = (jobResults || []).map((band) => {
     const rawPeople = band.people || []
-    const hasJustification = hasGroupJustification(rawPeople)
-    const stats = analyzeGenderPayGap(rawPeople, {
-      getSalary,
-      isExcludedFromGap,
-      hasJustification,
-    })
-    const people = enrichPeopleWithGenderMeanDeviation(rawPeople, getSalary)
+    const row = buildComparisonRow(band.level, band.level, rawPeople, options)
     return {
+      ...row,
       levelKey: band.level,
       levelLabel: band.level,
       sortOrder: band.sortOrder ?? band.band ?? 0,
       bandNum: band.band,
-      people,
-      hasJustification,
-      ...stats,
     }
   })
 

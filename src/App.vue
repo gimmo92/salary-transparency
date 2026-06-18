@@ -44,6 +44,8 @@ import {
 import {
   analyzeGenderPayGap,
   computeCcnlLevelComparison,
+  computeCostCenterComparison,
+  computeGapHotspots,
   countGapStatuses,
   gapStatusCssClass,
 } from './lib/gapGroupAnalysis.js'
@@ -319,16 +321,58 @@ const jobGradingGapsToVerifyCount = computed(() => {
   return n
 })
 
+function groupGapStatusClass(row) {
+  return gapStatusCssClass(row?.status)
+}
+
+function groupHasActionableGap(row) {
+  return row && !row.insufficientSample && (row.status === 'yellow' || row.status === 'red')
+}
+
+const gapAnalysisOptions = computed(() => ({
+  getSalary: personComparisonSalary,
+  isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
+  isPersonJustified,
+}))
+
 const ccnlLevelRows = computed(() =>
-  computeCcnlLevelComparison(jobResults.value, {
-    getSalary: personComparisonSalary,
-    isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
-    isPersonJustified,
-  }),
+  computeCcnlLevelComparison(jobResults.value, gapAnalysisOptions.value),
 )
 
 const ccnlLevelGapsToFixCount = computed(() => countGapStatuses(ccnlLevelRows.value).toFix)
 const ccnlLevelGapsToVerifyCount = computed(() => countGapStatuses(ccnlLevelRows.value).toVerify)
+
+const hasCostCenterData = computed(() =>
+  genderNormalizedForAnalysis.value.some((r) => String(r.category ?? '').trim()),
+)
+
+const costCenterRows = computed(() =>
+  computeCostCenterComparison(genderNormalizedForAnalysis.value, gapAnalysisOptions.value),
+)
+
+const costCenterGapHotspots = computed(() => computeGapHotspots(costCenterRows.value, { topN: 5 }))
+
+const costCenterGapsToFixCount = computed(() => countGapStatuses(costCenterRows.value).toFix)
+const costCenterGapsToVerifyCount = computed(() => countGapStatuses(costCenterRows.value).toVerify)
+
+const expandedCostCenters = ref(new Set())
+
+function toggleCostCenter(key) {
+  const k = String(key || '')
+  if (expandedCostCenters.value.has(k)) expandedCostCenters.value.delete(k)
+  else expandedCostCenters.value.add(k)
+  expandedCostCenters.value = new Set(expandedCostCenters.value)
+}
+
+function isCostCenterExpanded(key) {
+  return expandedCostCenters.value.has(String(key || ''))
+}
+
+function justifyGroupContextNoun(source) {
+  if (source === 'ccnl_level') return 'livello'
+  if (source === 'cost_center') return 'centro di costo'
+  return 'fascia'
+}
 
 const expandedCcnlLevels = ref(new Set())
 
@@ -344,14 +388,14 @@ function isCcnlLevelExpanded(levelKey) {
 }
 
 function ccnlLevelGapStatusClass(row) {
-  return gapStatusCssClass(row?.status)
+  return groupGapStatusClass(row)
 }
 
 function ccnlLevelHasActionableGap(row) {
-  return row && !row.insufficientSample && (row.status === 'yellow' || row.status === 'red')
+  return groupHasActionableGap(row)
 }
 
-function formatDeviationVsGenderLevelMean(person) {
+function formatDeviationVsGenderGroupMean(person) {
   const v = person?.deviationFromGenderMeanPct
   if (v == null || !Number.isFinite(v)) return '–'
   const sign = v > 0 ? '+' : ''
@@ -460,6 +504,7 @@ function startNuovaAnalisi() {
   euDashboardFte.value = true
   justifyingPerson.value = null
   expandedCcnlLevels.value = new Set()
+  expandedCostCenters.value = new Set()
 }
 
 function goToMappingFromResults() {
@@ -884,6 +929,102 @@ function openCcnlPersonJustify(person, levelRow) {
     nMenFascia: levelRow.nM ?? 0,
     nWomenFascia: levelRow.nF ?? 0,
     justifySource: 'ccnl_level',
+  }
+  resultsTabBeforeJustify.value = resultsTab.value
+  resultsTab.value = 'person_justify'
+  justifyText.value = personJustifications.value[key] || ''
+  nextTick(() => {
+    mainWrapRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  })
+}
+
+function openCostCenterPersonJustify(person, centerRow) {
+  const key = String(person?.index || '')
+  if (!key || !centerRow) return
+
+  const peopleInCenter = centerRow.people?.length ? centerRow.people : [person]
+  const seniorityYearsList = peopleInCenter
+    .map((p) => seniorityToYearsNumeric(p.seniority))
+    .filter((n) => n != null && Number.isFinite(n) && n >= 0)
+  const groupAvgSeniorityYears = seniorityYearsList.length ? meanLocal(seniorityYearsList) : null
+  const seniorityYearsRaw = seniorityToYearsNumeric(person?.seniority)
+  const seniorityPctVsGroup =
+    groupAvgSeniorityYears != null &&
+    groupAvgSeniorityYears > 0 &&
+    seniorityYearsRaw != null &&
+    Number.isFinite(seniorityYearsRaw)
+      ? ((seniorityYearsRaw - groupAvgSeniorityYears) / groupAvgSeniorityYears) * 100
+      : null
+
+  const perfScores = peopleInCenter.map((p) => personPerformanceScore(p)).filter((v) => v != null)
+  const groupAvgPerformance = perfScores.length ? meanLocal(perfScores) : null
+  const performanceScore = personPerformanceScore(person)
+
+  const roleSeniorityYearsRaw = seniorityToYearsNumeric(person?.roleSeniority)
+  const roleSeniorityYearsList = peopleInCenter
+    .map((p) => seniorityToYearsNumeric(p.roleSeniority))
+    .filter((n) => n != null && Number.isFinite(n) && n >= 0)
+  const groupAvgRoleSeniorityYears = roleSeniorityYearsList.length
+    ? meanLocal(roleSeniorityYearsList)
+    : null
+  const roleSeniorityPctVsGroup =
+    groupAvgRoleSeniorityYears != null &&
+    groupAvgRoleSeniorityYears > 0 &&
+    roleSeniorityYearsRaw != null &&
+    Number.isFinite(roleSeniorityYearsRaw)
+      ? ((roleSeniorityYearsRaw - groupAvgRoleSeniorityYears) / groupAvgRoleSeniorityYears) * 100
+      : null
+  const performancePctVsGroup =
+    groupAvgPerformance != null &&
+    groupAvgPerformance > 0 &&
+    performanceScore != null
+      ? ((performanceScore - groupAvgPerformance) / groupAvgPerformance) * 100
+      : null
+
+  const displayName =
+    person?.name && String(person.name).trim()
+      ? String(person.name).trim()
+      : `Dipendente #${key}`
+  const gapPct = centerRow.gapMean
+
+  justifyingPerson.value = {
+    key,
+    displayName,
+    label: `${person?.role || '–'} · ${displayName}`,
+    seniority: person?.seniority || null,
+    seniorityYearsRaw,
+    fascAvgSeniorityYears: groupAvgSeniorityYears,
+    seniorityPctVsFascia: seniorityPctVsGroup,
+    roleSeniority: person?.roleSeniority || null,
+    roleSeniorityYearsRaw,
+    fascAvgRoleSeniorityYears: groupAvgRoleSeniorityYears,
+    roleSeniorityPctVsFascia: roleSeniorityPctVsGroup,
+    performanceScore,
+    fascAvgPerformance: groupAvgPerformance,
+    performancePctVsFascia: performancePctVsGroup,
+    roleName: person?.role || '–',
+    bandNum: null,
+    levelLabel: person?.level || '–',
+    costCenterLabel: centerRow.costCenterLabel,
+    fasciaId: null,
+    fasciaRange: null,
+    baseSalary: person.baseSalary,
+    variableComponents: person.variableComponents,
+    totalSalary: person.totalSalary,
+    gender: person.gender,
+    roleScoresBlock: null,
+    trWeightedScore: null,
+    trParametricScore100: null,
+    gapFasciaPct: gapPct,
+    gapFasciaFormatted: gapPct != null ? formatGapMforF(gapPct, centerRow.hasJustification) : '–',
+    avgFasciaSalary: null,
+    personDeviationFromFasciaPct: person.deviationFromGenderMeanPct ?? null,
+    avgSalaryMen: centerRow.avgM,
+    avgSalaryWomen: centerRow.avgF,
+    nMenFascia: centerRow.nM ?? 0,
+    nWomenFascia: centerRow.nF ?? 0,
+    justifySource: 'cost_center',
   }
   resultsTabBeforeJustify.value = resultsTab.value
   resultsTab.value = 'person_justify'
@@ -2415,12 +2556,21 @@ function exportJobGradingPdf() {
           </button>
           <button
             type="button"
-            class="subtab"
+            class="subtab subtab--integrative"
             :class="{ active: resultsTab === 'job_grading' }"
             :disabled="jobResults.length === 0"
             @click="resultsTab = 'job_grading'"
           >
             Analisi per fascia (integrativa)
+          </button>
+          <button
+            type="button"
+            class="subtab subtab--integrative"
+            :class="{ active: resultsTab === 'cost_center' }"
+            :disabled="!hasCostCenterData"
+            @click="resultsTab = 'cost_center'"
+          >
+            Analisi per centro di costo
           </button>
           <button
             v-if="justifyingPerson != null"
@@ -2843,7 +2993,7 @@ function exportJobGradingPdf() {
                     <span>{{ p.name || '–' }}</span>
                     <span><span :class="personGenderClass(p.gender)">{{ p.gender }}</span></span>
                     <span>{{ p.role || '–' }}</span>
-                    <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderLevelMean(p) }}</span>
+                    <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
                     <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
                     <span class="hay-person-justify-cell">
                       <button
@@ -3081,6 +3231,193 @@ function exportJobGradingPdf() {
           </div>
         </div>
 
+        <!-- Analisi per centro di costo (gestionale, non normativa) -->
+        <div v-show="resultsTab === 'cost_center'" class="cost-center-wrap">
+          <template v-if="hasCostCenterData">
+            <div class="cost-center-head">
+              <h3 class="cost-center-title">Analisi per centro di costo</h3>
+              <p class="cost-center-sub muted">
+                <strong>Lettura organizzativa interna</strong> — non è reporting normativo.
+                Utile per individuare dove intervenire.
+              </p>
+              <div class="eu-salary-toggle">
+                <span class="eu-salary-toggle-label">Metrica retributiva:</span>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
+              </div>
+              <div class="eu-salary-toggle eu-salary-toggle--fte">
+                <span class="eu-salary-toggle-label">Confronto su:</span>
+                <button type="button" :class="['toggle-btn', { active: euDashboardFte }]" @click="euDashboardFte = true">Normalizzato FTE</button>
+                <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
+              </div>
+              <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
+              <p v-else class="mapping-warn ccnl-fte-warn">Valori non normalizzati per part-time: il gap può risultare sovrastimato.</p>
+            </div>
+
+            <div
+              class="job-grading-gap-alert"
+              :class="{
+                'job-grading-gap-alert--ok': costCenterGapsToFixCount === 0 && costCenterGapsToVerifyCount === 0,
+                'job-grading-gap-alert--verify': costCenterGapsToVerifyCount > 0 && costCenterGapsToFixCount === 0,
+              }"
+              role="status"
+            >
+              <span class="job-grading-gap-alert__icon" aria-hidden="true">
+                <svg v-if="costCenterGapsToFixCount > 0 || costCenterGapsToVerifyCount > 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M12 3l10 18H2L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </span>
+              <div class="job-grading-gap-alert__body">
+                <div class="job-grading-gap-alert__counts">
+                  <span class="job-grading-gap-alert__stat">
+                    <strong class="job-grading-gap-alert__count job-grading-gap-alert__count--red">{{ costCenterGapsToFixCount }}</strong>
+                    <span class="job-grading-gap-alert__label">Da correggere</span>
+                  </span>
+                  <span class="job-grading-gap-alert__stat">
+                    <strong class="job-grading-gap-alert__count job-grading-gap-alert__count--yellow">{{ costCenterGapsToVerifyCount }}</strong>
+                    <span class="job-grading-gap-alert__label">Da verificare</span>
+                  </span>
+                </div>
+                <span class="job-grading-gap-alert__hint">(centri di costo con |gap| M/F &gt; 5%; esclusi campioni &lt; 3 per genere)</span>
+              </div>
+            </div>
+
+            <div v-if="costCenterGapHotspots.length" class="eu-panel cost-center-hotspots">
+              <h4 class="eu-panel-title">Dove si concentra il gap</h4>
+              <p class="eu-panel-desc">
+                Centri di costo con campione sufficiente e gap oltre soglia, ordinati per |gap| decrescente.
+                Il peso indica la quota di dipendenti sul totale analizzato (proxy di rilevanza organizzativa).
+              </p>
+              <ul class="cost-center-hotspot-list">
+                <li
+                  v-for="h in costCenterGapHotspots"
+                  :key="'hot-' + h.groupKey"
+                  class="cost-center-hotspot-item"
+                  :class="groupGapStatusClass(h)"
+                >
+                  <span class="cost-center-hotspot-rank">#{{ h.rank }}</span>
+                  <span class="cost-center-hotspot-name"><strong>{{ h.groupLabel }}</strong></span>
+                  <span class="cost-center-hotspot-gap gap-alert">{{ formatGapMforF(h.gapMean, h.hasJustification) }}</span>
+                  <span class="cost-center-hotspot-weight muted">Peso: {{ h.headcountWeightPct.toFixed(1) }}% (N={{ h.nTotal }})</span>
+                </li>
+              </ul>
+            </div>
+            <p v-else class="muted cost-center-hotspots-empty">Nessun centro di costo con gap oltre soglia e campione sufficiente.</p>
+
+            <div class="job-table ccnl-level-table cost-center-table">
+              <div class="job-row header ccnl-level-row">
+                <span>Centro di costo</span>
+                <span>N tot.</span>
+                <span>N uomini</span>
+                <span>N donne</span>
+                <span>Media M</span>
+                <span>Media F</span>
+                <span>Gap medio</span>
+                <span>Gap mediano</span>
+                <span>Stato</span>
+              </div>
+              <template v-for="row in costCenterRows" :key="'cdc-' + row.costCenterKey">
+                <div
+                  class="job-row ccnl-level-row clickable"
+                  :class="{ 'ccnl-level-row--insufficient': row.insufficientSample }"
+                  @click="toggleCostCenter(row.costCenterKey)"
+                >
+                  <span class="ccnl-level-label">
+                    <strong>{{ isCostCenterExpanded(row.costCenterKey) ? '▾' : '▸' }} {{ row.costCenterLabel }}</strong>
+                    <svg
+                      v-if="groupHasActionableGap(row)"
+                      class="hay-band-alert-icon"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      width="14"
+                      height="14"
+                      title="Gap M/F oltre soglia nel centro di costo"
+                    >
+                      <path d="M12 3l10 18H2L12 3z" />
+                      <path d="M12 9v5" />
+                      <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
+                    </svg>
+                  </span>
+                  <span>{{ row.nTotal }}</span>
+                  <span>{{ row.nM }}</span>
+                  <span>{{ row.nF }}</span>
+                  <span>{{ row.avgM != null ? formatNum(row.avgM) : '–' }}</span>
+                  <span>{{ row.avgF != null ? formatNum(row.avgF) : '–' }}</span>
+                  <span>
+                    <span v-if="row.insufficientSample" class="ccnl-gap-na muted" :title="row.sampleMsg">n/d</span>
+                    <span
+                      v-else-if="row.gapMean != null"
+                      class="hay-band-gap-pill"
+                      :class="[groupGapStatusClass(row), { 'gap-alert': groupHasActionableGap(row) }]"
+                    >{{ formatGapMforF(row.gapMean, row.hasJustification) }}</span>
+                    <span v-else class="muted">–</span>
+                  </span>
+                  <span>
+                    <span v-if="row.insufficientSample" class="ccnl-gap-na muted">n/d</span>
+                    <span v-else-if="row.gapMedian != null">{{ formatGapMforF(row.gapMedian) }}</span>
+                    <span v-else class="muted">–</span>
+                  </span>
+                  <span>
+                    <span
+                      v-if="row.insufficientSample"
+                      class="mapping-badge mapping-badge--insufficient"
+                      :title="row.sampleMsg"
+                    >Campione ridotto</span>
+                    <span v-else class="ccnl-status-badge" :class="groupGapStatusClass(row)">{{
+                      row.status === 'green' ? 'OK' : row.status === 'yellow' ? 'Da verificare' : row.status === 'red' ? 'Da correggere' : '–'
+                    }}</span>
+                  </span>
+                </div>
+                <div v-if="isCostCenterExpanded(row.costCenterKey)" class="people-detail ccnl-level-detail cost-center-detail">
+                  <p v-if="row.insufficientSample" class="muted ccnl-sample-note">{{ row.sampleMsg }}</p>
+                  <div class="people-header ccnl-person-header cost-center-person-header">
+                    <span>#</span>
+                    <span>Persona</span>
+                    <span>Genere</span>
+                    <span>Ruolo</span>
+                    <span>Livello CCNL</span>
+                    <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel centro di costo">Scost. vs media genere</span>
+                    <span>{{ euMetricLabelShort }}</span>
+                    <span>Giustificativo</span>
+                  </div>
+                  <div
+                    v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
+                    :key="'cdc-p-' + row.costCenterKey + '-' + p.index"
+                    class="people-row ccnl-person-row cost-center-person-row"
+                  >
+                    <span>{{ p.index }}</span>
+                    <span>{{ p.name || '–' }}</span>
+                    <span><span :class="personGenderClass(p.gender)">{{ p.gender }}</span></span>
+                    <span>{{ p.role || '–' }}</span>
+                    <span>{{ p.level || '–' }}</span>
+                    <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
+                    <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
+                    <span class="hay-person-justify-cell">
+                      <button
+                        v-if="groupHasActionableGap(row) || personJustifications[String(p.index)]"
+                        type="button"
+                        class="btn-justify-person"
+                        :class="{ 'has-note': personJustifications[String(p.index)] }"
+                        title="Apri o modifica il giustificativo (gap M/F nel centro di costo)"
+                        @click.stop="openCostCenterPersonJustify(p, row)"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                        + Giustificativo
+                      </button>
+                      <span v-else class="muted hay-person-no-justify">–</span>
+                    </span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <p v-else class="no-data-msg">
+            Mappa la colonna <strong>Categoria / centro di costo</strong> nel file Excel per abilitare questa analisi organizzativa.
+          </p>
+        </div>
+
         <!-- Tab: inserisci giustificativo (ex popup) -->
         <div
           v-show="resultsTab === 'person_justify' && justifyingPerson"
@@ -3094,6 +3431,11 @@ function exportJobGradingPdf() {
               <template v-if="justifyingPerson.justifySource === 'ccnl_level'">
                 <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
                 · <strong>Livello CCNL</strong> {{ justifyingPerson.levelLabel }}
+              </template>
+              <template v-else-if="justifyingPerson.justifySource === 'cost_center'">
+                <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
+                · <strong>Livello CCNL</strong> {{ justifyingPerson.levelLabel }}
+                · <strong>Centro di costo</strong> {{ justifyingPerson.costCenterLabel }}
               </template>
               <template v-else>
                 <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
@@ -3112,7 +3454,7 @@ function exportJobGradingPdf() {
                   <li><strong>Genere:</strong> {{ justifyingPerson.gender === 'M' ? 'M' : justifyingPerson.gender === 'F' ? 'F' : '–' }}</li>
                 </ul>
               </div>
-              <div v-if="justifyingPerson.justifySource !== 'ccnl_level'" class="person-justify-summary-card person-justify-summary-card--hay">
+              <div v-if="justifyingPerson.justifySource !== 'ccnl_level' && justifyingPerson.justifySource !== 'cost_center'" class="person-justify-summary-card person-justify-summary-card--hay">
                 <h4 class="person-justify-summary-title">Punteggi ruolo (0–100)</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
                   <li v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id">
@@ -3131,13 +3473,13 @@ function exportJobGradingPdf() {
                   {{ formatSeniorityDisplay(justifyingPerson.seniority) }}
                 </p>
                 <p class="justify-metric-line">
-                  <strong>Scostamento vs {{ justifyingPerson.justifySource === 'ccnl_level' ? 'media del livello' : 'media della fascia' }}:</strong>
+                  <strong>Scostamento vs media del {{ justifyGroupContextNoun(justifyingPerson.justifySource) }}:</strong>
                   <span v-if="justifyingPerson.seniorityPctVsFascia != null" class="justify-metric-pct">
                     {{ formatPctSigned(justifyingPerson.seniorityPctVsFascia) }}
                   </span>
                   <span v-else class="muted">n/d</span>
                   <span v-if="justifyingPerson.fascAvgSeniorityYears != null" class="justify-metric-ref muted">
-                    (media {{ justifyingPerson.justifySource === 'ccnl_level' ? 'livello' : 'fascia' }}: {{ justifyingPerson.fascAvgSeniorityYears.toFixed(1) }} anni)
+                    (media {{ justifyGroupContextNoun(justifyingPerson.justifySource) }}: {{ justifyingPerson.fascAvgSeniorityYears.toFixed(1) }} anni)
                   </span>
                 </p>
                 <p v-if="justifyingPerson.seniorityPctVsFascia == null" class="justify-metric-note muted">
@@ -3151,13 +3493,13 @@ function exportJobGradingPdf() {
                   {{ formatSeniorityDisplay(justifyingPerson.roleSeniority) }}
                 </p>
                 <p class="justify-metric-line">
-                  <strong>Scostamento vs {{ justifyingPerson.justifySource === 'ccnl_level' ? 'media del livello' : 'media della fascia' }}:</strong>
+                  <strong>Scostamento vs media del {{ justifyGroupContextNoun(justifyingPerson.justifySource) }}:</strong>
                   <span v-if="justifyingPerson.roleSeniorityPctVsFascia != null" class="justify-metric-pct">
                     {{ formatPctSigned(justifyingPerson.roleSeniorityPctVsFascia) }}
                   </span>
                   <span v-else class="muted">n/d</span>
                   <span v-if="justifyingPerson.fascAvgRoleSeniorityYears != null" class="justify-metric-ref muted">
-                    (media {{ justifyingPerson.justifySource === 'ccnl_level' ? 'livello' : 'fascia' }}: {{ justifyingPerson.fascAvgRoleSeniorityYears.toFixed(1) }} anni)
+                    (media {{ justifyGroupContextNoun(justifyingPerson.justifySource) }}: {{ justifyingPerson.fascAvgRoleSeniorityYears.toFixed(1) }} anni)
                   </span>
                 </p>
                 <p v-if="justifyingPerson.roleSeniorityPctVsFascia == null && justifyingPerson.roleSeniority == null" class="justify-metric-note muted">
@@ -3171,13 +3513,13 @@ function exportJobGradingPdf() {
                   {{ justifyingPerson.performanceScore != null ? justifyingPerson.performanceScore + ' / 100' : 'Non presente nel file' }}
                 </p>
                 <p class="justify-metric-line">
-                  <strong>Scostamento vs {{ justifyingPerson.justifySource === 'ccnl_level' ? 'media del livello' : 'media della fascia' }}:</strong>
+                  <strong>Scostamento vs media del {{ justifyGroupContextNoun(justifyingPerson.justifySource) }}:</strong>
                   <span v-if="justifyingPerson.performancePctVsFascia != null" class="justify-metric-pct">
                     {{ formatPctSigned(justifyingPerson.performancePctVsFascia) }}
                   </span>
                   <span v-else class="muted">n/d</span>
                   <span v-if="justifyingPerson.fascAvgPerformance != null" class="justify-metric-ref muted">
-                    (media {{ justifyingPerson.justifySource === 'ccnl_level' ? 'livello' : 'fascia' }}: {{ justifyingPerson.fascAvgPerformance.toFixed(1) }})
+                    (media {{ justifyGroupContextNoun(justifyingPerson.justifySource) }}: {{ justifyingPerson.fascAvgPerformance.toFixed(1) }})
                   </span>
                 </p>
               </div>
@@ -5628,6 +5970,69 @@ function exportJobGradingPdf() {
 }
 .people-row.ccnl-person-row:last-child {
   border-bottom: none;
+}
+
+.cost-center-wrap {
+  margin-top: 0.5rem;
+}
+.cost-center-head {
+  margin-bottom: 1rem;
+}
+.cost-center-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.cost-center-sub {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.cost-center-hotspots {
+  margin-bottom: 1rem;
+}
+.cost-center-hotspots-empty {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+}
+.cost-center-hotspot-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cost-center-hotspot-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  font-size: 0.875rem;
+}
+.cost-center-hotspot-rank {
+  font-weight: 700;
+  color: var(--text-secondary);
+  min-width: 1.5rem;
+}
+.cost-center-hotspot-name {
+  flex: 1 1 140px;
+}
+.cost-center-hotspot-gap {
+  font-weight: 600;
+}
+.cost-center-hotspot-weight {
+  font-size: 0.8rem;
+}
+.people-header.cost-center-person-header,
+.people-row.cost-center-person-row {
+  grid-template-columns: 2.5rem 1.1fr 3rem 1fr 0.75fr 1fr 1fr 7rem;
+}
+.subtab--integrative {
+  font-style: normal;
 }
 
 .job-row.clickable {

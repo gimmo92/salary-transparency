@@ -125,7 +125,8 @@ export const MAPPING_UI_SECTIONS = [
       { role: COLUMN_ROLES.description, label: 'Descrizione ruolo', hint: 'Integra il titolo di ruolo' },
       {
         role: COLUMN_ROLES.category,
-        label: 'Categoria / qualifica legale (operaio/impiegato/quadro)',
+        label: 'Centro di costo (o categoria / qualifica legale)',
+        hint: 'Abilita l’analisi organizzativa per centro di costo',
       },
       { role: COLUMN_ROLES.ccnlMinimum, label: 'Minimo CCNL' },
     ],
