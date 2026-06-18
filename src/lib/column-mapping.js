@@ -1,10 +1,4 @@
 /** Valori allineati a COLUMN_ROLES in excel.js (no import per evitare cicli). */
-import {
-  detectPayComponentMapping,
-  suggestPayComponentCategory,
-  PAY_COMPONENT_CATEGORIES,
-} from './compensation.js'
-
 const R = {
   gender: 'gender',
   employeeName: 'employeeName',
@@ -18,14 +12,21 @@ const R = {
   seniority: 'seniority',
   roleSeniority: 'roleSeniority',
   performanceScore: 'performanceScore',
-  percPartTime: 'percPartTime',
+  partTimePct: 'partTimePct',
   hireDate: 'hireDate',
+  structuralComponents: 'structuralComponents',
+  individualComponents: 'individualComponents',
   ccnlMinimum: 'ccnlMinimum',
-  legalQualification: 'legalQualification',
 }
 
 /** Ruoli per cui l'euristica ha priorità sull'AI (evita 14ma → base, INPS → totale). */
-const SALARY_PRIORITY_ROLES = new Set([R.baseSalary, R.variableComponents, R.totalSalary])
+const SALARY_PRIORITY_ROLES = new Set([
+  R.baseSalary,
+  R.variableComponents,
+  R.structuralComponents,
+  R.individualComponents,
+  R.totalSalary,
+])
 
 const DISQUALIFY = {
   [R.baseSalary]: [
@@ -108,7 +109,7 @@ const SCORE_PATTERNS = {
     { re: /\bdescrizione\b/i, w: 5 },
   ],
   [R.seniority]: [
-    { re: /\b(anzianit[aà]|seniority|anni\s*servizio|data\s*assunzione|data\s*ingresso)\b/i, w: 8 },
+    { re: /\b(anzianit[aà]|seniority|anni\s*servizio)\b/i, w: 8 },
   ],
   [R.roleSeniority]: [
     { re: /\b(anzianit[aà].*ruolo|ruolo.*anzianit|seniority.*role)\b/i, w: 10 },
@@ -116,21 +117,23 @@ const SCORE_PATTERNS = {
   [R.performanceScore]: [
     { re: /\b(performance|valutazione|rating|punteggio)\b/i, w: 7 },
   ],
-  [R.percPartTime]: [
-    { re: /\b(%\s*)?part\s*time|parttime|percentuale\s*orario|perc\.?\s*pt\b/i, w: 10 },
-    { re: /\b(ore\s*)?contratt/i, w: 3 },
+  [R.partTimePct]: [
+    { re: /\b(%\s*)?part[\s-]*time|perc[\s.]*pt\b/i, w: 9 },
+    { re: /\bpercentuale\s*orario\b/i, w: 7 },
   ],
   [R.hireDate]: [
-    { re: /\b(data\s*)?(assunzione|ingresso|inizio\s*rapporto|hire\s*date)\b/i, w: 10 },
-    { re: /\bdata\s*ass\b/i, w: 8 },
+    { re: /\b(data\s*assunzione|data\s*ingresso|hire\s*date)\b/i, w: 9 },
+  ],
+  [R.structuralComponents]: [
+    { re: /\b(struttural|continuativ|fiss[ae]\s*annu)\b/i, w: 8 },
+    { re: /\bcomp\.?\s*strutt/i, w: 9 },
+  ],
+  [R.individualComponents]: [
+    { re: /\b(individual|discrezional|una[\s-]*tantum|spot)\b/i, w: 8 },
+    { re: /\bcomp\.?\s*indiv/i, w: 9 },
   ],
   [R.ccnlMinimum]: [
-    { re: /\b(minimo\s*)?(tabellare|ccnl|contrattual)\b/i, w: 9 },
-    { re: /\bminimo\s*liv\b/i, w: 7 },
-  ],
-  [R.legalQualification]: [
-    { re: /\b(qualifica\s*)?(legale|contrattuale|inquadramento\s*leg)\b/i, w: 9 },
-    { re: /\b(operaio|impiegato|quadro|dirigent)\b/i, w: 6 },
+    { re: /\b(minimo\s*ccnl|minimo\s*tabell|tabellare)\b/i, w: 9 },
   ],
 }
 
@@ -226,12 +229,12 @@ export function detectColumnRoles(headers, rows) {
     R.gender,
     R.employeeName,
     R.baseSalary,
+    R.structuralComponents,
+    R.individualComponents,
     R.variableComponents,
     R.totalSalary,
-    R.percPartTime,
+    R.partTimePct,
     R.hireDate,
-    R.ccnlMinimum,
-    R.legalQualification,
     R.role,
     R.level,
     R.category,
@@ -239,6 +242,7 @@ export function detectColumnRoles(headers, rows) {
     R.roleSeniority,
     R.seniority,
     R.performanceScore,
+    R.ccnlMinimum,
   ]
 
   for (const role of roleOrder) {
@@ -248,40 +252,7 @@ export function detectColumnRoles(headers, rows) {
       used.add(idx)
     }
   }
-
   return result
-}
-
-/** Colonne candidate a voce retributiva (escluse quelle già mappate a ruoli strutturali). */
-export function listPayComponentCandidateColumns(headers, roleMapping = {}) {
-  const coreRoles = new Set([
-    R.gender, R.employeeName, R.baseSalary, R.totalSalary, R.variableComponents, R.role, R.level,
-    R.category, R.description, R.seniority, R.roleSeniority, R.performanceScore,
-    R.percPartTime, R.hireDate, R.ccnlMinimum, R.legalQualification,
-  ])
-  const usedCore = new Set()
-  for (const [role, idx] of Object.entries(roleMapping || {})) {
-    if (coreRoles.has(role) && Number.isFinite(Number(idx))) usedCore.add(Number(idx))
-  }
-
-  return (headers || []).map((header, index) => ({ index, header: String(header ?? '') }))
-    .filter(({ index, header }) => {
-      if (usedCore.has(index)) return false
-      if (!header.trim()) return false
-      if (isDisqualifiedHeader(header, R.baseSalary) && /\binps|contribut|tfr\b/i.test(header)) return true
-      return true
-    })
-}
-
-export function buildInitialPayComponentMapping(headers, roleMapping = {}) {
-  const used = new Set(Object.values(roleMapping).filter((i) => Number.isFinite(Number(i))).map(Number))
-  const detected = detectPayComponentMapping(headers, used)
-  const legacyVarIdx = roleMapping[R.variableComponents]
-  if (Number.isFinite(Number(legacyVarIdx)) && !detected[legacyVarIdx]) {
-    detected[legacyVarIdx] = suggestPayComponentCategory(headers[legacyVarIdx])
-      || PAY_COMPONENT_CATEGORIES.INDIVIDUAL
-  }
-  return detected
 }
 
 /**
@@ -346,23 +317,22 @@ REGOLE OBBLIGATORIE (Italia):
 - role = titolo ruolo/posizione (es. "Ruolo").
 - level = livello CCNL contrattuale.
 - description = descrizione mansione/job desc.
-- seniority = anzianità aziendale in anni (se non c'è data assunzione dedicata).
-- hireDate = data assunzione / ingresso (preferita per annualizzazione).
-- percPartTime = percentuale part-time (100 = full time).
-- ccnlMinimum = minimo tabellare CCNL annuo.
-- legalQualification = operaio/impiegato/quadro/dirigente.
+- seniority = anzianità aziendale (anni o equivalente).
 - roleSeniority = anzianità nel ruolo attuale.
 - performanceScore = valutazione performance se presente.
+- partTimePct = percentuale part-time (100 = full time).
+- hireDate = data assunzione / ingresso.
+- structuralComponents = somma componenti strutturali continuative/fisse (escluse da totali INPS).
+- individualComponents = somma componenti individuali/discrezionali/una-tantum.
+- ccnlMinimum = minimo tabellare CCNL se presente.
 
-Per le colonne retributive oltre base/totale, l'utente le classifica voce-per-voce in UI (non mappare tutto in variableComponents).
-
-Usa gli ESEMPI numerici: importi in euro → colonne retributive; M/F → genere.
+Usa gli ESEMPI numerici: importi in euro → colonne retributive; M/F → genere; 50/80/100 → part-time.
 
 Colonne:
 ${JSON.stringify(catalog, null, 2)}
 
 Restituisci SOLO JSON: chiavi ruolo → indice colonna (0-based). Includi solo mapping sicuri.
-Esempio: {"gender":0,"employeeName":1,"baseSalary":5,"role":3,"level":4,"percPartTime":6,"hireDate":7}
+Esempio: {"gender":0,"employeeName":1,"baseSalary":5,"structuralComponents":6,"individualComponents":7,"totalSalary":8,"partTimePct":9,"role":3,"level":4}
 
 JSON:`
 }

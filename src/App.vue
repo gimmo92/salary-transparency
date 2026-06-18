@@ -8,7 +8,7 @@ import {
   COLUMN_ROLES,
   getRoleLabel,
 } from './lib/excel.js'
-import { mergeColumnMappings, buildInitialPayComponentMapping, listPayComponentCandidateColumns } from './lib/column-mapping.js'
+import { mergeColumnMappings } from './lib/column-mapping.js'
 import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './lib/indicators.js'
 import {
   suggestColumnMappingWithGemini,
@@ -30,21 +30,14 @@ import {
   computeEuGenderDashboard,
   computeQuartileOutliers,
   gapSeverityClass as euGapSeverityClass,
-  verificationStatusClass as euVerificationStatusClass,
   EU_GAP_THRESHOLD_PCT,
 } from './lib/euGenderDashboard.js'
 import {
   SALARY_METRICS,
-  SALARY_METRIC_LABELS,
-  PAY_COMPONENT_CATEGORIES,
-  PAY_COMPONENT_LABELS,
-  metricFromMode,
-  salaryFieldKey,
-  gapVerificationStatus,
-  hasInsufficientGenderSample,
-  MIN_GENDER_SAMPLE_PER_GROUP,
-  DEFAULT_CCNL_ANNUAL_HOURS,
-} from './lib/compensation.js'
+  getComparisonValue,
+  getMetricLabel,
+  classifyGapStatus,
+} from './lib/salaryMetrics.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -63,9 +56,6 @@ const analisiStep = ref('upload') // idle | upload | mapping | results — defau
 const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
-/** Mappatura voce-per-voce: indice colonna → categoria retributiva */
-const payComponentMapping = ref({})
-const ccnlAnnualHours = ref(DEFAULT_CCNL_ANNUAL_HOURS)
 const excelUrl = ref('')
 const excelFile = ref(null)
 const excelFileInputRef = ref(null)
@@ -128,10 +118,13 @@ function saveRoleValuationModal() {
 const resultsTab = ref('eu_dashboard')
 /** Tab risultati da ripristinare dopo chiusura giustificativo persona */
 const resultsTabBeforeJustify = ref('job_grading')
-/** Metrica retributiva per KPI dashboard: base | level | total (default level = reporting) */
-const euDashboardMetricMode = ref('level')
-/** true = valori FTE normalizzati part-time; false = annui grezzi */
-const euDashboardNormalized = ref(true)
+/** Metrica retributiva per KPI dashboard (default: livello retributivo) */
+const euDashboardMetric = ref(SALARY_METRICS.livello)
+/** Confronti su valori normalizzati FTE (default) o grezzi annui */
+const euDashboardFte = ref(true)
+
+const euMetricLabel = computed(() => getMetricLabel(euDashboardMetric.value))
+const euMetricLabelShort = computed(() => getMetricLabel(euDashboardMetric.value, { short: true }))
 
 /** Giustificativi outlier quartile: chiave = index dipendente; testo non vuoto = escluso dall'analisi */
 const quartileOutlierJustifications = ref({})
@@ -152,11 +145,12 @@ const allRoleKeys = [
   COLUMN_ROLES.gender,
   COLUMN_ROLES.employeeName,
   COLUMN_ROLES.baseSalary,
+  COLUMN_ROLES.structuralComponents,
+  COLUMN_ROLES.individualComponents,
+  COLUMN_ROLES.variableComponents,
   COLUMN_ROLES.totalSalary,
-  COLUMN_ROLES.percPartTime,
+  COLUMN_ROLES.partTimePct,
   COLUMN_ROLES.hireDate,
-  COLUMN_ROLES.ccnlMinimum,
-  COLUMN_ROLES.legalQualification,
   COLUMN_ROLES.category,
   COLUMN_ROLES.role,
   COLUMN_ROLES.level,
@@ -164,45 +158,8 @@ const allRoleKeys = [
   COLUMN_ROLES.seniority,
   COLUMN_ROLES.roleSeniority,
   COLUMN_ROLES.performanceScore,
-  COLUMN_ROLES.variableComponents,
+  COLUMN_ROLES.ccnlMinimum,
 ]
-
-const payComponentCategoryOptions = [
-  { value: PAY_COMPONENT_CATEGORIES.STRUCTURAL, label: PAY_COMPONENT_LABELS[PAY_COMPONENT_CATEGORIES.STRUCTURAL] },
-  { value: PAY_COMPONENT_CATEGORIES.INDIVIDUAL, label: PAY_COMPONENT_LABELS[PAY_COMPONENT_CATEGORIES.INDIVIDUAL] },
-  { value: PAY_COMPONENT_CATEGORIES.NON_PAY, label: PAY_COMPONENT_LABELS[PAY_COMPONENT_CATEGORIES.NON_PAY] },
-]
-
-const payComponentCandidateColumns = computed(() =>
-  listPayComponentCandidateColumns(excelHeaders.value, columnMapping.value),
-)
-
-const euDashboardMetricLabel = computed(() =>
-  SALARY_METRIC_LABELS[metricFromMode(euDashboardMetricMode.value)] || 'Livello retributivo',
-)
-
-function normalizedDataOptions() {
-  return {
-    payComponentMapping: payComponentMapping.value,
-    ccnlAnnualHours: ccnlAnnualHours.value,
-  }
-}
-
-function buildGenderNormalized() {
-  return buildNormalizedData(
-    excelRows.value,
-    excelHeaders.value,
-    columnMapping.value,
-    normalizedDataOptions(),
-  )
-}
-
-function personSalaryForGap(person) {
-  const rec = genderNormalizedForAnalysis.value.find((r) => r.index === person?.index)
-  const field = salaryFieldKey(metricFromMode(euDashboardMetricMode.value), euDashboardNormalized.value)
-  if (rec && Number.isFinite(rec[field]) && rec[field] > 0) return rec[field]
-  return null
-}
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
 const showStorico = computed(() => activeSection.value === 'storico')
@@ -255,12 +212,11 @@ async function viewAnalysis(id) {
 
     excelUrl.value = record.source_url || ''
     columnMapping.value = record.mapping_json || {}
-    payComponentMapping.value = record.mapping_json?.payComponents || {}
     excelHeaders.value = record.headers_json || []
     excelRows.value = record.rows_json || []
     saveStatus.value = `Analisi caricata dallo storico (ID: ${record.id})`
 
-    const normalizedGender = buildGenderNormalized()
+    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
     genderNormalizedCache.value = normalizedGender
     bandGenderJustifications.value = {}
     quartileOutlierJustifications.value = {}
@@ -300,26 +256,45 @@ function isPersonJustified(person) {
   return typeof note === 'string' && note.trim().length > 0
 }
 
+function personComparisonSalary(person) {
+  return getComparisonValue(person, euDashboardMetric.value, { fte: euDashboardFte.value })
+}
+
 function hayBandAdjustedGapPct(hayBand) {
   const people = (hayBand?.people || []).filter(
-    (p) => !isPersonJustified(p) && !isQuartileAnalysisExcluded(p?.index),
+    (p) =>
+      personComparisonSalary(p) != null &&
+      !isPersonJustified(p) &&
+      !isQuartileAnalysisExcluded(p?.index),
   )
-  const men = people.filter((p) => p.gender === 'M').map(personSalaryForGap).filter((v) => v != null)
-  const women = people.filter((p) => p.gender === 'F').map(personSalaryForGap).filter((v) => v != null)
-  if (men.length < MIN_GENDER_SAMPLE_PER_GROUP || women.length < MIN_GENDER_SAMPLE_PER_GROUP) return null
+  const men = people.filter((p) => p.gender === 'M').map(personComparisonSalary)
+  const women = people.filter((p) => p.gender === 'F').map(personComparisonSalary)
+  if (!men.length || !women.length) return null
   const menAvg = men.reduce((s, v) => s + v, 0) / men.length
   const womenAvg = women.reduce((s, v) => s + v, 0) / women.length
   if (!menAvg) return null
   return ((menAvg - womenAvg) / menAvg) * 100
 }
 
-function hayBandGapVerificationStatus(hayBand) {
+function hayBandGapStatus(hayBand) {
   const people = (hayBand?.people || []).filter(
-    (p) => !isPersonJustified(p) && !isQuartileAnalysisExcluded(p?.index),
+    (p) => personComparisonSalary(p) != null && !isQuartileAnalysisExcluded(p?.index),
   )
-  const nM = people.filter((p) => p.gender === 'M' && personSalaryForGap(p) != null).length
-  const nF = people.filter((p) => p.gender === 'F' && personSalaryForGap(p) != null).length
-  return gapVerificationStatus(hayBandAdjustedGapPct(hayBand), hayBandHasJustifications(hayBand), nM, nF)
+  const nM = people.filter((p) => p.gender === 'M').length
+  const nF = people.filter((p) => p.gender === 'F').length
+  return classifyGapStatus(hayBandAdjustedGapPct(hayBand), {
+    hasJustification: hayBandHasJustifications(hayBand),
+    nM,
+    nF,
+  })
+}
+
+function hayBandGapStatusClass(hayBand) {
+  const st = hayBandGapStatus(hayBand)
+  if (st === 'red') return 'gap-status-red'
+  if (st === 'yellow') return 'gap-status-yellow'
+  if (st === 'insufficient') return 'gap-status-insufficient'
+  return 'gap-status-green'
 }
 
 function hayBandHasJustifications(hayBand) {
@@ -327,46 +302,27 @@ function hayBandHasJustifications(hayBand) {
 }
 
 function hasHayBandDisparity(hayBand) {
-  const st = hayBandGapVerificationStatus(hayBand)
-  return st === 'red' || st === 'yellow'
+  const st = hayBandGapStatus(hayBand)
+  return st === 'yellow' || st === 'red'
 }
 
-function hasHayBandNeedsFix(hayBand) {
-  return hayBandGapVerificationStatus(hayBand) === 'red'
-}
-
-/** Fasce con gap oltre soglia senza giustificativo (da correggere) */
+/** Fasce con gap oltre soglia e senza giustificativo valido */
 const jobGradingGapsToFixCount = computed(() => {
   let n = 0
   for (const band of jobResults.value || []) {
     for (const sub of band.hayBands || []) {
-      if (hasHayBandNeedsFix(sub)) n += 1
+      if (hayBandGapStatus(sub) === 'red') n += 1
     }
   }
   return n
 })
 
-/** Fasce con gap oltre soglia ma già documentate (da verificare) */
+/** Fasce con gap oltre soglia ma con giustificativo (da verificare) */
 const jobGradingGapsToVerifyCount = computed(() => {
   let n = 0
   for (const band of jobResults.value || []) {
     for (const sub of band.hayBands || []) {
-      if (hayBandGapVerificationStatus(sub) === 'yellow') n += 1
-    }
-  }
-  return n
-})
-
-const jobGradingInsufficientSampleCount = computed(() => {
-  let n = 0
-  for (const band of jobResults.value || []) {
-    for (const sub of band.hayBands || []) {
-      const people = (sub?.people || []).filter(
-        (p) => !isPersonJustified(p) && !isQuartileAnalysisExcluded(p?.index),
-      )
-      const nM = people.filter((p) => p.gender === 'M' && personSalaryForGap(p) != null).length
-      const nF = people.filter((p) => p.gender === 'F' && personSalaryForGap(p) != null).length
-      if (hasInsufficientGenderSample(nM, nF) && nM > 0 && nF > 0) n += 1
+      if (hayBandGapStatus(sub) === 'yellow') n += 1
     }
   }
   return n
@@ -436,7 +392,7 @@ function isRoleDetailExpanded(level, subLabel, role) {
 
 function runJobGrading() {
   const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
-  const normalizedGender = buildGenderNormalized()
+  const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
   const genderByIndex = new Map(normalizedGender.map((x) => [x.index, x.gender]))
   const enrichedJob = normalizedJob.map((p) => ({
     ...p,
@@ -470,9 +426,8 @@ function startNuovaAnalisi() {
   transparencyRoleOverrides.value = {}
   bandGenderJustifications.value = {}
   resultsTab.value = 'eu_dashboard'
-  euDashboardMetricMode.value = 'level'
-  euDashboardNormalized.value = true
-  payComponentMapping.value = {}
+  euDashboardMetric.value = SALARY_METRICS.livello
+  euDashboardFte.value = true
   justifyingPerson.value = null
 }
 
@@ -556,7 +511,6 @@ async function processLoadedWorkbook(rows, headers) {
       }
     }
     columnMapping.value = suggested
-    payComponentMapping.value = buildInitialPayComponentMapping(headers, suggested)
     analisiStep.value = 'mapping'
 }
 
@@ -567,11 +521,11 @@ async function confirmMapping() {
   justifyingPerson.value = null
   try {
     // --- Analisi di genere ---
-    const normalizedGender = buildGenderNormalized()
+    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedGender.length > 0) {
       const localIndicators = computeIndicators(normalizedGender, {
-        metric: euDashboardMetricMode.value,
-        normalized: euDashboardNormalized.value,
+        metric: euDashboardMetric.value,
+        fte: euDashboardFte.value,
       })
       if (geminiEnabled.value) {
         geminiLoading.value = true
@@ -650,7 +604,7 @@ async function confirmMapping() {
         analysisType: 'combined',
         sourceUrl: excelUrl.value || (excelFile.value ? `file:${excelFile.value.name}` : ''),
         headers: excelHeaders.value,
-        mapping: { ...columnMapping.value, payComponents: payComponentMapping.value },
+        mapping: columnMapping.value,
         rows: excelRows.value.slice(0, 500),
         results: { gender: indicatorsResult.value, jobGrading: jobResults.value },
         calculationSource: `gender:${indicatorsSource.value},job:locale`,
@@ -1059,20 +1013,15 @@ const euDashboard = computed(() =>
   computeEuGenderDashboard(
     genderNormalizedForAnalysis.value,
     jobResults.value,
-    euDashboardMetricMode.value,
-    {
-      normalized: euDashboardNormalized.value,
-      hasFasciaJustification: hayBandHasJustifications,
-    },
+    euDashboardMetric.value,
+    { fte: euDashboardFte.value, hasBandJustification: hayBandHasJustifications },
   ),
 )
 
 const quartileOutlierResult = computed(() =>
-  computeQuartileOutliers(
-    genderNormalizedForAnalysis.value,
-    euDashboardMetricMode.value,
-    euDashboardNormalized.value,
-  ),
+  computeQuartileOutliers(genderNormalizedForAnalysis.value, euDashboardMetric.value, {
+    fte: euDashboardFte.value,
+  }),
 )
 const quartileOutlierRows = computed(() => quartileOutlierResult.value.rows)
 const quartileOutlierTruncated = computed(() => quartileOutlierResult.value.truncated)
@@ -1692,8 +1641,8 @@ function exportJobGradingPdf() {
     const ind =
       pdfRows.length > 0
         ? computeIndicators(pdfRows, {
-            metric: euDashboardMetricMode.value,
-            normalized: euDashboardNormalized.value,
+            metric: euDashboardMetric.value,
+            fte: euDashboardFte.value,
           })
         : (indicatorsResult.value || {})
 
@@ -1703,7 +1652,7 @@ function exportJobGradingPdf() {
     y += 5
     doc.setFont('helvetica', 'italic')
     doc.setFontSize(7.5)
-    const modeLabel = `${euDashboardMetricLabel.value}${euDashboardNormalized.value ? ' (FTE)' : ' (annuo grezzo)'}`
+    const modeLabel = euMetricLabel.value + (euDashboardFte.value ? ' (FTE)' : ' (grezzo)')
     doc.text(
       `Calcolo da dati correnti (${pdfRows.length} dipendenti analizzati, esclusi outlier quartili se presenti). Indicatori a, c: ${modeLabel} (allineati al punto f e alla dashboard).`,
       14,
@@ -1941,7 +1890,7 @@ function exportJobGradingPdf() {
         'N analizzati',
       ]],
       body: [[
-        `${euDashboardMetricLabel.value}${euDashboardNormalized.value ? ' FTE' : ''}`,
+        euMetricLabelShort.value + (euDashboardFte.value ? ' FTE' : ' grezzo'),
         formatPct(dash.gapMean),
         formatPct(dash.gapMedian),
         formatPct(dash.pctFasceSopraSoglia),
@@ -2254,23 +2203,6 @@ function exportJobGradingPdf() {
             </select>
           </div>
         </div>
-        <div v-if="payComponentCandidateColumns.length" class="mapping-table pay-component-table">
-          <h3 class="settings-title">Componenti retributive (voce per voce)</h3>
-          <p class="settings-hint">
-            Assegna ogni colonna del file a una categoria. Le voci strutturali continuative entrano nel livello retributivo (metrica di reporting); le individuali solo nella retribuzione totale.
-          </p>
-          <div class="mapping-row header">
-            <span>Colonna nel file</span>
-            <span>Categoria</span>
-          </div>
-          <div v-for="col in payComponentCandidateColumns" :key="'pc-' + col.index" class="mapping-row">
-            <span>{{ col.header }}</span>
-            <select v-model="payComponentMapping[col.index]" class="mapping-select" :disabled="analysisLoading">
-              <option :value="undefined">– Esclusa / non retribuzione –</option>
-              <option v-for="opt in payComponentCategoryOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
-          </div>
-        </div>
         <div class="settings-panel">
           <h3 class="settings-title">Metodo di analisi</h3>
           <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello viene analizzato con retribuzione media e deviazione.</p>
@@ -2338,19 +2270,17 @@ function exportJobGradingPdf() {
                 Trasparenza retributiva di genere — riferimento <strong>Direttiva UE 2023/970</strong>.
               </p>
               <div class="eu-salary-toggle">
-                <span class="eu-salary-toggle-label">Metrica gap:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetricMode === 'base' }]" @click="euDashboardMetricMode = 'base'">Retribuzione base</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetricMode === 'level' }]" @click="euDashboardMetricMode = 'level'">Livello retributivo</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetricMode === 'total' }]" @click="euDashboardMetricMode = 'total'">Retribuzione totale</button>
+                <span class="eu-salary-toggle-label">Metrica retributiva:</span>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
               </div>
-              <div class="eu-salary-toggle" style="margin-top: 0.5rem;">
+              <div class="eu-salary-toggle eu-salary-toggle--fte">
                 <span class="eu-salary-toggle-label">Confronto su:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardNormalized }]" @click="euDashboardNormalized = true">Normalizzato FTE</button>
-                <button type="button" :class="['toggle-btn', { active: !euDashboardNormalized }]" @click="euDashboardNormalized = false">Annui grezzi</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardFte }]" @click="euDashboardFte = true">Normalizzato FTE</button>
+                <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
               </div>
-              <p v-if="euDashboardNormalized" class="eu-normalize-note muted">
-                Valori normalizzati full-time equivalent per confronto corretto (part-time incluso).
-              </p>
+              <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
             </div>
             <p class="eu-legend-line">
               <span class="eu-leg eu-leg-green">■</span> |gap| &lt; 4% &nbsp;
@@ -2379,21 +2309,6 @@ function exportJobGradingPdf() {
               </div>
             </div>
 
-            <div v-if="euDashboard.gapDecomposition?.residualPct != null" class="eu-panel" style="margin-top: 1rem;">
-              <h4 class="eu-panel-title">Decomposizione del gap</h4>
-              <p class="eu-panel-desc">
-                Quota del gap spiegata da differenze di part-time e anzianità vs residuo non spiegato (indicatore di esposizione).
-                Metrica: {{ euDashboardMetricLabel }}{{ euDashboardNormalized ? ' (FTE)' : '' }}.
-              </p>
-              <div class="eu-kpi-value-inline">
-                <strong>Gap grezzo:</strong> {{ formatGapMforF(euDashboard.gapDecomposition.factors?.rawGap) }}
-                &nbsp;·&nbsp;
-                <strong>Spiegato:</strong> {{ formatGapMforF(euDashboard.gapDecomposition.explainedPct) }}
-                &nbsp;·&nbsp;
-                <strong>Residuo:</strong> {{ formatGapMforF(euDashboard.gapDecomposition.residualPct) }}
-              </div>
-            </div>
-
             <div class="eu-kpi-grid" style="margin-top: 0.5rem;">
               <div class="eu-kpi-card">
                 <div class="eu-kpi-label">Gap medio comp. variabile</div>
@@ -2413,12 +2328,39 @@ function exportJobGradingPdf() {
               </div>
             </div>
 
+            <div v-if="euDashboard.decomposition" class="eu-panel eu-decomposition-panel">
+              <h4 class="eu-panel-title">Decomposizione del gap</h4>
+              <p class="eu-panel-desc">
+                Quota del gap spiegata da fattori oggettivi (anzianità, % part-time, livello CCNL) vs residuo non spiegato
+                ({{ euMetricLabel }}{{ euDashboardFte ? ', FTE' : '' }}).
+              </p>
+              <div class="eu-decomp-grid">
+                <div class="eu-decomp-item">
+                  <span class="eu-decomp-label">Gap osservato</span>
+                  <span class="eu-decomp-val" :class="euGapSeverityClass(euDashboard.decomposition.rawGapPct)">{{ formatGapMforF(euDashboard.decomposition.rawGapPct) }}</span>
+                </div>
+                <div class="eu-decomp-item">
+                  <span class="eu-decomp-label">Spiegato (fattori oggettivi)</span>
+                  <span class="eu-decomp-val">{{ formatGapMforF(euDashboard.decomposition.explainedGapPct) }}</span>
+                </div>
+                <div class="eu-decomp-item eu-decomp-item--residual">
+                  <span class="eu-decomp-label">Residuo (esposizione)</span>
+                  <span class="eu-decomp-val" :class="euGapSeverityClass(euDashboard.decomposition.residualGapPct)">{{ formatGapMforF(euDashboard.decomposition.residualGapPct) }}</span>
+                </div>
+              </div>
+              <ul class="eu-decomp-factors muted">
+                <li>Anzianità: {{ formatGapMforF(euDashboard.decomposition.factors.seniority) }}</li>
+                <li>Part-time: {{ formatGapMforF(euDashboard.decomposition.factors.partTime) }}</li>
+                <li>Livello CCNL: {{ formatGapMforF(euDashboard.decomposition.factors.level) }}</li>
+              </ul>
+            </div>
+
             <div class="eu-charts-row">
               <div class="eu-panel">
                 <h4 class="eu-panel-title">Quartili retributivi</h4>
                 <p class="eu-panel-desc">
                   Quattro gruppi uguali (dal 25% più basso al 25% più alto). Per ciascun quartile: <strong>media retributiva</strong> uomini vs donne
-                  ({{ euDashboardMetricLabel }}{{ euDashboardNormalized ? ', normalizzato FTE' : ', annuo grezzo' }}). Le barre confrontano M e F <em>nello stesso quartile</em>.
+                  ({{ euMetricLabel }}{{ euDashboardFte ? ', normalizzato FTE' : ', grezzo annuo' }}). Le barre confrontano M e F <em>nello stesso quartile</em>.
                 </p>
                 <div class="eu-quartile-chart">
                   <div v-for="q in euDashboard.quartiles" :key="q.quartile" class="eu-quartile-col">
@@ -2455,11 +2397,8 @@ function exportJobGradingPdf() {
                     </div>
                     <div class="eu-q-deviation" :class="euGapSeverityClass(q.gapPct)">
                       <span class="eu-q-deviation-label">Dev. media M vs F</span>
-                      <span v-if="q.insufficientSample" class="muted">campione insufficiente</span>
-                      <template v-else>
-                        <span class="eu-q-deviation-val">{{ q.gapPct == null ? 'n/d' : formatGapMforF(q.gapPct) }}</span>
-                        <span v-if="q.gapPct != null && Math.abs(q.gapPct) > EU_GAP_THRESHOLD_PCT" class="eu-q-deviation-flag">oltre {{ EU_GAP_THRESHOLD_PCT }}%</span>
-                      </template>
+                      <span class="eu-q-deviation-val">{{ q.gapPct == null ? 'n/d' : formatGapMforF(q.gapPct) }}</span>
+                      <span v-if="q.gapPct != null && Math.abs(q.gapPct) > EU_GAP_THRESHOLD_PCT" class="eu-q-deviation-flag">oltre {{ EU_GAP_THRESHOLD_PCT }}%</span>
                     </div>
                     <div class="eu-q-meta">n = {{ q.totale }} ({{ q.maschile }} M · {{ q.femminile }} F)</div>
                   </div>
@@ -2493,14 +2432,13 @@ function exportJobGradingPdf() {
 
               <div class="eu-panel">
                 <h4 class="eu-panel-title">Gap medio per livello CCNL</h4>
-                <p class="eu-panel-desc">Confronto media M vs F per livello ({{ euDashboardMetricLabel }}{{ euDashboardNormalized ? ', FTE' : '' }}).</p>
+                <p class="eu-panel-desc">Confronto media M vs F per livello ({{ euMetricLabel }}{{ euDashboardFte ? ', FTE' : '' }}).</p>
                 <div class="eu-level-list">
                   <div v-for="row in euDashboard.levelRows" :key="'lv-' + row.band + '-' + row.levelLabel" class="eu-level-row">
                     <div class="eu-level-head">
                       <span class="eu-level-name">{{ row.levelLabel }}</span>
-                      <span class="eu-level-gap" :class="row.insufficientSample ? 'gap-severity-na' : euGapSeverityClass(row.gap)">
-                        {{ row.insufficientSample ? 'campione insufficiente' : (row.gap == null ? 'n/d' : formatGapMforF(row.gap)) }}
-                      </span>
+                      <span v-if="row.insufficientSample" class="eu-level-sample muted">{{ row.sampleMsg }}</span>
+                      <span v-else class="eu-level-gap" :class="euGapSeverityClass(row.gap)">{{ row.gap == null ? 'n/d' : formatGapMforF(row.gap) }}</span>
                     </div>
                     <div v-if="row.gap != null" class="eu-level-track">
                       <div
@@ -2517,7 +2455,7 @@ function exportJobGradingPdf() {
             <div class="eu-panel eu-outlier-panel">
               <h4 class="eu-panel-title">Outlier retributivi (&gt; 5% dalla media)</h4>
               <p class="eu-panel-desc">
-                Dipendenti la cui {{ euDashboardMetricLabel.toLowerCase() }}
+                Dipendenti la cui {{ euMetricLabel }}
                 si scosta di oltre il <strong>5%</strong> dalla media generale.
                 Per ogni outlier è indicato il quartile di appartenenza e lo scostamento percentuale.
                 Con un giustificativo testuale il dipendente viene <strong>escluso dall’analisi</strong> (KPI, quartili, gap per livello, fasce job grading).
@@ -2535,7 +2473,7 @@ function exportJobGradingPdf() {
                       <th>Q</th>
                       <th>Nome</th>
                       <th>Genere</th>
-                      <th class="eu-outlier-num">{{ euDashboardMetricLabel }}</th>
+                      <th class="eu-outlier-num">{{ euMetricLabelShort }}</th>
                       <th class="eu-outlier-num">Scostamento</th>
                       <th>Dettaglio</th>
                       <th></th>
@@ -2579,14 +2517,9 @@ function exportJobGradingPdf() {
               <ul v-if="euDashboard.criticalAlerts.length" class="eu-alert-list">
                 <li v-for="(a, idx) in euDashboard.criticalAlerts" :key="idx" class="eu-alert-item">
                   <strong>{{ a.levelLabel }}</strong>, <strong>{{ a.fasciaId }}</strong> (range {{ a.fasciaLabel }}):
-                  <span :class="euVerificationStatusClass(a.verificationStatus)">{{ formatGapMforF(a.gap) }}</span>
-                  <span v-if="a.verificationStatus === 'red'" class="gap-alert"> — da correggere</span>
-                  <span v-else-if="a.verificationStatus === 'yellow'" class="muted"> — da verificare (giustificato)</span>
+                  <span class="gap-alert">{{ formatGapMforF(a.gap) }}</span>
                 </li>
               </ul>
-              <p v-if="euDashboard.bandsInsufficientSample > 0" class="muted">
-                {{ euDashboard.bandsInsufficientSample }} fascia/e con campione insufficiente (min. {{ MIN_GENDER_SAMPLE_PER_GROUP }} per genere).
-              </p>
               <p v-else class="muted">Nessuna fascia con |gap| &gt; 5% tra quelle confrontabili, oppure dati insufficienti.</p>
             </div>
 
@@ -2597,23 +2530,28 @@ function exportJobGradingPdf() {
           <template v-if="jobResults.length > 0">
           <div
             class="job-grading-gap-alert"
-            :class="{ 'job-grading-gap-alert--ok': jobGradingGapsToFixCount === 0 && jobGradingGapsToVerifyCount === 0 }"
+            :class="{
+              'job-grading-gap-alert--ok': jobGradingGapsToFixCount === 0 && jobGradingGapsToVerifyCount === 0,
+              'job-grading-gap-alert--verify': jobGradingGapsToVerifyCount > 0 && jobGradingGapsToFixCount === 0,
+            }"
             role="status"
           >
             <span class="job-grading-gap-alert__icon" aria-hidden="true">
-              <svg v-if="jobGradingGapsToFixCount > 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M12 3l10 18H2L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+              <svg v-if="jobGradingGapsToFixCount > 0 || jobGradingGapsToVerifyCount > 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M12 3l10 18H2L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
               <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
             </span>
             <div class="job-grading-gap-alert__body">
-              <strong class="job-grading-gap-alert__count">{{ jobGradingGapsToFixCount }}</strong>
-              <span class="job-grading-gap-alert__label">Gap da correggere</span>
-              <span class="job-grading-gap-alert__hint">(fasce oltre {{ EU_GAP_THRESHOLD_PCT }}% senza giustificativo)</span>
-              <span v-if="jobGradingGapsToVerifyCount > 0" class="job-grading-gap-alert__hint">
-                · {{ jobGradingGapsToVerifyCount }} da verificare (già documentate)
-              </span>
-              <span v-if="jobGradingInsufficientSampleCount > 0" class="job-grading-gap-alert__hint">
-                · {{ jobGradingInsufficientSampleCount }} campione insufficiente
-              </span>
+              <div class="job-grading-gap-alert__counts">
+                <span class="job-grading-gap-alert__stat">
+                  <strong class="job-grading-gap-alert__count job-grading-gap-alert__count--red">{{ jobGradingGapsToFixCount }}</strong>
+                  <span class="job-grading-gap-alert__label">Da correggere</span>
+                </span>
+                <span class="job-grading-gap-alert__stat">
+                  <strong class="job-grading-gap-alert__count job-grading-gap-alert__count--yellow">{{ jobGradingGapsToVerifyCount }}</strong>
+                  <span class="job-grading-gap-alert__label">Da verificare</span>
+                </span>
+              </div>
+              <span class="job-grading-gap-alert__hint">(fasce con |gap| M/F &gt; 5%; verificare = gap con giustificativo, correggere = senza giustificativo)</span>
             </div>
           </div>
           <div class="job-grading-tab-head">
@@ -2655,10 +2593,9 @@ function exportJobGradingPdf() {
                   </span>
                   <span>
                     {{ sub.label }}
-                    <span v-if="hayBandAdjustedGapPct(sub) != null" class="hay-band-gap-pill" :class="{ 'gap-alert': hasHayBandNeedsFix(sub), 'gap-verify': hayBandGapVerificationStatus(sub) === 'yellow' }">
+                    <span v-if="hayBandAdjustedGapPct(sub) != null" class="hay-band-gap-pill" :class="[hayBandGapStatusClass(sub), { 'gap-alert': hasHayBandDisparity(sub) }]">
                       {{ formatGapMforF(hayBandAdjustedGapPct(sub), hayBandHasJustifications(sub)) }}
                     </span>
-                    <span v-else-if="hayBandGapVerificationStatus(sub) === 'insufficient'" class="muted hay-band-gap-pill">campione insufficiente</span>
                   </span>
                   <span>{{ sub.nMen ?? 0 }}</span>
                   <span>{{ sub.nWomen ?? 0 }}</span>
@@ -4526,6 +4463,54 @@ function exportJobGradingPdf() {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.eu-salary-toggle--fte {
+  margin-top: 0.35rem;
+}
+.eu-fte-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+}
+.eu-decomposition-panel {
+  margin: 0.75rem 0;
+}
+.eu-decomp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+.eu-decomp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-secondary, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
+}
+.eu-decomp-item--residual {
+  border-color: rgba(220, 38, 38, 0.25);
+}
+.eu-decomp-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.eu-decomp-val {
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.eu-decomp-factors {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.82rem;
+}
+.eu-level-sample {
+  font-size: 0.78rem;
+  max-width: 55%;
+  text-align: right;
 }
 .eu-salary-toggle-label {
   font-size: 0.85rem;
@@ -5009,6 +4994,28 @@ function exportJobGradingPdf() {
   background: rgba(240, 253, 244, 0.95);
   color: #166534;
 }
+.job-grading-gap-alert--verify {
+  border-color: rgba(202, 138, 4, 0.4);
+  background: rgba(254, 252, 232, 0.95);
+  color: #854d0e;
+}
+.job-grading-gap-alert__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  width: 100%;
+}
+.job-grading-gap-alert__stat {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.job-grading-gap-alert__count--red { color: #991b1b; }
+.job-grading-gap-alert__count--yellow { color: #854d0e; }
+.gap-status-red { border-color: rgba(220, 38, 38, 0.5); background: rgba(254, 242, 242, 0.6); }
+.gap-status-yellow { border-color: rgba(202, 138, 4, 0.5); background: rgba(254, 252, 232, 0.6); }
+.gap-status-green { border-color: rgba(22, 163, 74, 0.35); }
+.gap-status-insufficient { opacity: 0.75; font-style: italic; }
 .job-grading-gap-alert__icon {
   flex-shrink: 0;
   display: flex;
@@ -5259,21 +5266,6 @@ function exportJobGradingPdf() {
   font-weight: 700;
   color: var(--text-secondary);
   background: rgba(148, 163, 184, 0.14);
-}
-
-.hay-band-gap-pill.gap-alert {
-  color: #b91c1c;
-  background: rgba(220, 38, 38, 0.12);
-}
-
-.hay-band-gap-pill.gap-verify {
-  color: #a16207;
-  background: rgba(234, 179, 8, 0.18);
-}
-
-.eu-normalize-note {
-  margin-top: 0.35rem;
-  font-size: 0.85rem;
 }
 
 .people-header,

@@ -17,16 +17,8 @@ export function pctGap(male, female) {
   return ((male - female) / male) * 100
 }
 
-import { metricFromMode, salaryFieldKey, computeGapDecomposition } from './compensation.js'
-
-export function computeBandGenderGaps(normalizedGender, jobResults, options = {}) {
+export function computeBandGenderGaps(normalizedGender, jobResults) {
   if (!normalizedGender?.length || !jobResults?.length) return []
-
-  const metric = metricFromMode(options.metric ?? 'level')
-  const normalized = options.normalized !== false
-  const levelField = salaryFieldKey(metric, normalized)
-  const baseField = normalized ? 'baseSalaryFte' : 'baseSalary'
-  const totalField = normalized ? 'totalSalaryFte' : 'totalSalary'
 
   const personBand = new Map()
   for (const jr of jobResults) {
@@ -40,45 +32,35 @@ export function computeBandGenderGaps(normalizedGender, jobResults, options = {}
   for (const r of normalizedGender) {
     const band = personBand.get(r.index) ?? null
     if (band == null) continue
-    if (!bands.has(band)) bands.set(band, { mLevel: [], fLevel: [], mBase: [], fBase: [], mTot: [], fTot: [] })
+    if (!bands.has(band)) bands.set(band, { mTot: [], fTot: [], mBase: [], fBase: [] })
     const b = bands.get(band)
-    if (r.gender === 'M') {
-      b.mLevel.push(r[levelField])
-      b.mBase.push(r[baseField])
-      b.mTot.push(r[totalField])
-    } else if (r.gender === 'F') {
-      b.fLevel.push(r[levelField])
-      b.fBase.push(r[baseField])
-      b.fTot.push(r[totalField])
-    }
+    if (r.gender === 'M') { b.mTot.push(r.totalSalary); b.mBase.push(r.baseSalary) }
+    else if (r.gender === 'F') { b.fTot.push(r.totalSalary); b.fBase.push(r.baseSalary) }
   }
 
   return Array.from(bands.entries())
     .sort((a, b) => a[0] - b[0])
     .map(([band, d]) => ({
       band,
-      nM: d.mLevel.length,
-      nF: d.fLevel.length,
-      gapMedia: pctGap(mean(d.mLevel), mean(d.fLevel)),
-      gapMediana: pctGap(median(d.mLevel), median(d.fLevel)),
+      nM: d.mTot.length,
+      nF: d.fTot.length,
+      gapMedia: pctGap(mean(d.mTot), mean(d.fTot)),
+      gapMediana: pctGap(median(d.mTot), median(d.fTot)),
       gapBaseMedia: pctGap(mean(d.mBase), mean(d.fBase)),
       gapBaseMediana: pctGap(median(d.mBase), median(d.fBase)),
-      gapTotMedia: pctGap(mean(d.mTot), mean(d.fTot)),
-      gapTotMediana: pctGap(median(d.mTot), median(d.fTot)),
     }))
 }
 
-export function computeAdjustedGap(normalized, topPct = 5, options = {}) {
+export function computeAdjustedGap(normalized, topPct = 5) {
   if (!normalized?.length) return { gapMedia: 0, gapMediana: 0, excluded: 0, total: normalized?.length || 0 }
-  const field = salaryFieldKey(metricFromMode(options.metric ?? 'level'), options.normalized !== false)
-  const sorted = [...normalized].sort((a, b) => (b[field] || 0) - (a[field] || 0))
+  const sorted = [...normalized].sort((a, b) => b.totalSalary - a.totalSalary)
   const cutoff = Math.max(1, Math.ceil(sorted.length * topPct / 100))
   const filtered = sorted.slice(cutoff)
   const males = filtered.filter((r) => r.gender === 'M')
   const females = filtered.filter((r) => r.gender === 'F')
   return {
-    gapMedia: pctGap(mean(males.map((r) => r[field])), mean(females.map((r) => r[field]))),
-    gapMediana: pctGap(median(males.map((r) => r[field])), median(females.map((r) => r[field]))),
+    gapMedia: pctGap(mean(males.map((r) => r.totalSalary)), mean(females.map((r) => r.totalSalary))),
+    gapMediana: pctGap(median(males.map((r) => r.totalSalary)), median(females.map((r) => r.totalSalary))),
     excluded: cutoff,
     total: normalized.length,
   }
@@ -86,19 +68,32 @@ export function computeAdjustedGap(normalized, topPct = 5, options = {}) {
 
 /**
  * @param {Array} normalized
- * @param {{ metric?: 'base'|'level'|'total', normalized?: boolean, primaryField?: string }} [options]
+ * @param {{ primaryField?: string, metric?: string, fte?: boolean }} [options]
  */
 export function computeIndicators(normalized, options = {}) {
-  const primaryField = options.primaryField
-    || salaryFieldKey(metricFromMode(options.metric ?? 'level'), options.normalized !== false)
+  let primaryField = options.primaryField
+  if (!primaryField && options.metric) {
+    const fte = options.fte !== false
+    const core =
+      {
+        base: fte ? 'baseSalaryFte' : 'baseSalary',
+        livello: fte ? 'livelloRetributivoFte' : 'livelloRetributivo',
+        totale: fte ? 'totalSalaryFte' : 'totalSalary',
+      }[options.metric] || (fte ? 'livelloRetributivoFte' : 'livelloRetributivo')
+    primaryField = core
+  }
+  if (!primaryField) primaryField = 'livelloRetributivoFte'
+
+  const fte = primaryField.endsWith('Fte')
+  const varField = fte ? 'variableComponentsFte' : 'variableComponents'
 
   const males = normalized.filter((r) => r.gender === 'M')
   const females = normalized.filter((r) => r.gender === 'F')
 
   const mBase = males.map((r) => r.baseSalary)
   const fBase = females.map((r) => r.baseSalary)
-  const mVar = males.map((r) => r.variableComponents)
-  const fVar = females.map((r) => r.variableComponents)
+  const mVar = males.map((r) => r[varField] ?? r.variableComponents)
+  const fVar = females.map((r) => r[varField] ?? r.variableComponents)
   const mPrimary = males.map((r) => r[primaryField])
   const fPrimary = females.map((r) => r[primaryField])
 
@@ -180,14 +175,7 @@ export function computeIndicators(normalized, options = {}) {
     }
   })
 
-  const gapDecomposition = computeGapDecomposition(
-    males.filter((r) => Number.isFinite(r[primaryField]) && r[primaryField] > 0),
-    females.filter((r) => Number.isFinite(r[primaryField]) && r[primaryField] > 0),
-    primaryField,
-  )
-
   return {
-    gapDecomposition,
     a_divarioRetributivoGenere: {
       descrizione: 'Divario retributivo medio complessivo tra uomini e donne.',
       percentuale: aGap,

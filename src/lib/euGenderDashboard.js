@@ -4,21 +4,20 @@
  */
 import { mean, median, pctGap } from './indicators.js'
 import {
-  metricFromMode,
-  salaryFieldKey,
-  gapVerificationStatus,
+  getSalaryFieldName,
+  classifyGapStatus,
   computeGapDecomposition,
-  hasInsufficientGenderSample,
-  MIN_GENDER_SAMPLE_PER_GROUP,
-} from './compensation.js'
+  gapSampleSufficient,
+  EU_GAP_THRESHOLD_PCT,
+  MIN_GENDER_SAMPLE,
+} from './salaryMetrics.js'
 
-export const EU_GAP_THRESHOLD_PCT = 5
+export { EU_GAP_THRESHOLD_PCT }
 /** Massimo outlier retributivi mostrati (ordinati per |scostamento| decrescente) */
 export const MAX_QUARTILE_OUTLIERS = 50
 
-/** @deprecated usa salaryFieldKey(metricFromMode(mode), normalized) */
-export function salaryFieldForMode(mode, normalized = true) {
-  return salaryFieldKey(metricFromMode(mode), normalized)
+export function salaryFieldForMode(metric, { fte = true } = {}) {
+  return getSalaryFieldName(metric || 'livello', { fte })
 }
 
 /** Verde <4%, giallo 4–5%, rosso >5% (valore assoluto) */
@@ -28,13 +27,6 @@ export function gapSeverityClass(pct) {
   if (a < 4) return 'gap-severity-green'
   if (a <= EU_GAP_THRESHOLD_PCT) return 'gap-severity-yellow'
   return 'gap-severity-red'
-}
-
-export function verificationStatusClass(status) {
-  if (status === 'green') return 'gap-severity-green'
-  if (status === 'yellow') return 'gap-severity-yellow'
-  if (status === 'red') return 'gap-severity-red'
-  return 'gap-severity-na'
 }
 
 function percentileSorted(sortedArr, p) {
@@ -47,14 +39,20 @@ function percentileSorted(sortedArr, p) {
   return sortedArr[lo] + (sortedArr[hi] - sortedArr[lo]) * (idx - lo)
 }
 
+function validSalary(r, field) {
+  const v = r[field]
+  return Number.isFinite(v) && v > 0
+}
+
 /**
  * Outlier retributivi: dipendenti la cui retribuzione si scosta di oltre il 5%
  * dalla media generale.
  * @returns {{ rows: Array, total: number, truncated: boolean }}
  */
-export function computeQuartileOutliers(normalized, salaryMode, normalizedFte = true) {
+export function computeQuartileOutliers(normalized, metric, options = {}) {
+  const fte = options.fte !== false
   const empty = { rows: [], total: 0, truncated: false }
-  const field = salaryFieldKey(metricFromMode(salaryMode), normalizedFte)
+  const field = salaryFieldForMode(metric, { fte })
   const norm = (normalized || []).filter(
     (r) => (r.gender === 'M' || r.gender === 'F') && validSalary(r, field),
   )
@@ -102,21 +100,28 @@ function normByIndexMap(normalized) {
   return new Map((normalized || []).map((r) => [r.index, r]))
 }
 
-function validSalary(r, field) {
-  const v = r[field]
-  return Number.isFinite(v) && v > 0
+function rowGapStatus(gapPct, nM, nF, hasJustification = false) {
+  const status = classifyGapStatus(gapPct, { hasJustification, nM, nF })
+  return {
+    status,
+    insufficientSample: status === 'insufficient',
+    sampleMsg:
+      status === 'insufficient'
+        ? `Campione insufficiente (min. ${MIN_GENDER_SAMPLE} per genere: M=${nM}, F=${nF})`
+        : '',
+  }
 }
 
 /**
  * @param {Array} normalized - output buildNormalizedData (M/F)
  * @param {Array} jobResults - output enrichWithDeviation(groupByLevel(...))
- * @param {'base'|'level'|'total'} salaryMode
- * @param {{ normalized?: boolean, hasFasciaJustification?: (sub: object) => boolean }} [options]
+ * @param {string} metric - SALARY_METRICS.*
+ * @param {{ fte?: boolean, hasBandJustification?: (sub) => boolean }} [options]
  */
-export function computeEuGenderDashboard(normalized, jobResults, salaryMode, options = {}) {
-  const normalizedFte = options.normalized !== false
-  const hasJustification = options.hasFasciaJustification || (() => false)
-  const field = salaryFieldKey(metricFromMode(salaryMode), normalizedFte)
+export function computeEuGenderDashboard(normalized, jobResults, metric, options = {}) {
+  const fte = options.fte !== false
+  const hasBandJustification = options.hasBandJustification || (() => false)
+  const field = salaryFieldForMode(metric, { fte })
   const norm = normalized || []
   const jr = jobResults || []
 
@@ -130,19 +135,14 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
   const gapMedian =
     mVals.length && fVals.length ? pctGap(median(mVals), median(fVals)) : null
 
-  const gapDecomposition = computeGapDecomposition(males, females, field)
-
-  // b) Divario medio componente variabile (individuale + strutturale variabile)
-  const mVar = males.filter((r) => Number.isFinite(r.variableComponents)).map((r) => r.variableComponents)
-  const fVar = females.filter((r) => Number.isFinite(r.variableComponents)).map((r) => r.variableComponents)
+  const varField = fte ? 'variableComponentsFte' : 'variableComponents'
+  const mVar = males.filter((r) => Number.isFinite(r[varField])).map((r) => r[varField])
+  const fVar = females.filter((r) => Number.isFinite(r[varField])).map((r) => r[varField])
   const gapVarMean =
     mVar.length && fVar.length ? pctGap(mean(mVar), mean(fVar)) : null
-
-  // d) Divario mediano componente variabile
   const gapVarMedian =
     mVar.length && fVar.length ? pctGap(median(mVar), median(fVar)) : null
 
-  // e) % lavoratori U/D che ricevono componenti variabili
   const allM = norm.filter((r) => r.gender === 'M')
   const allF = norm.filter((r) => r.gender === 'F')
   const mWithVar = allM.filter((r) => Number.isFinite(r.variableComponents) && r.variableComponents > 0).length
@@ -160,7 +160,6 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
     barPctM: 0,
     barPctF: 0,
     gapPct: null,
-    insufficientSample: false,
   }))
 
   const sortedForQ = norm.filter((r) => validSalary(r, field)).sort((a, b) => a[field] - b[field])
@@ -185,15 +184,12 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
       q.avgFemminile = q.femminile > 0 ? (q._fSum || 0) / q.femminile : null
       delete q._mSum
       delete q._fSum
-      q.insufficientSample = hasInsufficientGenderSample(q.maschile, q.femminile)
       const maxAvg = Math.max(q.avgMaschile ?? 0, q.avgFemminile ?? 0)
       if (maxAvg > 0) {
         q.barPctM = q.avgMaschile != null ? (q.avgMaschile / maxAvg) * 100 : 0
         q.barPctF = q.avgFemminile != null ? (q.avgFemminile / maxAvg) * 100 : 0
       }
-      if (q.insufficientSample) {
-        q.gapPct = null
-      } else if (
+      if (
         q.avgMaschile != null &&
         q.avgFemminile != null &&
         Number.isFinite(q.avgMaschile) &&
@@ -201,6 +197,8 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
         q.avgMaschile > 0
       ) {
         q.gapPct = pctGap(q.avgMaschile, q.avgFemminile)
+      } else {
+        q.gapPct = null
       }
     })
     const totalM = allM.length
@@ -222,7 +220,6 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
       .filter((r) => validSalary(r, field))
     const mP = withSal.filter((r) => r.gender === 'M')
     const fP = withSal.filter((r) => r.gender === 'F')
-    const insufficientSample = hasInsufficientGenderSample(mP.length, fP.length)
     const base = {
       band: band.band,
       levelLabel: band.level,
@@ -231,8 +228,9 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
       segregationMsg: '',
       nM: mP.length,
       nF: fP.length,
-      insufficientSample,
-      verificationStatus: 'insufficient',
+      status: 'green',
+      insufficientSample: false,
+      sampleMsg: '',
     }
     if (!mP.length && !fP.length) {
       levelRows.push({
@@ -252,14 +250,9 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
       })
       continue
     }
-    const gap = insufficientSample
-      ? null
-      : pctGap(mean(mP.map((r) => r[field])), mean(fP.map((r) => r[field])))
-    levelRows.push({
-      ...base,
-      gap,
-      verificationStatus: gapVerificationStatus(gap, false, mP.length, fP.length),
-    })
+    const gap = pctGap(mean(mP.map((r) => r[field])), mean(fP.map((r) => r[field])))
+    const st = rowGapStatus(gap, mP.length, fP.length, false)
+    levelRows.push({ ...base, gap, ...st })
   }
 
   const fasciaRows = []
@@ -267,7 +260,6 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
   let bandsAboveThreshold = 0
   let bandsToVerify = 0
   let bandsToFix = 0
-  let bandsInsufficientSample = 0
   let budgetEstimate = 0
 
   for (const band of jr) {
@@ -279,8 +271,6 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
         .filter((r) => validSalary(r, field))
       const mP = people.filter((r) => r.gender === 'M')
       const fP = people.filter((r) => r.gender === 'F')
-      const justified = hasJustification(sub)
-      const insufficientSample = hasInsufficientGenderSample(mP.length, fP.length)
       const row = {
         band: band.band,
         levelLabel: band.level,
@@ -291,9 +281,9 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
         segregationMsg: '',
         nM: mP.length,
         nF: fP.length,
-        insufficientSample,
-        hasJustification: justified,
-        verificationStatus: 'insufficient',
+        status: 'green',
+        insufficientSample: false,
+        sampleMsg: '',
       }
       if (!mP.length || !fP.length) {
         row.segregation = true
@@ -303,22 +293,18 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
         fasciaRows.push(row)
         continue
       }
-      if (insufficientSample) {
-        bandsInsufficientSample += 1
-        row.segregationMsg = `Campione insufficiente (min. ${MIN_GENDER_SAMPLE_PER_GROUP} per genere)`
-        fasciaRows.push(row)
-        continue
-      }
       bandsComparable += 1
       const avgM = mean(mP.map((r) => r[field]))
       const avgF = mean(fP.map((r) => r[field]))
       row.gap = pctGap(avgM, avgF)
-      row.verificationStatus = gapVerificationStatus(row.gap, justified, mP.length, fP.length)
-      if (Math.abs(row.gap) > EU_GAP_THRESHOLD_PCT) {
+      const justified = hasBandJustification(sub)
+      const st = rowGapStatus(row.gap, mP.length, fP.length, justified)
+      Object.assign(row, st)
+      if (row.status === 'yellow') bandsToVerify += 1
+      if (row.status === 'red') bandsToFix += 1
+      if (Math.abs(row.gap) > EU_GAP_THRESHOLD_PCT && gapSampleSufficient(mP.length, fP.length)) {
         bandsAboveThreshold += 1
         budgetEstimate += Math.max(0, avgM - avgF) * fP.length
-        if (row.verificationStatus === 'yellow') bandsToVerify += 1
-        if (row.verificationStatus === 'red') bandsToFix += 1
       }
       fasciaRows.push(row)
     }
@@ -328,17 +314,15 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
     bandsComparable > 0 ? (bandsAboveThreshold / bandsComparable) * 100 : null
 
   const criticalAlerts = fasciaRows
-    .filter((r) => !r.segregation && !r.insufficientSample && r.gap != null && Math.abs(r.gap) > EU_GAP_THRESHOLD_PCT)
-    .sort((a, b) => {
-      const prio = { red: 0, yellow: 1, green: 2 }
-      const pa = prio[a.verificationStatus] ?? 3
-      const pb = prio[b.verificationStatus] ?? 3
-      if (pa !== pb) return pa - pb
-      return Math.abs(b.gap) - Math.abs(a.gap)
-    })
+    .filter((r) => !r.segregation && r.status === 'red')
+    .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap))
     .slice(0, 3)
 
+  const decomposition = computeGapDecomposition(norm, metric, { fte })
+
   return {
+    metric,
+    fte,
     gapMean,
     gapMedian,
     gapVarMean,
@@ -350,9 +334,7 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
     bandsComparable,
     bandsToVerify,
     bandsToFix,
-    bandsInsufficientSample,
     budgetEstimate,
-    gapDecomposition,
     nMaschi: males.length,
     nFemmine: females.length,
     nTotaleAnalizzati: males.length + females.length,
@@ -361,7 +343,6 @@ export function computeEuGenderDashboard(normalized, jobResults, salaryMode, opt
     fasciaRows,
     criticalAlerts,
     segregationWarnings: fasciaRows.filter((r) => r.segregation),
-    normalizedFte,
-    salaryField: field,
+    decomposition,
   }
 }

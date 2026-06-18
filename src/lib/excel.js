@@ -1,31 +1,31 @@
 import * as XLSX from 'xlsx'
-import {
-  PAY_COMPONENT_CATEGORIES,
-  computeCompensationMetrics,
-  parseHireDate,
-  parseMoney,
-  parsePartTimePct,
-  normalizeLegalQualification,
-} from './compensation.js'
 
 export const COLUMN_ROLES = {
   gender: 'gender',
   employeeName: 'employeeName',
   baseSalary: 'baseSalary',
-  /** Legacy: totale variabili unico — preferire mappatura voce-per-voce */
   variableComponents: 'variableComponents',
   totalSalary: 'totalSalary',
   category: 'category',
   role: 'role',
   level: 'level',
   description: 'description',
+  /** Anni di servizio, data ingresso o simile (utile come giustificativo oggettivo) */
   seniority: 'seniority',
+  /** Anzianità nel ruolo attuale (anni o data) */
   roleSeniority: 'roleSeniority',
+  /** Punteggio performance (0–100) */
   performanceScore: 'performanceScore',
-  percPartTime: 'percPartTime',
+  /** Percentuale part-time (default 100 = full time) */
+  partTimePct: 'partTimePct',
+  /** Data assunzione / ingresso */
   hireDate: 'hireDate',
+  /** Componenti strutturali continuative (livello retributivo) */
+  structuralComponents: 'structuralComponents',
+  /** Componenti individuali / discrezionali (escluse dal livello retributivo) */
+  individualComponents: 'individualComponents',
+  /** Minimo tabellare CCNL (opzionale) */
   ccnlMinimum: 'ccnlMinimum',
-  legalQualification: 'legalQualification',
 }
 
 export function getRoleLabel(role) {
@@ -42,10 +42,11 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.seniority]: 'Anzianità (anni, data ingresso o simile)',
     [COLUMN_ROLES.roleSeniority]: 'Anzianità nel ruolo (anni o data)',
     [COLUMN_ROLES.performanceScore]: 'Punteggio performance (0–100)',
-    [COLUMN_ROLES.percPartTime]: '% part-time (default 100 = full time)',
+    [COLUMN_ROLES.partTimePct]: '% part-time (default 100 = full time)',
     [COLUMN_ROLES.hireDate]: 'Data assunzione',
-    [COLUMN_ROLES.ccnlMinimum]: 'Minimo tabellare CCNL (€ annui)',
-    [COLUMN_ROLES.legalQualification]: 'Qualifica legale (operaio/impiegato/quadro/dirigente)',
+    [COLUMN_ROLES.structuralComponents]: 'Componenti strutturali (continuative/fisse)',
+    [COLUMN_ROLES.individualComponents]: 'Componenti individuali (discrezionali/una-tantum)',
+    [COLUMN_ROLES.ccnlMinimum]: 'Minimo tabellare CCNL (opzionale)',
   }
   return labels[role] ?? role
 }
@@ -191,12 +192,10 @@ export async function parseExcelFromFile(file) {
 }
 
 export { detectColumnRoles } from './column-mapping.js'
+import { enrichEmployeeSalaries, parsePartTimePct } from './salaryMetrics.js'
 
-export function buildNormalizedData(rows, headers, mapping, options = {}) {
+export function buildNormalizedData(rows, headers, mapping) {
   if (!rows?.length || !headers?.length || !mapping) return []
-
-  const payComponentMapping = options.payComponentMapping || mapping.payComponents || {}
-  const ccnlAnnualHours = options.ccnlAnnualHours
 
   const idx = (key) =>
     Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : undefined
@@ -210,15 +209,25 @@ export function buildNormalizedData(rows, headers, mapping, options = {}) {
   const roleIdx = idx(COLUMN_ROLES.role)
   const levelIdx = idx(COLUMN_ROLES.level)
   const descIdx = idx(COLUMN_ROLES.description)
-  const senIdx = idx(COLUMN_ROLES.seniority)
   const roleSenIdx = idx(COLUMN_ROLES.roleSeniority)
   const perfIdx = idx(COLUMN_ROLES.performanceScore)
-  const ptIdx = idx(COLUMN_ROLES.percPartTime)
+  const senIdx = idx(COLUMN_ROLES.seniority)
+  const ptIdx = idx(COLUMN_ROLES.partTimePct)
   const hireIdx = idx(COLUMN_ROLES.hireDate)
-  const minCcnlIdx = idx(COLUMN_ROLES.ccnlMinimum)
-  const qualIdx = idx(COLUMN_ROLES.legalQualification)
+  const structIdx = idx(COLUMN_ROLES.structuralComponents)
+  const indivIdx = idx(COLUMN_ROLES.individualComponents)
+  const ccnlMinIdx = idx(COLUMN_ROLES.ccnlMinimum)
 
-  const parseNumber = parseMoney
+  const parseNumber = (value) => {
+    if (value == null || value === '') return 0
+    if (typeof value === 'number') return value
+    const cleaned = String(value)
+      .replace(/\./g, '')
+      .replace(/,/g, '.')
+      .replace(/[^\d.-]/g, '')
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : 0
+  }
 
   function parsePerformanceScore(value) {
     if (value == null || value === '') return null
@@ -239,61 +248,30 @@ export function buildNormalizedData(rows, headers, mapping, options = {}) {
     return null
   }
 
-  function yearsFromHireDate(d) {
-    if (!d) return null
-    const ms = Date.now() - d.getTime()
-    if (ms < 0) return null
-    return ms / (365.25 * 24 * 3600 * 1000)
-  }
-
-  function sumComponentsForRow(row, category) {
-    let sum = 0
-    for (const [colKey, cat] of Object.entries(payComponentMapping)) {
-      if (cat !== category) continue
-      const col = Number(colKey)
-      if (!Number.isFinite(col)) continue
-      sum += parseNumber(row[col])
-    }
-    return sum
-  }
-
   return rows
-    .map((row, rowIdx) => {
+    .map((row, idx) => {
       const genderRaw = genderIdx != null ? row[genderIdx] : null
       const gender = normalizeGender(genderRaw)
 
-      const baseSalary = baseIdx != null ? parseNumber(row[baseIdx]) : 0
-      let structuralSum = sumComponentsForRow(row, PAY_COMPONENT_CATEGORIES.STRUCTURAL)
-      let individualSum = sumComponentsForRow(row, PAY_COMPONENT_CATEGORIES.INDIVIDUAL)
+      const base = baseIdx != null ? parseNumber(row[baseIdx]) : 0
+      const variableLegacy = varIdx != null ? parseNumber(row[varIdx]) : 0
+      const structural =
+        structIdx != null ? parseNumber(row[structIdx]) : null
+      const individual =
+        indivIdx != null ? parseNumber(row[indivIdx]) : null
 
-      const legacyVar = varIdx != null ? parseNumber(row[varIdx]) : 0
-      if (legacyVar > 0 && structuralSum === 0 && individualSum === 0) {
-        individualSum = legacyVar
-      }
-
-      const hireFromCol = hireIdx != null ? parseHireDate(row[hireIdx]) : null
-      const hireFromSen = senIdx != null ? parseHireDate(row[senIdx]) : null
-      const hireDate = hireFromCol || hireFromSen
-
-      const percPartTime = ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100
-      const totalOverride = totalIdx != null ? parseNumber(row[totalIdx]) : null
-
-      const comp = computeCompensationMetrics(
-        {
-          baseSalary,
-          structuralSum,
-          individualSum,
-          percPartTime,
-          totalSalaryOverride: totalOverride > 0 ? totalOverride : null,
-        },
-        { ccnlAnnualHours },
-      )
-
-      return {
-        index: rowIdx + 1,
+      return enrichEmployeeSalaries({
+        index: idx + 1,
         gender,
         name: nameIdx != null ? row[nameIdx] : null,
-        ...comp,
+        baseSalary: base,
+        structuralComponents: structural,
+        individualComponents: individual,
+        variableComponents: variableLegacy,
+        totalSalary:
+          totalIdx != null
+            ? parseNumber(row[totalIdx])
+            : undefined,
         category: catIdx != null ? row[catIdx] : null,
         role: roleIdx != null ? row[roleIdx] : null,
         level: levelIdx != null ? row[levelIdx] : null,
@@ -301,11 +279,10 @@ export function buildNormalizedData(rows, headers, mapping, options = {}) {
         seniority: senIdx != null ? row[senIdx] : null,
         roleSeniority: roleSenIdx != null ? row[roleSenIdx] : null,
         performanceScore: perfIdx != null ? parsePerformanceScore(row[perfIdx]) : null,
-        hireDate,
-        seniorityYears: yearsFromHireDate(hireDate),
-        ccnlMinimum: minCcnlIdx != null ? parseNumber(row[minCcnlIdx]) || null : null,
-        legalQualification: qualIdx != null ? normalizeLegalQualification(row[qualIdx]) : null,
-      }
+        partTimePct: ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100,
+        hireDate: hireIdx != null ? row[hireIdx] : null,
+        ccnlMinimum: ccnlMinIdx != null ? parseNumber(row[ccnlMinIdx]) : null,
+      })
     })
     .filter((r) => r.gender === 'M' || r.gender === 'F')
 }

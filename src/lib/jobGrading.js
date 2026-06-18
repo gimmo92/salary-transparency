@@ -1,4 +1,5 @@
 import { COLUMN_ROLES } from './excel.js'
+import { enrichEmployeeSalaries, parsePartTimePct } from './salaryMetrics.js'
 import {
   TRANSPARENCY_FLAT_FACTORS,
   TRANSPARENCY_FACTOR_IDS,
@@ -422,6 +423,11 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
   const seniorityIdx = idx(COLUMN_ROLES.seniority)
   const roleSeniorityIdx = idx(COLUMN_ROLES.roleSeniority)
   const perfScoreIdx = idx(COLUMN_ROLES.performanceScore)
+  const ptIdx = idx(COLUMN_ROLES.partTimePct)
+  const hireIdx = idx(COLUMN_ROLES.hireDate)
+  const structIdx = idx(COLUMN_ROLES.structuralComponents)
+  const indivIdx = idx(COLUMN_ROLES.individualComponents)
+  const ccnlMinIdx = idx(COLUMN_ROLES.ccnlMinimum)
 
   const parseNumber = (value) => {
     if (value == null || value === '' || value === 'N/D') return 0
@@ -444,11 +450,14 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
 
   return rows.map((row, index) => {
     const base = baseIdx != null ? parseNumber(row[baseIdx]) : 0
-    const variable = varIdx != null ? parseNumber(row[varIdx]) : 0
-    const total = totalIdx != null ? parseNumber(row[totalIdx]) : base + variable
+    const variableLegacy = varIdx != null ? parseNumber(row[varIdx]) : 0
+    const structural = structIdx != null ? parseNumber(row[structIdx]) : null
+    const individual = indivIdx != null ? parseNumber(row[indivIdx]) : null
+    const total =
+      totalIdx != null ? parseNumber(row[totalIdx]) : undefined
     const levelRaw = levelIdx != null ? row[levelIdx] : null
     const role = roleIdx != null ? row[roleIdx] : null
-    return {
+    return enrichEmployeeSalaries({
       index: index + 1,
       name: nameIdx != null ? row[nameIdx] : null,
       role,
@@ -460,9 +469,14 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       roleSeniority: roleSeniorityIdx != null ? parseSeniorityDisplay(row[roleSeniorityIdx]) : null,
       performanceScore: perfScoreIdx != null ? parsePerformanceScore(row[perfScoreIdx]) : null,
       baseSalary: base,
-      variableComponents: variable,
+      structuralComponents: structural,
+      individualComponents: individual,
+      variableComponents: variableLegacy,
       totalSalary: total,
-    }
+      partTimePct: ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100,
+      hireDate: hireIdx != null ? row[hireIdx] : null,
+      ccnlMinimum: ccnlMinIdx != null ? parseNumber(row[ccnlMinIdx]) : null,
+    })
   })
 }
 
