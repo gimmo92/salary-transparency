@@ -7,6 +7,10 @@ import {
   buildNormalizedData,
   COLUMN_ROLES,
   getRoleLabel,
+  MAPPING_UI_SECTIONS,
+  isMappingRoleAssigned,
+  missingRequiredMappingRoles,
+  missingRecommendedMappingRoles,
 } from './lib/excel.js'
 import { mergeColumnMappings } from './lib/column-mapping.js'
 import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './lib/indicators.js'
@@ -36,8 +40,13 @@ import {
   SALARY_METRICS,
   getComparisonValue,
   getMetricLabel,
-  classifyGapStatus,
 } from './lib/salaryMetrics.js'
+import {
+  analyzeGenderPayGap,
+  computeCcnlLevelComparison,
+  countGapStatuses,
+  gapStatusCssClass,
+} from './lib/gapGroupAnalysis.js'
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -141,25 +150,19 @@ const geminiApiUnreachable = ref(false)
 /** Area scroll principale (per scroll in alto aprendo giustificativo) */
 const mainWrapRef = ref(null)
 
-const allRoleKeys = [
-  COLUMN_ROLES.gender,
-  COLUMN_ROLES.employeeName,
-  COLUMN_ROLES.baseSalary,
-  COLUMN_ROLES.structuralComponents,
-  COLUMN_ROLES.individualComponents,
-  COLUMN_ROLES.variableComponents,
-  COLUMN_ROLES.totalSalary,
-  COLUMN_ROLES.partTimePct,
-  COLUMN_ROLES.hireDate,
-  COLUMN_ROLES.category,
-  COLUMN_ROLES.role,
-  COLUMN_ROLES.level,
-  COLUMN_ROLES.description,
-  COLUMN_ROLES.seniority,
-  COLUMN_ROLES.roleSeniority,
-  COLUMN_ROLES.performanceScore,
-  COLUMN_ROLES.ccnlMinimum,
-]
+const mappingUiSections = MAPPING_UI_SECTIONS
+
+const mappingRequiredMissing = computed(() =>
+  missingRequiredMappingRoles(columnMapping.value).map(getRoleLabel),
+)
+const mappingRecommendedMissing = computed(() =>
+  missingRecommendedMappingRoles(columnMapping.value).map(getRoleLabel),
+)
+const canConfirmMapping = computed(() => mappingRequiredMissing.value.length === 0)
+
+function isMappingFieldAssigned(role) {
+  return isMappingRoleAssigned(columnMapping.value, role)
+}
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
 const showStorico = computed(() => activeSection.value === 'storico')
@@ -260,41 +263,29 @@ function personComparisonSalary(person) {
   return getComparisonValue(person, euDashboardMetric.value, { fte: euDashboardFte.value })
 }
 
+function gapAnalysisOptionsForGroup(people, hasJustification = false) {
+  return {
+    getSalary: personComparisonSalary,
+    isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
+    hasJustification,
+  }
+}
+
+function analyzeHayBandGap(hayBand) {
+  const hasJustification = hayBandHasJustifications(hayBand)
+  return analyzeGenderPayGap(hayBand?.people || [], gapAnalysisOptionsForGroup(hayBand?.people, hasJustification))
+}
+
 function hayBandAdjustedGapPct(hayBand) {
-  const people = (hayBand?.people || []).filter(
-    (p) =>
-      personComparisonSalary(p) != null &&
-      !isPersonJustified(p) &&
-      !isQuartileAnalysisExcluded(p?.index),
-  )
-  const men = people.filter((p) => p.gender === 'M').map(personComparisonSalary)
-  const women = people.filter((p) => p.gender === 'F').map(personComparisonSalary)
-  if (!men.length || !women.length) return null
-  const menAvg = men.reduce((s, v) => s + v, 0) / men.length
-  const womenAvg = women.reduce((s, v) => s + v, 0) / women.length
-  if (!menAvg) return null
-  return ((menAvg - womenAvg) / menAvg) * 100
+  return analyzeHayBandGap(hayBand).gapMean
 }
 
 function hayBandGapStatus(hayBand) {
-  const people = (hayBand?.people || []).filter(
-    (p) => personComparisonSalary(p) != null && !isQuartileAnalysisExcluded(p?.index),
-  )
-  const nM = people.filter((p) => p.gender === 'M').length
-  const nF = people.filter((p) => p.gender === 'F').length
-  return classifyGapStatus(hayBandAdjustedGapPct(hayBand), {
-    hasJustification: hayBandHasJustifications(hayBand),
-    nM,
-    nF,
-  })
+  return analyzeHayBandGap(hayBand).status
 }
 
 function hayBandGapStatusClass(hayBand) {
-  const st = hayBandGapStatus(hayBand)
-  if (st === 'red') return 'gap-status-red'
-  if (st === 'yellow') return 'gap-status-yellow'
-  if (st === 'insufficient') return 'gap-status-insufficient'
-  return 'gap-status-green'
+  return gapStatusCssClass(hayBandGapStatus(hayBand))
 }
 
 function hayBandHasJustifications(hayBand) {
@@ -327,6 +318,45 @@ const jobGradingGapsToVerifyCount = computed(() => {
   }
   return n
 })
+
+const ccnlLevelRows = computed(() =>
+  computeCcnlLevelComparison(jobResults.value, {
+    getSalary: personComparisonSalary,
+    isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
+    isPersonJustified,
+  }),
+)
+
+const ccnlLevelGapsToFixCount = computed(() => countGapStatuses(ccnlLevelRows.value).toFix)
+const ccnlLevelGapsToVerifyCount = computed(() => countGapStatuses(ccnlLevelRows.value).toVerify)
+
+const expandedCcnlLevels = ref(new Set())
+
+function toggleCcnlLevel(levelKey) {
+  const key = String(levelKey || '')
+  if (expandedCcnlLevels.value.has(key)) expandedCcnlLevels.value.delete(key)
+  else expandedCcnlLevels.value.add(key)
+  expandedCcnlLevels.value = new Set(expandedCcnlLevels.value)
+}
+
+function isCcnlLevelExpanded(levelKey) {
+  return expandedCcnlLevels.value.has(String(levelKey || ''))
+}
+
+function ccnlLevelGapStatusClass(row) {
+  return gapStatusCssClass(row?.status)
+}
+
+function ccnlLevelHasActionableGap(row) {
+  return row && !row.insufficientSample && (row.status === 'yellow' || row.status === 'red')
+}
+
+function formatDeviationVsGenderLevelMean(person) {
+  const v = person?.deviationFromGenderMeanPct
+  if (v == null || !Number.isFinite(v)) return '–'
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toFixed(1)}%`
+}
 
 function personGenderClass(gender) {
   if (gender === 'M') return 'gender-male'
@@ -429,6 +459,7 @@ function startNuovaAnalisi() {
   euDashboardMetric.value = SALARY_METRICS.livello
   euDashboardFte.value = true
   justifyingPerson.value = null
+  expandedCcnlLevels.value = new Set()
 }
 
 function goToMappingFromResults() {
@@ -516,6 +547,12 @@ async function processLoadedWorkbook(rows, headers) {
 
 async function confirmMapping() {
   if (analysisLoading.value) return
+  const missing = missingRequiredMappingRoles(columnMapping.value)
+  if (missing.length) {
+    uploadError.value =
+      'Mappa le colonne obbligatorie: ' + missing.map(getRoleLabel).join(', ') + '.'
+    return
+  }
   analysisLoading.value = true
   uploadError.value = ''
   justifyingPerson.value = null
@@ -760,6 +797,101 @@ function saveJustify() {
 function cancelJustify() {
   justifyingLevel.value = null
   justifyText.value = ''
+}
+
+function openCcnlPersonJustify(person, levelRow) {
+  const key = String(person?.index || '')
+  if (!key || !levelRow) return
+
+  const peopleInLevel = levelRow.people?.length ? levelRow.people : [person]
+  const seniorityYearsList = peopleInLevel
+    .map((p) => seniorityToYearsNumeric(p.seniority))
+    .filter((n) => n != null && Number.isFinite(n) && n >= 0)
+  const levelAvgSeniorityYears = seniorityYearsList.length ? meanLocal(seniorityYearsList) : null
+  const seniorityYearsRaw = seniorityToYearsNumeric(person?.seniority)
+  const seniorityPctVsLevel =
+    levelAvgSeniorityYears != null &&
+    levelAvgSeniorityYears > 0 &&
+    seniorityYearsRaw != null &&
+    Number.isFinite(seniorityYearsRaw)
+      ? ((seniorityYearsRaw - levelAvgSeniorityYears) / levelAvgSeniorityYears) * 100
+      : null
+
+  const perfScores = peopleInLevel.map((p) => personPerformanceScore(p)).filter((v) => v != null)
+  const levelAvgPerformance = perfScores.length ? meanLocal(perfScores) : null
+  const performanceScore = personPerformanceScore(person)
+
+  const roleSeniorityYearsRaw = seniorityToYearsNumeric(person?.roleSeniority)
+  const roleSeniorityYearsList = peopleInLevel
+    .map((p) => seniorityToYearsNumeric(p.roleSeniority))
+    .filter((n) => n != null && Number.isFinite(n) && n >= 0)
+  const levelAvgRoleSeniorityYears = roleSeniorityYearsList.length
+    ? meanLocal(roleSeniorityYearsList)
+    : null
+  const roleSeniorityPctVsLevel =
+    levelAvgRoleSeniorityYears != null &&
+    levelAvgRoleSeniorityYears > 0 &&
+    roleSeniorityYearsRaw != null &&
+    Number.isFinite(roleSeniorityYearsRaw)
+      ? ((roleSeniorityYearsRaw - levelAvgRoleSeniorityYears) / levelAvgRoleSeniorityYears) * 100
+      : null
+  const performancePctVsLevel =
+    levelAvgPerformance != null &&
+    levelAvgPerformance > 0 &&
+    performanceScore != null
+      ? ((performanceScore - levelAvgPerformance) / levelAvgPerformance) * 100
+      : null
+
+  const displayName =
+    person?.name && String(person.name).trim()
+      ? String(person.name).trim()
+      : `Dipendente #${key}`
+  const gapPct = levelRow.gapMean
+
+  justifyingPerson.value = {
+    key,
+    displayName,
+    label: `${person?.role || '–'} · ${displayName}`,
+    seniority: person?.seniority || null,
+    seniorityYearsRaw,
+    fascAvgSeniorityYears: levelAvgSeniorityYears,
+    seniorityPctVsFascia: seniorityPctVsLevel,
+    roleSeniority: person?.roleSeniority || null,
+    roleSeniorityYearsRaw,
+    fascAvgRoleSeniorityYears: levelAvgRoleSeniorityYears,
+    roleSeniorityPctVsFascia: roleSeniorityPctVsLevel,
+    performanceScore,
+    fascAvgPerformance: levelAvgPerformance,
+    performancePctVsFascia: performancePctVsLevel,
+    roleName: person?.role || '–',
+    bandNum: levelRow.bandNum,
+    levelLabel: levelRow.levelLabel,
+    fasciaId: null,
+    fasciaRange: null,
+    baseSalary: person.baseSalary,
+    variableComponents: person.variableComponents,
+    totalSalary: person.totalSalary,
+    gender: person.gender,
+    roleScoresBlock: null,
+    trWeightedScore: null,
+    trParametricScore100: null,
+    gapFasciaPct: gapPct,
+    gapFasciaFormatted: gapPct != null ? formatGapMforF(gapPct, levelRow.hasJustification) : '–',
+    avgFasciaSalary: null,
+    personDeviationFromFasciaPct: person.deviationFromGenderMeanPct ?? null,
+    avgSalaryMen: levelRow.avgM,
+    avgSalaryWomen: levelRow.avgF,
+    nMenFascia: levelRow.nM ?? 0,
+    nWomenFascia: levelRow.nF ?? 0,
+    justifySource: 'ccnl_level',
+  }
+  resultsTabBeforeJustify.value = resultsTab.value
+  resultsTab.value = 'person_justify'
+  justifyText.value = personJustifications.value[key] || ''
+  nextTick(() => {
+    mainWrapRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  })
 }
 
 function openPersonJustify(person, roleBlock, band, hayBand) {
@@ -2189,20 +2321,54 @@ function exportJobGradingPdf() {
       <!-- Step 2: Mapping colonne unificato -->
       <div v-else-if="analisiStep === 'mapping'" class="analisi-content">
         <h2 class="analisi-title">Verifica assegnazione colonne</h2>
-        <p class="analisi-desc">Associa ogni dato richiesto alla colonna corrispondente del file.</p>
-        <div class="mapping-table">
-          <div class="mapping-row header">
-            <span>Dato richiesto</span>
-            <span>Colonna nel file</span>
-          </div>
-          <div v-for="role in allRoleKeys" :key="role" class="mapping-row">
-            <span>{{ getRoleLabel(role) }}</span>
-            <select v-model.number="columnMapping[role]" class="mapping-select" :disabled="analysisLoading">
-              <option :value="undefined">– Nessuna –</option>
-              <option v-for="(h, i) in excelHeaders" :key="i" :value="i">{{ h }}</option>
-            </select>
+        <p class="analisi-desc">
+          Associa ogni dato alla colonna corrispondente del file. I campi <strong>obbligatori</strong> sono necessari per avviare l'analisi;
+          quelli consigliati migliorano l'affidabilità del gap retributivo.
+        </p>
+
+        <div
+          v-for="section in mappingUiSections"
+          :key="section.id"
+          class="mapping-section"
+        >
+          <h3 class="mapping-section-title">{{ section.title }}</h3>
+          <div class="mapping-table">
+            <div class="mapping-row header">
+              <span>Dato</span>
+              <span>Colonna nel file</span>
+            </div>
+            <div
+              v-for="field in section.fields"
+              :key="field.role"
+              class="mapping-row"
+              :class="{
+                'mapping-row--required': field.badge === 'required',
+                'mapping-row--recommended': field.badge === 'recommended',
+                'mapping-row--unmapped-required': field.badge === 'required' && !isMappingFieldAssigned(field.role),
+                'mapping-row--unmapped-recommended': field.badge === 'recommended' && !isMappingFieldAssigned(field.role),
+              }"
+            >
+              <span class="mapping-field-label">
+                <span class="mapping-field-name">{{ field.label }}</span>
+                <span v-if="field.badge === 'required'" class="mapping-badge mapping-badge--required">Obbligatorio</span>
+                <span v-else-if="field.badge === 'recommended'" class="mapping-badge mapping-badge--recommended">Consigliato</span>
+                <span v-if="field.hint" class="mapping-hint">{{ field.hint }}</span>
+              </span>
+              <select v-model.number="columnMapping[field.role]" class="mapping-select" :disabled="analysisLoading">
+                <option :value="undefined">– Nessuna –</option>
+                <option v-for="(h, i) in excelHeaders" :key="i" :value="i">{{ h }}</option>
+              </select>
+            </div>
           </div>
         </div>
+
+        <p v-if="mappingRequiredMissing.length" class="mapping-error">
+          Per procedere mappa: <strong>{{ mappingRequiredMissing.join(', ') }}</strong>.
+        </p>
+        <p v-else-if="mappingRecommendedMissing.length" class="mapping-warn">
+          Consigliato mappare anche: {{ mappingRecommendedMissing.join(', ') }}.
+        </p>
+
         <div class="settings-panel">
           <h3 class="settings-title">Metodo di analisi</h3>
           <p class="settings-hint">Il job grading raggruppa i dipendenti per livello di inquadramento CCNL. Ogni livello viene analizzato con retribuzione media e deviazione.</p>
@@ -2212,7 +2378,7 @@ function exportJobGradingPdf() {
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         <div class="mapping-actions">
           <button class="btn-secondary" :disabled="analysisLoading" @click="goToUpload">Indietro</button>
-          <button class="btn-primary" :disabled="analysisLoading" @click="confirmMapping">
+          <button class="btn-primary" :disabled="analysisLoading || !canConfirmMapping" @click="confirmMapping">
             <span v-if="analysisLoading">Generazione analisi...</span>
             <span v-else>Esegui analisi</span>
           </button>
@@ -2241,11 +2407,20 @@ function exportJobGradingPdf() {
           <button
             type="button"
             class="subtab"
+            :class="{ active: resultsTab === 'ccnl_level' }"
+            :disabled="jobResults.length === 0"
+            @click="resultsTab = 'ccnl_level'"
+          >
+            Confronto per livello CCNL
+          </button>
+          <button
+            type="button"
+            class="subtab"
             :class="{ active: resultsTab === 'job_grading' }"
             :disabled="jobResults.length === 0"
             @click="resultsTab = 'job_grading'"
           >
-            Lavori di pari valore
+            Analisi per fascia (integrativa)
           </button>
           <button
             v-if="justifyingPerson != null"
@@ -2526,6 +2701,172 @@ function exportJobGradingPdf() {
           </template>
         </div>
 
+        <!-- Confronto per livello CCNL (reporting normativo) -->
+        <div v-show="resultsTab === 'ccnl_level'" class="ccnl-level-wrap">
+          <template v-if="jobResults.length > 0">
+            <div class="ccnl-level-head">
+              <h3 class="ccnl-level-title">Confronto retributivo per livello CCNL</h3>
+              <p class="ccnl-level-desc muted">
+                Confronto M/F per livello di inquadramento contrattuale, senza fasce di punteggio interno.
+              </p>
+              <div class="eu-salary-toggle">
+                <span class="eu-salary-toggle-label">Metrica retributiva:</span>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
+              </div>
+              <div class="eu-salary-toggle eu-salary-toggle--fte">
+                <span class="eu-salary-toggle-label">Confronto su:</span>
+                <button type="button" :class="['toggle-btn', { active: euDashboardFte }]" @click="euDashboardFte = true">Normalizzato FTE</button>
+                <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
+              </div>
+              <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
+              <p v-else class="mapping-warn ccnl-fte-warn">Valori non normalizzati per part-time: il gap può risultare sovrastimato.</p>
+            </div>
+
+            <div
+              class="job-grading-gap-alert"
+              :class="{
+                'job-grading-gap-alert--ok': ccnlLevelGapsToFixCount === 0 && ccnlLevelGapsToVerifyCount === 0,
+                'job-grading-gap-alert--verify': ccnlLevelGapsToVerifyCount > 0 && ccnlLevelGapsToFixCount === 0,
+              }"
+              role="status"
+            >
+              <span class="job-grading-gap-alert__icon" aria-hidden="true">
+                <svg v-if="ccnlLevelGapsToFixCount > 0 || ccnlLevelGapsToVerifyCount > 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M12 3l10 18H2L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </span>
+              <div class="job-grading-gap-alert__body">
+                <div class="job-grading-gap-alert__counts">
+                  <span class="job-grading-gap-alert__stat">
+                    <strong class="job-grading-gap-alert__count job-grading-gap-alert__count--red">{{ ccnlLevelGapsToFixCount }}</strong>
+                    <span class="job-grading-gap-alert__label">Da correggere</span>
+                  </span>
+                  <span class="job-grading-gap-alert__stat">
+                    <strong class="job-grading-gap-alert__count job-grading-gap-alert__count--yellow">{{ ccnlLevelGapsToVerifyCount }}</strong>
+                    <span class="job-grading-gap-alert__label">Da verificare</span>
+                  </span>
+                </div>
+                <span class="job-grading-gap-alert__hint">(livelli CCNL con |gap| M/F &gt; 5%; esclusi campioni &lt; 3 per genere)</span>
+              </div>
+            </div>
+
+            <div class="job-table ccnl-level-table">
+              <div class="job-row header ccnl-level-row">
+                <span>Livello CCNL</span>
+                <span>N tot.</span>
+                <span>N uomini</span>
+                <span>N donne</span>
+                <span>Media M</span>
+                <span>Media F</span>
+                <span>Gap medio</span>
+                <span>Gap mediano</span>
+                <span>Stato</span>
+              </div>
+              <template v-for="row in ccnlLevelRows" :key="'ccnl-' + row.levelKey">
+                <div
+                  class="job-row ccnl-level-row clickable"
+                  :class="{ 'ccnl-level-row--insufficient': row.insufficientSample }"
+                  @click="toggleCcnlLevel(row.levelKey)"
+                >
+                  <span class="ccnl-level-label">
+                    <strong>{{ isCcnlLevelExpanded(row.levelKey) ? '▾' : '▸' }} {{ row.levelLabel }}</strong>
+                    <svg
+                      v-if="ccnlLevelHasActionableGap(row)"
+                      class="hay-band-alert-icon"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      width="14"
+                      height="14"
+                      title="Gap M/F oltre soglia nel livello"
+                    >
+                      <path d="M12 3l10 18H2L12 3z" />
+                      <path d="M12 9v5" />
+                      <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
+                    </svg>
+                  </span>
+                  <span>{{ row.nTotal }}</span>
+                  <span>{{ row.nM }}</span>
+                  <span>{{ row.nF }}</span>
+                  <span>{{ row.avgM != null ? formatNum(row.avgM) : '–' }}</span>
+                  <span>{{ row.avgF != null ? formatNum(row.avgF) : '–' }}</span>
+                  <span>
+                    <span
+                      v-if="row.insufficientSample"
+                      class="ccnl-gap-na muted"
+                      :title="row.sampleMsg"
+                    >n/d</span>
+                    <span
+                      v-else-if="row.gapMean != null"
+                      class="hay-band-gap-pill"
+                      :class="[ccnlLevelGapStatusClass(row), { 'gap-alert': ccnlLevelHasActionableGap(row) }]"
+                    >{{ formatGapMforF(row.gapMean, row.hasJustification) }}</span>
+                    <span v-else class="muted">–</span>
+                  </span>
+                  <span>
+                    <span v-if="row.insufficientSample" class="ccnl-gap-na muted">n/d</span>
+                    <span v-else-if="row.gapMedian != null">{{ formatGapMforF(row.gapMedian) }}</span>
+                    <span v-else class="muted">–</span>
+                  </span>
+                  <span>
+                    <span
+                      v-if="row.insufficientSample"
+                      class="mapping-badge mapping-badge--insufficient"
+                      :title="row.sampleMsg"
+                    >Campione ridotto</span>
+                    <span
+                      v-else
+                      class="ccnl-status-badge"
+                      :class="ccnlLevelGapStatusClass(row)"
+                    >{{ row.status === 'green' ? 'OK' : row.status === 'yellow' ? 'Da verificare' : row.status === 'red' ? 'Da correggere' : '–' }}</span>
+                  </span>
+                </div>
+                <div v-if="isCcnlLevelExpanded(row.levelKey)" class="people-detail ccnl-level-detail">
+                  <p v-if="row.insufficientSample" class="muted ccnl-sample-note">{{ row.sampleMsg }}</p>
+                  <div class="people-header ccnl-person-header">
+                    <span>#</span>
+                    <span>Persona</span>
+                    <span>Genere</span>
+                    <span>Ruolo</span>
+                    <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
+                    <span>{{ euMetricLabelShort }}</span>
+                    <span>Giustificativo</span>
+                  </div>
+                  <div
+                    v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
+                    :key="'ccnl-p-' + row.levelKey + '-' + p.index"
+                    class="people-row ccnl-person-row"
+                  >
+                    <span>{{ p.index }}</span>
+                    <span>{{ p.name || '–' }}</span>
+                    <span><span :class="personGenderClass(p.gender)">{{ p.gender }}</span></span>
+                    <span>{{ p.role || '–' }}</span>
+                    <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderLevelMean(p) }}</span>
+                    <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
+                    <span class="hay-person-justify-cell">
+                      <button
+                        v-if="ccnlLevelHasActionableGap(row) || personJustifications[String(p.index)]"
+                        type="button"
+                        class="btn-justify-person"
+                        :class="{ 'has-note': personJustifications[String(p.index)] }"
+                        title="Apri o modifica il giustificativo (gap M/F nel livello CCNL)"
+                        @click.stop="openCcnlPersonJustify(p, row)"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                        + Giustificativo
+                      </button>
+                      <span v-else class="muted hay-person-no-justify">–</span>
+                    </span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <p v-else class="no-data-msg">Nessun livello CCNL disponibile. Verifica il mapping del file.</p>
+        </div>
+
         <div v-show="resultsTab === 'job_grading'">
           <template v-if="jobResults.length > 0">
           <div
@@ -2750,9 +3091,15 @@ function exportJobGradingPdf() {
               Inserisci giustificativo per {{ justifyingPerson.displayName }}
             </h2>
             <p class="person-justify-tab-lead">
-              <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
-              · <strong>Livello CCNL</strong> {{ justifyingPerson.bandNum }} ({{ justifyingPerson.levelLabel }})
-              · <strong>{{ justifyingPerson.fasciaId }}</strong> — range /100 {{ justifyingPerson.fasciaRange }}
+              <template v-if="justifyingPerson.justifySource === 'ccnl_level'">
+                <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
+                · <strong>Livello CCNL</strong> {{ justifyingPerson.levelLabel }}
+              </template>
+              <template v-else>
+                <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
+                · <strong>Livello CCNL</strong> {{ justifyingPerson.bandNum }} ({{ justifyingPerson.levelLabel }})
+                · <strong>{{ justifyingPerson.fasciaId }}</strong> — range /100 {{ justifyingPerson.fasciaRange }}
+              </template>
             </p>
 
             <div class="person-justify-summary-grid">
@@ -2765,7 +3112,7 @@ function exportJobGradingPdf() {
                   <li><strong>Genere:</strong> {{ justifyingPerson.gender === 'M' ? 'M' : justifyingPerson.gender === 'F' ? 'F' : '–' }}</li>
                 </ul>
               </div>
-              <div class="person-justify-summary-card person-justify-summary-card--hay">
+              <div v-if="justifyingPerson.justifySource !== 'ccnl_level'" class="person-justify-summary-card person-justify-summary-card--hay">
                 <h4 class="person-justify-summary-title">Punteggi ruolo (0–100)</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
                   <li v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id">
@@ -2784,13 +3131,13 @@ function exportJobGradingPdf() {
                   {{ formatSeniorityDisplay(justifyingPerson.seniority) }}
                 </p>
                 <p class="justify-metric-line">
-                  <strong>Scostamento vs media della fascia:</strong>
+                  <strong>Scostamento vs {{ justifyingPerson.justifySource === 'ccnl_level' ? 'media del livello' : 'media della fascia' }}:</strong>
                   <span v-if="justifyingPerson.seniorityPctVsFascia != null" class="justify-metric-pct">
                     {{ formatPctSigned(justifyingPerson.seniorityPctVsFascia) }}
                   </span>
                   <span v-else class="muted">n/d</span>
                   <span v-if="justifyingPerson.fascAvgSeniorityYears != null" class="justify-metric-ref muted">
-                    (media fascia: {{ justifyingPerson.fascAvgSeniorityYears.toFixed(1) }} anni)
+                    (media {{ justifyingPerson.justifySource === 'ccnl_level' ? 'livello' : 'fascia' }}: {{ justifyingPerson.fascAvgSeniorityYears.toFixed(1) }} anni)
                   </span>
                 </p>
                 <p v-if="justifyingPerson.seniorityPctVsFascia == null" class="justify-metric-note muted">
@@ -2804,13 +3151,13 @@ function exportJobGradingPdf() {
                   {{ formatSeniorityDisplay(justifyingPerson.roleSeniority) }}
                 </p>
                 <p class="justify-metric-line">
-                  <strong>Scostamento vs media della fascia:</strong>
+                  <strong>Scostamento vs {{ justifyingPerson.justifySource === 'ccnl_level' ? 'media del livello' : 'media della fascia' }}:</strong>
                   <span v-if="justifyingPerson.roleSeniorityPctVsFascia != null" class="justify-metric-pct">
                     {{ formatPctSigned(justifyingPerson.roleSeniorityPctVsFascia) }}
                   </span>
                   <span v-else class="muted">n/d</span>
                   <span v-if="justifyingPerson.fascAvgRoleSeniorityYears != null" class="justify-metric-ref muted">
-                    (media fascia: {{ justifyingPerson.fascAvgRoleSeniorityYears.toFixed(1) }} anni)
+                    (media {{ justifyingPerson.justifySource === 'ccnl_level' ? 'livello' : 'fascia' }}: {{ justifyingPerson.fascAvgRoleSeniorityYears.toFixed(1) }} anni)
                   </span>
                 </p>
                 <p v-if="justifyingPerson.roleSeniorityPctVsFascia == null && justifyingPerson.roleSeniority == null" class="justify-metric-note muted">
@@ -2824,13 +3171,13 @@ function exportJobGradingPdf() {
                   {{ justifyingPerson.performanceScore != null ? justifyingPerson.performanceScore + ' / 100' : 'Non presente nel file' }}
                 </p>
                 <p class="justify-metric-line">
-                  <strong>Scostamento vs media della fascia:</strong>
+                  <strong>Scostamento vs {{ justifyingPerson.justifySource === 'ccnl_level' ? 'media del livello' : 'media della fascia' }}:</strong>
                   <span v-if="justifyingPerson.performancePctVsFascia != null" class="justify-metric-pct">
                     {{ formatPctSigned(justifyingPerson.performancePctVsFascia) }}
                   </span>
                   <span v-else class="muted">n/d</span>
                   <span v-if="justifyingPerson.fascAvgPerformance != null" class="justify-metric-ref muted">
-                    (media fascia: {{ justifyingPerson.fascAvgPerformance.toFixed(1) }})
+                    (media {{ justifyingPerson.justifySource === 'ccnl_level' ? 'livello' : 'fascia' }}: {{ justifyingPerson.fascAvgPerformance.toFixed(1) }})
                   </span>
                 </p>
               </div>
@@ -5212,6 +5559,77 @@ function exportJobGradingPdf() {
   grid-template-columns: 1fr 1.35fr 0.72fr 0.72fr 0.65fr 1fr 1fr;
 }
 
+.job-row.ccnl-level-row {
+  grid-template-columns: 1.2fr 0.55fr 0.65fr 0.65fr 0.9fr 0.9fr 1fr 1fr 0.85fr;
+  font-size: 0.8125rem;
+}
+.ccnl-level-row--insufficient {
+  opacity: 0.88;
+}
+.ccnl-level-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.ccnl-level-wrap {
+  margin-top: 0.5rem;
+}
+.ccnl-level-head {
+  margin-bottom: 1rem;
+}
+.ccnl-level-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.ccnl-level-desc {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+}
+.ccnl-fte-warn {
+  margin: 0.35rem 0 0;
+}
+.ccnl-status-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.mapping-badge--insufficient {
+  background: rgba(100, 116, 139, 0.15);
+  color: #475569;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.ccnl-level-detail {
+  padding: 0.5rem 0.85rem 0.85rem;
+  background: var(--bg-page, #f8fafc);
+  border-bottom: 1px solid var(--border-light);
+}
+.ccnl-sample-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+}
+.people-header.ccnl-person-header,
+.people-row.ccnl-person-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1.2fr 3rem 1fr 1fr 1fr 7rem;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.8125rem;
+}
+.people-row.ccnl-person-row {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.people-row.ccnl-person-row:last-child {
+  border-bottom: none;
+}
+
 .job-row.clickable {
   cursor: pointer;
   transition: background 0.12s;
@@ -6081,6 +6499,74 @@ function exportJobGradingPdf() {
   color: #1e40af;
   font-size: 0.875rem;
   line-height: 1.45;
+}
+
+.mapping-section {
+  margin-bottom: 1.25rem;
+}
+.mapping-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.mapping-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.mapping-field-name {
+  font-weight: 500;
+  line-height: 1.35;
+}
+.mapping-hint {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+.mapping-badge {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.12rem 0.4rem;
+  border-radius: 4px;
+}
+.mapping-badge--required {
+  background: rgba(220, 38, 38, 0.1);
+  color: #991b1b;
+}
+.mapping-badge--recommended {
+  background: rgba(202, 138, 4, 0.12);
+  color: #854d0e;
+}
+.mapping-row--unmapped-required {
+  background: rgba(254, 242, 242, 0.5);
+}
+.mapping-row--unmapped-recommended {
+  background: rgba(254, 252, 232, 0.35);
+}
+.mapping-error {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(254, 242, 242, 0.95);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  color: #991b1b;
+  font-size: 0.875rem;
+}
+.mapping-warn {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(254, 252, 232, 0.95);
+  border: 1px solid rgba(202, 138, 4, 0.3);
+  color: #854d0e;
+  font-size: 0.875rem;
 }
 
 .mapping-table {

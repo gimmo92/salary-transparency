@@ -33,22 +33,117 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.gender]: 'Genere (M/F)',
     [COLUMN_ROLES.employeeName]: 'Nome dipendente',
     [COLUMN_ROLES.baseSalary]: 'Retribuzione base annua',
-    [COLUMN_ROLES.variableComponents]: 'Componenti variabili',
-    [COLUMN_ROLES.totalSalary]: 'Retribuzione totale annua',
-    [COLUMN_ROLES.category]: 'Categoria / inquadramento',
+    [COLUMN_ROLES.variableComponents]: 'Componenti variabili (legacy)',
+    [COLUMN_ROLES.totalSalary]: 'Retribuzione totale annua (legacy)',
+    [COLUMN_ROLES.category]: 'Categoria / qualifica legale (operaio/impiegato/quadro)',
     [COLUMN_ROLES.role]: 'Ruolo',
     [COLUMN_ROLES.level]: 'Livello contrattuale (es. Q, B1, C3)',
     [COLUMN_ROLES.description]: 'Descrizione ruolo',
-    [COLUMN_ROLES.seniority]: 'Anzianità (anni, data ingresso o simile)',
-    [COLUMN_ROLES.roleSeniority]: 'Anzianità nel ruolo (anni o data)',
-    [COLUMN_ROLES.performanceScore]: 'Punteggio performance (0–100)',
-    [COLUMN_ROLES.partTimePct]: '% part-time (default 100 = full time)',
-    [COLUMN_ROLES.hireDate]: 'Data assunzione',
-    [COLUMN_ROLES.structuralComponents]: 'Componenti strutturali (continuative/fisse)',
-    [COLUMN_ROLES.individualComponents]: 'Componenti individuali (discrezionali/una-tantum)',
-    [COLUMN_ROLES.ccnlMinimum]: 'Minimo tabellare CCNL (opzionale)',
+    [COLUMN_ROLES.seniority]: 'Anzianità',
+    [COLUMN_ROLES.roleSeniority]: 'Anzianità nel ruolo',
+    [COLUMN_ROLES.performanceScore]: 'Punteggio performance',
+    [COLUMN_ROLES.partTimePct]: '% Part-time',
+    [COLUMN_ROLES.hireDate]: 'Data di assunzione',
+    [COLUMN_ROLES.structuralComponents]: 'Componenti strutturali (voci continuative/fisse)',
+    [COLUMN_ROLES.individualComponents]: 'Componenti individuali (voci discrezionali/una-tantum)',
+    [COLUMN_ROLES.ccnlMinimum]: 'Minimo CCNL',
   }
   return labels[role] ?? role
+}
+
+/** Colonne obbligatorie per avviare l'analisi */
+export const MAPPING_REQUIRED_ROLES = [
+  COLUMN_ROLES.gender,
+  COLUMN_ROLES.level,
+  COLUMN_ROLES.baseSalary,
+]
+
+/** Colonne consigliate per analisi normativa affidabile (non bloccano l'avvio) */
+export const MAPPING_RECOMMENDED_ROLES = [
+  COLUMN_ROLES.partTimePct,
+  COLUMN_ROLES.structuralComponents,
+  COLUMN_ROLES.individualComponents,
+]
+
+/**
+ * Sezioni UI mapping import (necessari vs facoltativi).
+ * @type {Array<{ id: string, title: string, fields: Array<{ role: string, label: string, hint?: string, badge?: 'required'|'recommended' }> }>}
+ */
+export const MAPPING_UI_SECTIONS = [
+  {
+    id: 'necessari',
+    title: 'Necessari (per analisi affidabile)',
+    fields: [
+      { role: COLUMN_ROLES.employeeName, label: 'Nome dipendente' },
+      {
+        role: COLUMN_ROLES.gender,
+        label: 'Genere (M/F)',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.level,
+        label: 'Livello contrattuale (es. Q, B1, C3)',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.baseSalary,
+        label: 'Retribuzione base annua',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.partTimePct,
+        label: '% Part-time',
+        hint: 'Senza, il gap esce probabilmente sovrastimato',
+        badge: 'recommended',
+      },
+      {
+        role: COLUMN_ROLES.structuralComponents,
+        label: 'Componenti strutturali (voci continuative/fisse)',
+        hint: 'Servono per il livello retributivo ex normativa',
+        badge: 'recommended',
+      },
+      {
+        role: COLUMN_ROLES.individualComponents,
+        label: 'Componenti individuali (voci discrezionali/una-tantum)',
+        hint: 'Servono per gap su variabile e % percettori',
+        badge: 'recommended',
+      },
+    ],
+  },
+  {
+    id: 'facoltativi',
+    title: 'Facoltativi',
+    fields: [
+      { role: COLUMN_ROLES.hireDate, label: 'Data di assunzione' },
+      { role: COLUMN_ROLES.seniority, label: 'Anzianità' },
+      { role: COLUMN_ROLES.roleSeniority, label: 'Anzianità nel ruolo' },
+      { role: COLUMN_ROLES.performanceScore, label: 'Punteggio performance' },
+      { role: COLUMN_ROLES.role, label: 'Ruolo', hint: 'Per raggruppare lavori di pari valore' },
+      { role: COLUMN_ROLES.description, label: 'Descrizione ruolo', hint: 'Integra il titolo di ruolo' },
+      {
+        role: COLUMN_ROLES.category,
+        label: 'Categoria / qualifica legale (operaio/impiegato/quadro)',
+      },
+      { role: COLUMN_ROLES.ccnlMinimum, label: 'Minimo CCNL' },
+    ],
+  },
+]
+
+export function isMappingRoleAssigned(mapping, role) {
+  if (!mapping || role == null) return false
+  const idx = mapping[role]
+  return Number.isFinite(idx) && idx >= 0
+}
+
+export function missingRequiredMappingRoles(mapping) {
+  return MAPPING_REQUIRED_ROLES.filter((role) => !isMappingRoleAssigned(mapping, role))
+}
+
+export function missingRecommendedMappingRoles(mapping) {
+  return MAPPING_RECOMMENDED_ROLES.filter((role) => !isMappingRoleAssigned(mapping, role))
 }
 
 function detectHeaderRow(rows) {
