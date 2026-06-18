@@ -5,6 +5,8 @@
 import { mean, median, pctGap } from './indicators.js'
 
 export const EU_GAP_THRESHOLD_PCT = 5
+/** Massimo outlier retributivi mostrati (ordinati per |scostamento| decrescente) */
+export const MAX_QUARTILE_OUTLIERS = 50
 
 export function salaryFieldForMode(mode) {
   return mode === 'base' ? 'baseSalary' : 'totalSalary'
@@ -33,22 +35,23 @@ function percentileSorted(sortedArr, p) {
  * Outlier retributivi: dipendenti la cui retribuzione si scosta di oltre il 5%
  * dalla media generale. Per ogni outlier viene indicato il quartile di appartenenza
  * e la percentuale di scostamento dalla media.
- * @returns {Array<{ index: number, name: unknown, gender: string, salary: number, quartile: number, deviationPct: number, reason: string }>}
+ * @returns {{ rows: Array, total: number, truncated: boolean }}
  */
 export function computeQuartileOutliers(normalized, salaryMode) {
+  const empty = { rows: [], total: 0, truncated: false }
   const field = salaryFieldForMode(salaryMode)
   const norm = (normalized || []).filter(
     (r) => (r.gender === 'M' || r.gender === 'F') && validSalary(r, field),
   )
-  if (norm.length < 2) return []
+  if (norm.length < 2) return empty
 
   const avg = norm.reduce((s, r) => s + r[field], 0) / norm.length
 
-  const sorted = [...norm].sort((a, b) => a[field] - b[field])
-  const len = sorted.length
+  const sortedBySalary = [...norm].sort((a, b) => a[field] - b[field])
+  const len = sortedBySalary.length
   const qSize = Math.ceil(len / 4) || 1
   const quartileOf = (r) => {
-    const pos = sorted.indexOf(r)
+    const pos = sortedBySalary.indexOf(r)
     return Math.min(4, Math.floor(pos / qSize) + 1)
   }
 
@@ -71,7 +74,13 @@ export function computeQuartileOutliers(normalized, salaryMode) {
     }
   }
 
-  return outliers.sort((a, b) => Math.abs(b.deviationPct) - Math.abs(a.deviationPct))
+  const ranked = outliers.sort((a, b) => Math.abs(b.deviationPct) - Math.abs(a.deviationPct))
+  const total = ranked.length
+  return {
+    rows: ranked.slice(0, MAX_QUARTILE_OUTLIERS),
+    total,
+    truncated: total > MAX_QUARTILE_OUTLIERS,
+  }
 }
 
 function normByIndexMap(normalized) {

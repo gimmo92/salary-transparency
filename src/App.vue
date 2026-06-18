@@ -961,9 +961,12 @@ const euDashboard = computed(() =>
   ),
 )
 
-const quartileOutlierRows = computed(() =>
+const quartileOutlierResult = computed(() =>
   computeQuartileOutliers(genderNormalizedForAnalysis.value, euDashboardSalaryMode.value),
 )
+const quartileOutlierRows = computed(() => quartileOutlierResult.value.rows)
+const quartileOutlierTruncated = computed(() => quartileOutlierResult.value.truncated)
+const quartileOutlierTotal = computed(() => quartileOutlierResult.value.total)
 
 const quartileExcludedEntries = computed(() => {
   const cache = genderNormalizedCache.value
@@ -2361,6 +2364,9 @@ function exportJobGradingPdf() {
                 si scosta di oltre il <strong>5%</strong> dalla media generale.
                 Per ogni outlier è indicato il quartile di appartenenza e lo scostamento percentuale.
                 Con un giustificativo testuale il dipendente viene <strong>escluso dall’analisi</strong> (KPI, quartili, gap per livello, fasce job grading).
+              </p>
+              <p v-if="quartileOutlierTruncated" class="muted eu-outlier-cap-note">
+                Visualizzati al massimo 50 outlier: i {{ quartileOutlierRows.length }} con scostamento maggiore (su {{ quartileOutlierTotal }} rilevati).
               </p>
               <div v-if="quartileOutlierRows.length === 0" class="muted">
                 Nessun outlier rilevato (o dati insufficienti: servono almeno 2 persone con retribuzione valida).
