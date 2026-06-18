@@ -116,11 +116,10 @@ function rowGapStatus(gapPct, nM, nF, hasJustification = false) {
  * @param {Array} normalized - output buildNormalizedData (M/F)
  * @param {Array} jobResults - output enrichWithDeviation(groupByLevel(...))
  * @param {string} metric - SALARY_METRICS.*
- * @param {{ fte?: boolean, hasBandJustification?: (sub) => boolean }} [options]
+ * @param {{ fte?: boolean }} [options]
  */
 export function computeEuGenderDashboard(normalized, jobResults, metric, options = {}) {
   const fte = options.fte !== false
-  const hasBandJustification = options.hasBandJustification || (() => false)
   const field = salaryFieldForMode(metric, { fte })
   const norm = normalized || []
   const jr = jobResults || []
@@ -297,8 +296,7 @@ export function computeEuGenderDashboard(normalized, jobResults, metric, options
       const avgM = mean(mP.map((r) => r[field]))
       const avgF = mean(fP.map((r) => r[field]))
       row.gap = pctGap(avgM, avgF)
-      const justified = hasBandJustification(sub)
-      const st = rowGapStatus(row.gap, mP.length, fP.length, justified)
+      const st = rowGapStatus(row.gap, mP.length, fP.length, false)
       Object.assign(row, st)
       if (row.status === 'yellow') bandsToVerify += 1
       if (row.status === 'red') bandsToFix += 1
