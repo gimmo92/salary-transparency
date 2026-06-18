@@ -33,11 +33,3 @@ export async function computeIndicatorsWithGemini(normalizedData) {
 export async function scoreJobRolesWithGemini(roles) {
   return postJson('/api/gemini/job-scoring', { roles })
 }
-
-export async function suggestJustificationWithGemini(roleData) {
-  return postJson('/api/gemini/justify', roleData)
-}
-
-export async function benchmarkRoleMarketWithSerper(payload) {
-  return postJson('/api/benchmark/role', payload)
-}

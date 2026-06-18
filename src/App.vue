@@ -13,8 +13,6 @@ import { computeIndicators, computeBandGenderGaps, computeAdjustedGap } from './
 import {
   suggestColumnMappingWithGemini,
   computeIndicatorsWithGemini,
-  suggestJustificationWithGemini,
-  benchmarkRoleMarketWithSerper,
 } from './lib/gemini.js'
 import {
   buildNormalizedJobGradingData,
@@ -37,7 +35,6 @@ import {
 import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import VueApexCharts from 'vue3-apexcharts'
 
 const activeSection = ref('analisi')
 
@@ -150,7 +147,6 @@ const allRoleKeys = [
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
 const showStorico = computed(() => activeSection.value === 'storico')
-const showBenchmarkLab = computed(() => activeSection.value === 'benchmark_lab')
 
 // Storico
 const storicoList = ref([])
@@ -691,31 +687,6 @@ const justifyingLevel = ref(null)
 const justifyText = ref('')
 const personJustifications = ref({})
 const justifyingPerson = ref(null)
-const justifyAiLoading = ref(false)
-const justifyAiOptions = ref([])
-const benchmarkLoading = ref(false)
-const benchmarkError = ref('')
-const benchmarkResult = ref(null)
-const benchmarkExcludedKeys = ref([])
-const BENCHMARK_TEST_ROLES = [
-  'Product Manager',
-  'Controller',
-  'Customer Success Specialist',
-  'Data Scientist',
-  'HR Business Partner',
-  'Supply Chain Planner',
-  'Cloud Architect',
-  'Compliance Officer',
-  'Content Strategist',
-  'Operations Manager',
-]
-const benchmarkTestRole = ref(BENCHMARK_TEST_ROLES[0])
-const benchmarkTestLoading = ref(false)
-const benchmarkTestError = ref('')
-const benchmarkTestResult = ref(null)
-const benchmarkTestExcludedKeys = ref([])
-/** Errore ultima esportazione PDF benchmark (giustificativo o tab test) */
-const benchmarkPdfExportError = ref('')
 
 function openJustify(level) {
   justifyingLevel.value = level
@@ -786,10 +757,6 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
       ? String(person.name).trim()
       : `Dipendente #${key}`
   const gapPct = hayBandAdjustedGapPct(hayBand)
-  benchmarkResult.value = null
-  benchmarkError.value = ''
-  benchmarkPdfExportError.value = ''
-  justifyAiOptions.value = []
 
   justifyingPerson.value = {
     key,
@@ -821,7 +788,7 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
     gapFasciaPct: gapPct,
     gapFasciaFormatted:
       gapPct != null ? formatGapMforF(gapPct, hayBandHasJustifications(hayBand)) : '–',
-    /** Dati fascia per prompt AI (non confondere con retribuzione del singolo) */
+    /** Dati fascia per contesto giustificativo */
     avgFasciaSalary: hayBand.avgTotalSalary ?? null,
     personDeviationFromFasciaPct: person.deviationFromHayBandMeanPct ?? null,
     avgSalaryMen: hayBand.avgSalaryMen,
@@ -839,68 +806,6 @@ function openPersonJustify(person, roleBlock, band, hayBand) {
   })
 }
 
-function canSuggestPersonJustifyAI() {
-  return !!justifyingPerson.value
-}
-
-function applyAiSuggestionOption(text) {
-  const t = String(text || '').trim()
-  if (!t) return
-  const cur = justifyText.value.trim()
-  justifyText.value = cur ? `${cur}\n\n${t}` : t
-}
-
-function normalizeAiSuggestionOptions(payload) {
-  const direct = Array.isArray(payload?.suggestions)
-    ? payload.suggestions
-    : [payload?.suggestion || payload]
-  const cleaned = direct
-    .map((x) => String(x || '').trim())
-    .filter(Boolean)
-    .map((s) => s.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim())
-  const out = []
-  for (const s of cleaned) {
-    try {
-      const parsed = JSON.parse(s)
-      if (Array.isArray(parsed?.suggestions)) {
-        out.push(...parsed.suggestions.map((y) => String(y || '').trim()).filter(Boolean))
-        continue
-      }
-      if (Array.isArray(parsed)) {
-        out.push(...parsed.map((y) => String(y || '').trim()).filter(Boolean))
-        continue
-      }
-    } catch {}
-    const match = s.match(/"suggestions"\s*:\s*\[(?<arr>[\s\S]*?)\]/i)
-    if (match?.groups?.arr) {
-      try {
-        const arr = JSON.parse(`[${match.groups.arr}]`)
-        if (Array.isArray(arr)) {
-          out.push(...arr.map((y) => String(y || '').trim()).filter(Boolean))
-          continue
-        }
-      } catch {}
-    }
-    out.push(s)
-  }
-  return [...new Set(out.filter((x) => x && !/^\{?\s*"suggestions"\s*:/i.test(x)))].slice(0, 3)
-}
-
-function benchmarkSalaryPoint(a) {
-  if (!a) return null
-  if (Number.isFinite(Number(a.salaryAnnualEur))) return Number(a.salaryAnnualEur)
-  const min = Number(a.salaryMinAnnualEur)
-  const max = Number(a.salaryMaxAnnualEur)
-  if (Number.isFinite(min) && Number.isFinite(max)) return (min + max) / 2
-  if (Number.isFinite(min)) return min
-  if (Number.isFinite(max)) return max
-  return null
-}
-
-function benchmarkSourceKey(a) {
-  return String(a?.link || a?.title || a?.i || '')
-}
-
 function pdfClamp(v, min, max) {
   return Math.max(min, Math.min(max, v))
 }
@@ -912,56 +817,6 @@ function pdfEnsureSpace(doc, y, needed, top = 16, bottom = 14) {
     return top
   }
   return y
-}
-
-function drawBenchmarkBoxplotPdf(doc, x, y, width, height, stats, roleSalary) {
-  const min = Number(stats?.min)
-  const q1 = Number(stats?.q1)
-  const median = Number(stats?.median)
-  const q3 = Number(stats?.q3)
-  const max = Number(stats?.max)
-  if (![min, q1, median, q3, max].every((n) => Number.isFinite(n))) return 0
-  const span = max - min
-  const rel = (v) => (span <= 0 ? 0.5 : (v - min) / span)
-  const mapX = (v) => x + pdfClamp(rel(v), 0, 1) * width
-
-  const yMid = y + height / 2
-  const boxTop = y + height * 0.28
-  const boxBottom = y + height * 0.72
-
-  doc.setDrawColor(148, 163, 184)
-  doc.setLineWidth(0.5)
-  doc.line(x, yMid, x + width, yMid)
-
-  doc.setDrawColor(10, 108, 210)
-  doc.setLineWidth(1)
-  doc.line(mapX(min), yMid, mapX(max), yMid)
-
-  doc.setFillColor(126, 179, 232)
-  doc.rect(mapX(q1), boxTop, Math.max(1, mapX(q3) - mapX(q1)), boxBottom - boxTop, 'FD')
-
-  doc.setDrawColor(15, 23, 42)
-  doc.setLineWidth(1)
-  doc.line(mapX(median), boxTop, mapX(median), boxBottom)
-  doc.line(mapX(min), boxTop + 1, mapX(min), boxBottom - 1)
-  doc.line(mapX(max), boxTop + 1, mapX(max), boxBottom - 1)
-
-  const role = Number(roleSalary)
-  if (Number.isFinite(role)) {
-    const rx = mapX(role)
-    doc.setFillColor(194, 65, 12)
-    doc.circle(pdfClamp(rx, x, x + width), yMid, 1.6, 'F')
-  }
-
-  doc.setFontSize(7)
-  doc.setTextColor(71, 85, 105)
-  doc.text(`Min ${formatNum(min)}`, x, y + height + 4)
-  doc.text(`Q1 ${formatNum(q1)}`, mapX(q1), y + height + 4, { align: 'center' })
-  doc.text(`Med ${formatNum(median)}`, mapX(median), y + height + 7, { align: 'center' })
-  doc.text(`Q3 ${formatNum(q3)}`, mapX(q3), y + height + 4, { align: 'center' })
-  doc.text(`Max ${formatNum(max)}`, x + width, y + height + 4, { align: 'right' })
-  doc.setTextColor(0, 0, 0)
-  return height + 10
 }
 
 function drawLevelGapBarsPdf(doc, x, y, width, rowHeight, rows) {
@@ -995,394 +850,6 @@ function drawLevelGapBarsPdf(doc, x, y, width, rowHeight, rows) {
   return curY - y + 2
 }
 
-function benchmarkPercentileSorted(sorted, p) {
-  if (!sorted.length) return null
-  const idx = (sorted.length - 1) * p
-  const lo = Math.floor(idx)
-  const hi = Math.ceil(idx)
-  if (lo === hi) return sorted[lo]
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
-}
-
-function benchmarkStatsFromAnnouncements(announcements) {
-  const values = (announcements || [])
-    .map((a) => benchmarkSalaryPoint(a))
-    .filter((v) => Number.isFinite(v) && v > 0)
-    .sort((a, b) => a - b)
-  if (!values.length) return null
-  return {
-    n: values.length,
-    min: values[0],
-    q1: benchmarkPercentileSorted(values, 0.25),
-    median: benchmarkPercentileSorted(values, 0.5),
-    q3: benchmarkPercentileSorted(values, 0.75),
-    max: values[values.length - 1],
-  }
-}
-
-function applyBenchmarkExclusions(result, excludedKeys) {
-  if (!result) return null
-  const excluded = new Set(excludedKeys || [])
-  const announcements = (result.announcements || []).filter((a) => !excluded.has(benchmarkSourceKey(a)))
-  return {
-    ...result,
-    announcements,
-    stats: benchmarkStatsFromAnnouncements(announcements),
-  }
-}
-
-const benchmarkDisplayResult = computed(() =>
-  applyBenchmarkExclusions(benchmarkResult.value, benchmarkExcludedKeys.value),
-)
-const benchmarkTestDisplayResult = computed(() =>
-  applyBenchmarkExclusions(benchmarkTestResult.value, benchmarkTestExcludedKeys.value),
-)
-
-function excludeBenchmarkAnnouncement(a) {
-  const key = benchmarkSourceKey(a)
-  if (!key) return
-  if (!benchmarkExcludedKeys.value.includes(key)) {
-    benchmarkExcludedKeys.value = [...benchmarkExcludedKeys.value, key]
-  }
-}
-
-function excludeBenchmarkTestAnnouncement(a) {
-  const key = benchmarkSourceKey(a)
-  if (!key) return
-  if (!benchmarkTestExcludedKeys.value.includes(key)) {
-    benchmarkTestExcludedKeys.value = [...benchmarkTestExcludedKeys.value, key]
-  }
-}
-
-function boxMarkerPct(stats, roleSalary) {
-  if (!stats || !Number.isFinite(Number(roleSalary))) return null
-  const min = Number(stats.min)
-  const max = Number(stats.max)
-  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null
-  const pct = ((Number(roleSalary) - min) / (max - min)) * 100
-  return Math.max(0, Math.min(100, pct))
-}
-
-function buildBenchmarkChartSeries(result) {
-  const s = result?.stats
-  if (!s) return []
-  const min = Number(s.min)
-  const q1 = Number(s.q1)
-  const median = Number(s.median)
-  const q3 = Number(s.q3)
-  const max = Number(s.max)
-  if (![min, q1, median, q3, max].every((n) => Number.isFinite(n))) return []
-  const series = [
-    {
-      type: 'boxPlot',
-      data: [{ x: 'Benchmark', y: [min, q1, median, q3, max] }],
-    },
-  ]
-  const roleSalary = Number(result?.roleSalary)
-  if (Number.isFinite(roleSalary)) {
-    series.push({
-      type: 'scatter',
-      data: [{ x: 'Benchmark', y: roleSalary }],
-    })
-  }
-  return series
-}
-
-const benchmarkChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkDisplayResult.value))
-const benchmarkTestChartSeries = computed(() => buildBenchmarkChartSeries(benchmarkTestDisplayResult.value))
-
-const benchmarkChartOptions = computed(() => ({
-  chart: {
-    type: 'boxPlot',
-    toolbar: { show: false },
-    animations: { enabled: true },
-    fontFamily: 'Open Sans, system-ui, sans-serif',
-  },
-  stroke: { width: 1.4 },
-  plotOptions: {
-    boxPlot: {
-      colors: {
-        upper: '#7eb3e8',
-        lower: '#0A6CD2',
-      },
-    },
-  },
-  markers: {
-    size: [0, 7],
-    strokeWidth: 1,
-    strokeColors: '#ffffff',
-    colors: ['#0A6CD2', '#c2410c'],
-  },
-  xaxis: {
-    labels: { show: false },
-    axisBorder: { show: false },
-    axisTicks: { show: false },
-    tooltip: { enabled: false },
-  },
-  yaxis: {
-    labels: {
-      formatter: (val) => formatNum(val),
-    },
-  },
-  tooltip: {
-    shared: false,
-    intersect: false,
-    custom: ({ seriesIndex, dataPointIndex, w }) => {
-      if (seriesIndex === 0) {
-        const y = w.globals.initialSeries[0].data[dataPointIndex]?.y || []
-        return `<div class="benchmark-chart-tip"><strong>Benchmark</strong><br/>Min ${formatNum(y[0])}<br/>Q1 ${formatNum(y[1])}<br/>Mediana ${formatNum(y[2])}<br/>Q3 ${formatNum(y[3])}<br/>Max ${formatNum(y[4])}</div>`
-      }
-      const roleSalary = Number(benchmarkResult.value?.roleSalary)
-      return `<div class="benchmark-chart-tip"><strong>Ruolo</strong><br/>${formatNum(roleSalary)}</div>`
-    },
-  },
-  legend: { show: false },
-}))
-
-async function runSalaryBenchmarkAnalysis() {
-  if (!justifyingPerson.value || benchmarkLoading.value) return
-  benchmarkLoading.value = true
-  benchmarkError.value = ''
-  benchmarkPdfExportError.value = ''
-  benchmarkExcludedKeys.value = []
-  try {
-    const j = justifyingPerson.value
-    const payload = {
-      role: j.roleName || '',
-      country: 'it',
-      language: 'it',
-    }
-    const data = await benchmarkRoleMarketWithSerper(payload)
-    const ads = (data?.announcements || []).map((a) => ({
-      ...a,
-      benchmarkSalary: benchmarkSalaryPoint(a),
-    }))
-    benchmarkResult.value = {
-      role: data?.role || payload.role,
-      announcements: ads,
-      stats: data?.stats || null,
-      roleSalary: Number.isFinite(Number(j.totalSalary)) ? Number(j.totalSalary) : null,
-    }
-  } catch (err) {
-    benchmarkError.value = `Analisi benchmark non riuscita: ${err?.message || String(err)}`
-    benchmarkResult.value = null
-  } finally {
-    benchmarkLoading.value = false
-  }
-}
-
-async function runBenchmarkTestAnalysis() {
-  const role = String(benchmarkTestRole.value || '').trim()
-  if (!role || benchmarkTestLoading.value) return
-  benchmarkTestLoading.value = true
-  benchmarkTestError.value = ''
-  benchmarkPdfExportError.value = ''
-  benchmarkTestExcludedKeys.value = []
-  try {
-    const data = await benchmarkRoleMarketWithSerper({
-      role,
-      country: 'it',
-      language: 'it',
-    })
-    const ads = (data?.announcements || []).map((a) => ({
-      ...a,
-      benchmarkSalary: benchmarkSalaryPoint(a),
-    }))
-    benchmarkTestResult.value = {
-      role: data?.role || role,
-      announcements: ads,
-      stats: data?.stats || null,
-      roleSalary: null,
-    }
-  } catch (err) {
-    benchmarkTestError.value = `Analisi benchmark non riuscita: ${err?.message || String(err)}`
-    benchmarkTestResult.value = null
-  } finally {
-    benchmarkTestLoading.value = false
-  }
-}
-
-function slugForBenchmarkPdfFilename(s) {
-  const raw = String(s || 'benchmark')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\-]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-  return raw.slice(0, 48) || 'benchmark'
-}
-
-/**
- * Esporta in PDF il risultato benchmark corrente (annunci inclusi dopo eventuali esclusioni).
- * @param result Oggetto come benchmarkDisplayResult / benchmarkTestDisplayResult
- * @param options.source 'justify' | 'lab'
- */
-function exportBenchmarkPdf(result, options = {}) {
-  try {
-    benchmarkPdfExportError.value = ''
-    if (!result) {
-      benchmarkPdfExportError.value = 'Nessun risultato benchmark da esportare.'
-      return
-    }
-    const sourceLabel =
-      options.source === 'lab' ? 'Benchmark test rapido' : 'Giustificativo dipendente'
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-    const pageWidth = doc.internal.pageSize.getWidth()
-    let y = 16
-
-    doc.setFontSize(15)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Analisi benchmark retributivi', pageWidth / 2, y, { align: 'center' })
-    y += 6
-    doc.setFontSize(9)
-    doc.setFont('helvetica', 'normal')
-    doc.text(`${sourceLabel} · ${new Date().toLocaleString('it-IT')}`, pageWidth / 2, y, { align: 'center' })
-    y += 9
-
-    doc.setFontSize(11)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Riepilogo', 14, y)
-    y += 5
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'normal')
-    doc.text(`Ruolo ricercato: ${result.role || '–'}`, 14, y)
-    y += 5
-    doc.text('Paese: Italia · Fonte annunci: ricerca web (Serper)', 14, y)
-    y += 5
-    const nAds = (result.announcements || []).length
-    doc.text(`Annunci inclusi nell’analisi: ${nAds}`, 14, y)
-    y += 5
-    if (result.roleSalary != null && Number.isFinite(Number(result.roleSalary))) {
-      doc.text(`Retribuzione di riferimento (persona / ruolo): ${formatNum(result.roleSalary)} EUR`, 14, y)
-      y += 5
-    }
-    y += 3
-
-    const st = result.stats
-    if (st && Number.isFinite(Number(st.min))) {
-      autoTable(doc, {
-        startY: y,
-        head: [['Indicatore', 'Valore (EUR)']],
-        body: [
-          ['N annunci', String(st.n ?? nAds)],
-          ['Min', formatNum(st.min)],
-          ['Q1', formatNum(st.q1)],
-          ['Mediana', formatNum(st.median)],
-          ['Q3', formatNum(st.q3)],
-          ['Max', formatNum(st.max)],
-        ],
-        theme: 'grid',
-        headStyles: { fillColor: [10, 108, 210], fontSize: 9 },
-        bodyStyles: { fontSize: 9 },
-        margin: { left: 14, right: 14 },
-      })
-      y = doc.lastAutoTable.finalY + 10
-
-      y = pdfEnsureSpace(doc, y, 30)
-      doc.setFontSize(10)
-      doc.setFont('helvetica', 'bold')
-      doc.text('Grafico distribuzione benchmark (boxplot)', 14, y)
-      y += 4
-      const usedH = drawBenchmarkBoxplotPdf(doc, 14, y, pageWidth - 28, 16, st, result.roleSalary)
-      y += Math.max(18, usedH) + 2
-    } else {
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'italic')
-      doc.setTextColor(90, 90, 90)
-      doc.text('Statistiche di distribuzione non disponibili (nessun RAL numerico utilizzabile).', 14, y)
-      doc.setTextColor(0, 0, 0)
-      y += 8
-    }
-
-    const announcements = result.announcements || []
-    if (announcements.length) {
-      y = pdfEnsureSpace(doc, y, 26)
-      doc.setFontSize(11)
-      doc.setFont('helvetica', 'bold')
-      doc.text('Annunci inclusi', 14, y)
-      y += 5
-      const body = announcements.map((a, i) => {
-        const title = String(a.title || '–').slice(0, 400)
-        const salTxt = String(a.salaryText || '–').slice(0, 200)
-        const norm = a.benchmarkSalary != null ? formatNum(a.benchmarkSalary) : '–'
-        const link = String(a.link || '–').slice(0, 500)
-        return [String(i + 1), title, salTxt, norm, link]
-      })
-      autoTable(doc, {
-        startY: y,
-        head: [['#', 'Titolo', 'RAL testuale', 'RAL norm.', 'Link']],
-        body,
-        theme: 'grid',
-        headStyles: { fillColor: [10, 108, 210], fontSize: 7 },
-        bodyStyles: { fontSize: 6.5, overflow: 'linebreak' },
-        columnStyles: {
-          0: { cellWidth: 9, halign: 'center' },
-          1: { cellWidth: 42 },
-          2: { cellWidth: 28 },
-          3: { halign: 'right', cellWidth: 22 },
-          4: { cellWidth: 'auto' },
-        },
-        margin: { left: 14, right: 14 },
-      })
-    } else {
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'italic')
-      doc.setTextColor(90, 90, 90)
-      doc.text('Nessun annuncio con RAL utilizzabile nella selezione corrente.', 14, y)
-      doc.setTextColor(0, 0, 0)
-    }
-
-    const day = new Date().toISOString().slice(0, 10)
-    doc.save(`benchmark-${slugForBenchmarkPdfFilename(result.role)}-${day}.pdf`)
-  } catch (err) {
-    benchmarkPdfExportError.value =
-      'Esportazione PDF benchmark non riuscita: ' + (err?.message || String(err))
-  }
-}
-
-async function suggestPersonJustifyAI() {
-  if (!justifyingPerson.value || justifyAiLoading.value) return
-  justifyAiLoading.value = true
-  justifyAiOptions.value = []
-  try {
-    const j = justifyingPerson.value
-    const bm = benchmarkDisplayResult.value?.stats || null
-    const suggestionData = await suggestJustificationWithGemini({
-      role: j.roleName,
-      level: j.levelLabel,
-      bandId: j.fasciaId,
-      bandRangeLabel: j.fasciaRange,
-      employeeName: j.displayName,
-      gender: j.gender,
-      personBaseSalary: j.baseSalary,
-      personVariableComponents: j.variableComponents,
-      personTotalSalary: j.totalSalary,
-      avgFasciaSalary: j.avgFasciaSalary,
-      personDeviationFromFasciaPct: j.personDeviationFromFasciaPct,
-      genderGapPct: j.gapFasciaPct,
-      avgSalaryMen: j.avgSalaryMen,
-      avgSalaryWomen: j.avgSalaryWomen,
-      nMen: j.nMenFascia,
-      nWomen: j.nWomenFascia,
-      trParametricScore100: j.trParametricScore100,
-      trWeightedScore: j.trWeightedScore,
-      seniorityPctVsFascia: j.seniorityPctVsFascia,
-      performancePctVsFascia: j.performancePctVsFascia,
-      benchmarkN: bm?.n ?? null,
-      benchmarkMedian: bm?.median ?? null,
-      benchmarkQ1: bm?.q1 ?? null,
-      benchmarkQ3: bm?.q3 ?? null,
-      optionsCount: 3,
-    })
-    const options = normalizeAiSuggestionOptions(suggestionData)
-    if (!options.length) return
-    justifyAiOptions.value = options
-  } catch (err) {
-    uploadError.value = `Suggerimento AI non riuscito: ${err?.message || String(err)}`
-  } finally {
-    justifyAiLoading.value = false
-  }
-}
 
 function formatSeniorityDisplay(s) {
   if (s == null || String(s).trim() === '') return '–'
@@ -1415,11 +882,6 @@ function savePersonJustify() {
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
-  justifyAiOptions.value = []
-  benchmarkResult.value = null
-  benchmarkError.value = ''
-  benchmarkPdfExportError.value = ''
-  benchmarkExcludedKeys.value = []
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
 }
@@ -1428,11 +890,6 @@ function cancelPersonJustify() {
   const back = resultsTabBeforeJustify.value || 'job_grading'
   justifyingPerson.value = null
   justifyText.value = ''
-  justifyAiOptions.value = []
-  benchmarkResult.value = null
-  benchmarkError.value = ''
-  benchmarkPdfExportError.value = ''
-  benchmarkExcludedKeys.value = []
   if (personJustifyFileInput.value) personJustifyFileInput.value.value = ''
   resultsTab.value = back
 }
@@ -1456,7 +913,7 @@ const PERSON_JUSTIFY_DOC_INFO_SECTIONS = [
   },
   {
     title: 'Mercato (Eccezioni)',
-    body: 'Report di benchmarking salariale esterno e log dei processi di selezione che provino la scarsità di profili (difficoltà di reperimento).',
+    body: 'Report di benchmarking salariale esterno e documentazione sulla difficoltà di reperimento, se applicabile.',
   },
 ]
 
@@ -3267,118 +2724,6 @@ function exportJobGradingPdf() {
               </div>
             </div>
             <p class="justify-hint">Inserisci un giustificativo sulla posizione retributiva (puoi richiamare anzianità e performance come elementi oggettivi, se coerenti con i dati).</p>
-            <div v-if="canSuggestPersonJustifyAI()" class="justify-ai-row">
-              <button
-                type="button"
-                class="btn-ai"
-                :disabled="justifyAiLoading || !geminiEnabled"
-                @click="suggestPersonJustifyAI"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true">
-                  <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z"/>
-                  <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14z"/>
-                  <path d="M5 14l.7 1.6L7.3 16l-1.6.7L5 18.3l-.7-1.6L2.7 16l1.6-.7L5 14z"/>
-                </svg>
-                <span v-if="justifyAiLoading">Genero opzioni con AI...</span>
-                <span v-else>Suggerisci opzioni AI</span>
-              </button>
-              <span v-if="!geminiEnabled" class="muted justify-ai-note">Claude non attivo in questo ambiente.</span>
-            </div>
-            <div v-if="justifyAiOptions.length" class="justify-ai-options">
-              <div class="justify-ai-options-head">
-                <strong>Opzioni suggerite</strong>
-                <span class="muted">Scegli quella da inserire nel testo</span>
-              </div>
-              <div
-                v-for="(opt, idx) in justifyAiOptions"
-                :key="`ai-opt-${idx}`"
-                class="justify-ai-option-card"
-              >
-                <p class="justify-ai-option-text">{{ opt }}</p>
-                <button type="button" class="btn-outline btn-sm" @click="applyAiSuggestionOption(opt)">
-                  Inserisci opzione {{ idx + 1 }}
-                </button>
-              </div>
-            </div>
-
-            <div class="person-justify-benchmark">
-              <div class="person-justify-benchmark-head">
-                <h3 class="person-justify-benchmark-title">Analisi benchmark retributivi</h3>
-                <div class="person-justify-benchmark-actions">
-                  <button
-                    type="button"
-                    class="btn-secondary"
-                    :disabled="benchmarkLoading"
-                    @click="runSalaryBenchmarkAnalysis"
-                  >
-                    <span v-if="benchmarkLoading">Analizzo annunci...</span>
-                    <span v-else>Avvia analisi</span>
-                  </button>
-                  <button
-                    v-if="benchmarkDisplayResult"
-                    type="button"
-                    class="btn-secondary"
-                    @click="exportBenchmarkPdf(benchmarkDisplayResult, { source: 'justify' })"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="benchmark-pdf-icon" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-                    Esporta PDF
-                  </button>
-                </div>
-              </div>
-              <p v-if="benchmarkPdfExportError" class="upload-error">{{ benchmarkPdfExportError }}</p>
-              <p v-if="benchmarkError" class="upload-error">{{ benchmarkError }}</p>
-
-              <template v-if="benchmarkDisplayResult">
-                <div class="benchmark-summary muted">
-                  <strong>Ruolo:</strong> {{ benchmarkDisplayResult.role || '–' }}
-                  · <strong>Italia</strong> (ricerca Serper)
-                  · <strong>Annunci validi:</strong> {{ benchmarkDisplayResult.announcements.length }}
-                </div>
-                <div class="benchmark-two-col">
-                  <div class="benchmark-col benchmark-col-chart">
-                    <div v-if="benchmarkDisplayResult.stats" class="benchmark-boxplot-wrap">
-                      <VueApexCharts
-                        class="benchmark-apex"
-                        type="boxPlot"
-                        height="280"
-                        :options="benchmarkChartOptions"
-                        :series="benchmarkChartSeries"
-                      />
-                      <p v-if="benchmarkDisplayResult.stats.n === 1" class="muted benchmark-boxplot-note">
-                        Un solo annuncio con RAL disponibile: il boxplot mostra un valore unico ({{ formatNum(benchmarkDisplayResult.stats.median) }} EUR).
-                      </p>
-                      <div class="benchmark-stats-grid">
-                        <span>Min {{ formatNum(benchmarkDisplayResult.stats.min) }}</span>
-                        <span>Q1 {{ formatNum(benchmarkDisplayResult.stats.q1) }}</span>
-                        <span>Mediana {{ formatNum(benchmarkDisplayResult.stats.median) }}</span>
-                        <span>Q3 {{ formatNum(benchmarkDisplayResult.stats.q3) }}</span>
-                        <span>Max {{ formatNum(benchmarkDisplayResult.stats.max) }}</span>
-                        <span v-if="benchmarkDisplayResult.roleSalary != null">Ruolo {{ formatNum(benchmarkDisplayResult.roleSalary) }}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="benchmark-col benchmark-col-sources">
-                    <div v-if="benchmarkDisplayResult.announcements.length" class="benchmark-list">
-                      <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
-                      <ul class="benchmark-list-ul">
-                        <li v-for="(a, idx) in benchmarkDisplayResult.announcements" :key="'bm-' + idx" class="benchmark-item">
-                          <div class="benchmark-item-head">
-                            <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
-                            <span v-else>{{ a.title || 'Annuncio' }}</span>
-                            <button type="button" class="btn-benchmark-exclude" @click="excludeBenchmarkAnnouncement(a)">Escludi</button>
-                          </div>
-                          <span class="muted">
-                            — {{ a.salaryText || 'RAL non testuale' }}
-                            <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
-                          </span>
-                        </li>
-                      </ul>
-                    </div>
-                    <p v-else class="muted">Nessun annuncio con RAL in chiaro trovato per questa ricerca.</p>
-                  </div>
-                </div>
-              </template>
-            </div>
 
             <div class="person-justify-textarea-block">
               <label class="person-justify-textarea-label" for="person-justify-textarea">Testo del giustificativo</label>
@@ -3626,87 +2971,6 @@ function exportJobGradingPdf() {
         <div class="mapping-actions">
           <button class="btn-secondary" @click="loadStorico">Aggiorna</button>
         </div>
-      </div>
-    </template>
-
-    <!-- Benchmark test rapido (senza analisi completa) -->
-    <template v-else-if="showBenchmarkLab">
-      <div class="analisi-content benchmark-lab-panel">
-        <h2 class="analisi-title">Benchmark test rapido</h2>
-        <p class="analisi-desc">
-          Prova la funzione benchmark per ruoli predefiniti senza caricare il file Excel o avviare l'analisi retributiva completa.
-        </p>
-        <div class="benchmark-lab-controls">
-          <label class="benchmark-lab-label" for="benchmark-test-role">Ruolo di test</label>
-          <select id="benchmark-test-role" v-model="benchmarkTestRole" class="mapping-select benchmark-lab-select" :disabled="benchmarkTestLoading">
-            <option v-for="r in BENCHMARK_TEST_ROLES" :key="r" :value="r">{{ r }}</option>
-          </select>
-          <button type="button" class="btn-primary" :disabled="benchmarkTestLoading" @click="runBenchmarkTestAnalysis">
-            <span v-if="benchmarkTestLoading">Analizzo annunci...</span>
-            <span v-else>Avvia analisi benchmark</span>
-          </button>
-          <button
-            v-if="benchmarkTestDisplayResult"
-            type="button"
-            class="btn-secondary"
-            @click="exportBenchmarkPdf(benchmarkTestDisplayResult, { source: 'lab' })"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="benchmark-pdf-icon" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-            Esporta PDF
-          </button>
-        </div>
-        <p v-if="benchmarkPdfExportError" class="upload-error">{{ benchmarkPdfExportError }}</p>
-        <p v-if="benchmarkTestError" class="upload-error">{{ benchmarkTestError }}</p>
-
-        <template v-if="benchmarkTestDisplayResult">
-          <div class="benchmark-summary muted">
-            <strong>Ruolo:</strong> {{ benchmarkTestDisplayResult.role || benchmarkTestRole }}
-            · <strong>Italia</strong> (ricerca Serper)
-            · <strong>Annunci validi:</strong> {{ benchmarkTestDisplayResult.announcements.length }}
-          </div>
-          <div class="benchmark-two-col">
-            <div class="benchmark-col benchmark-col-chart">
-              <div v-if="benchmarkTestDisplayResult.stats" class="benchmark-boxplot-wrap">
-                <VueApexCharts
-                  class="benchmark-apex"
-                  type="boxPlot"
-                  height="280"
-                  :options="benchmarkChartOptions"
-                  :series="benchmarkTestChartSeries"
-                />
-                <p v-if="benchmarkTestDisplayResult.stats.n === 1" class="muted benchmark-boxplot-note">
-                  Un solo annuncio con RAL disponibile: il boxplot mostra un valore unico ({{ formatNum(benchmarkTestDisplayResult.stats.median) }} EUR).
-                </p>
-                <div class="benchmark-stats-grid">
-                  <span>Min {{ formatNum(benchmarkTestDisplayResult.stats.min) }}</span>
-                  <span>Q1 {{ formatNum(benchmarkTestDisplayResult.stats.q1) }}</span>
-                  <span>Mediana {{ formatNum(benchmarkTestDisplayResult.stats.median) }}</span>
-                  <span>Q3 {{ formatNum(benchmarkTestDisplayResult.stats.q3) }}</span>
-                  <span>Max {{ formatNum(benchmarkTestDisplayResult.stats.max) }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="benchmark-col benchmark-col-sources">
-              <div v-if="benchmarkTestDisplayResult.announcements.length" class="benchmark-list">
-                <h4 class="benchmark-list-title">Annunci benchmark con RAL</h4>
-                <ul class="benchmark-list-ul">
-                  <li v-for="(a, idx) in benchmarkTestDisplayResult.announcements" :key="'bm-test-' + idx" class="benchmark-item">
-                    <div class="benchmark-item-head">
-                      <a v-if="a.link" :href="a.link" target="_blank" rel="noopener noreferrer">{{ a.title || a.link }}</a>
-                      <span v-else>{{ a.title || 'Annuncio' }}</span>
-                      <button type="button" class="btn-benchmark-exclude" @click="excludeBenchmarkTestAnnouncement(a)">Escludi</button>
-                    </div>
-                    <span class="muted">
-                      — {{ a.salaryText || 'RAL non testuale' }}
-                      <template v-if="a.benchmarkSalary != null"> (norm. {{ formatNum(a.benchmarkSalary) }})</template>
-                    </span>
-                  </li>
-                </ul>
-              </div>
-              <p v-else class="muted">Nessun annuncio con RAL in chiaro trovato per questo ruolo.</p>
-            </div>
-          </div>
-        </template>
       </div>
     </template>
 
@@ -5056,193 +4320,6 @@ function exportJobGradingPdf() {
   }
 }
 
-.person-justify-benchmark {
-  margin: 1rem 0 1.1rem;
-  padding: 0.85rem 1rem;
-  border: 1px dashed var(--border-light);
-  border-radius: 10px;
-  background: var(--bg-page);
-}
-.person-justify-benchmark-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
-  margin-bottom: 0.5rem;
-}
-.person-justify-benchmark-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-}
-.benchmark-pdf-icon {
-  vertical-align: -3px;
-  margin-right: 0.35rem;
-}
-.person-justify-benchmark-title {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.benchmark-lab-panel {
-  max-width: 1080px;
-}
-.benchmark-lab-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  align-items: end;
-  margin-bottom: 0.75rem;
-}
-.benchmark-lab-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  min-width: 8rem;
-}
-.benchmark-lab-select {
-  min-width: 20rem;
-  max-width: 32rem;
-}
-.benchmark-summary {
-  font-size: 0.8rem;
-  margin-bottom: 0.65rem;
-  line-height: 1.45;
-}
-.benchmark-two-col {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
-  gap: 0.9rem;
-  align-items: start;
-}
-.benchmark-col {
-  min-width: 0;
-}
-.benchmark-col-sources .benchmark-list {
-  margin-top: 0;
-  max-height: 26rem;
-  overflow: auto;
-  padding-right: 0.2rem;
-}
-@media (max-width: 1040px) {
-  .benchmark-two-col {
-    grid-template-columns: 1fr;
-  }
-}
-.benchmark-boxplot-wrap {
-  margin: 0.5rem 0 0.75rem;
-}
-.benchmark-apex {
-  background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
-  padding: 0.4rem 0.35rem 0.15rem;
-}
-:deep(.benchmark-chart-tip) {
-  padding: 0.5rem 0.65rem;
-  font-size: 0.78rem;
-  line-height: 1.4;
-}
-.benchmark-boxplot-note {
-  margin: 0 0 0.5rem;
-  font-size: 0.78rem;
-}
-.benchmark-stats-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-.benchmark-list {
-  margin-top: 0.75rem;
-}
-.benchmark-list-title {
-  margin: 0 0 0.4rem;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.benchmark-list-ul {
-  margin: 0;
-  padding-left: 1.1rem;
-  font-size: 0.8rem;
-  line-height: 1.5;
-}
-.benchmark-item {
-  margin-bottom: 0.35rem;
-}
-.benchmark-item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.btn-benchmark-exclude {
-  border: 1px solid var(--border-light);
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  border-radius: 8px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1;
-  padding: 0.3rem 0.45rem;
-  cursor: pointer;
-}
-.btn-benchmark-exclude:hover {
-  border-color: #d97706;
-  color: #b45309;
-  background: #fff7ed;
-}
-
-.justify-ai-row {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  margin: 0 0 0.9rem;
-  flex-wrap: wrap;
-}
-.justify-ai-row .btn-ai {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.justify-ai-note {
-  font-size: 0.78rem;
-}
-.justify-ai-options {
-  margin: -0.25rem 0 0.95rem;
-  padding: 0.75rem 0.85rem;
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
-  background: var(--bg-page);
-}
-.justify-ai-options-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 0.6rem;
-  align-items: baseline;
-  margin-bottom: 0.55rem;
-  font-size: 0.8rem;
-}
-.justify-ai-option-card {
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  background: var(--bg-card);
-  padding: 0.6rem 0.65rem;
-  margin-bottom: 0.5rem;
-}
-.justify-ai-option-card:last-child {
-  margin-bottom: 0;
-}
-.justify-ai-option-text {
-  margin: 0 0 0.45rem;
-  font-size: 0.83rem;
-  line-height: 1.45;
-  color: var(--text-primary);
-}
 .justify-actions-tab {
   display: flex;
   justify-content: flex-end;
@@ -7094,27 +6171,6 @@ function exportJobGradingPdf() {
   font-size: 0.78rem;
   font-weight: 600;
   color: var(--text-secondary);
-}
-.btn-ai {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--primary, #0a6cd2);
-  border-radius: var(--radius-sm);
-  background: rgba(10, 108, 210, 0.06);
-  color: var(--primary, #0a6cd2);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s;
-  display: inline-flex;
-  align-items: center;
-}
-.btn-ai:hover:not(:disabled) {
-  background: rgba(10, 108, 210, 0.14);
-  box-shadow: 0 2px 8px rgba(10, 108, 210, 0.15);
-}
-.btn-ai:disabled {
-  opacity: 0.6;
-  cursor: wait;
 }
 .spinner-sm {
   display: inline-block;
