@@ -23,6 +23,7 @@ import {
   groupByLevel,
   enrichWithDeviation,
   seniorityToYearsNumeric,
+  normalizeLevelLabel,
 } from './lib/jobGrading.js'
 import {
   TRANSPARENCY_MACRO_AREAS,
@@ -58,6 +59,10 @@ import {
   summarizeGroupCounts,
   attachJustificationsToRows,
 } from './lib/gapReportPayload.js'
+import {
+  buildPayCommunicationPayload,
+  DEFAULT_PAY_CRITERIA_TEXT,
+} from './lib/payCommunicationPayload.js'
 
 const activeSection = ref('analisi')
 
@@ -147,6 +152,12 @@ const reportReferencePeriod = ref('')
 const reportIncludeFascia = ref(true)
 const reportIncludeCostCenter = ref(true)
 const gapReportExportLoading = ref(false)
+
+const PAY_CRITERIA_STORAGE_KEY = 'st-pay-criteria-text'
+const PAY_COMM_MIN_SAMPLE_KEY = 'st-pay-comm-min-sample'
+const payCriteriaText = ref(DEFAULT_PAY_CRITERIA_TEXT)
+const payCommMinSample = ref(3)
+const payCommLoadingIndex = ref(null)
 
 const euMetricLabel = computed(() => getMetricLabel(euDashboardMetric.value))
 const euMetricLabelShort = computed(() => getMetricLabel(euDashboardMetric.value, { short: true }))
@@ -495,6 +506,103 @@ function buildGapReportPayloadForExport() {
       costCenterRows: costCenterRows.value.map(({ people, ...r }) => r),
       costCenterHotspots: costCenterGapHotspots.value,
     },
+  }
+}
+
+function findCcnlLevelRowForPerson(person) {
+  const manual = analysisCcnlName.value.trim()
+  const ccnlKey = String(person?.ccnl ?? manual).trim() || 'N/D'
+  const levelKey = normalizeLevelLabel(person?.level) || 'N/D'
+  const group = ccnlGroups.value.find((g) => g.ccnlKey === ccnlKey)
+  const row = group?.levels?.find((l) => l.levelKey === levelKey)
+  if (!row) return { group, row: null, ccnlKey, levelKey }
+  return {
+    group,
+    row: {
+      ...row,
+      ccnlLabel: group.ccnlLabel,
+      levelLabel: row.levelLabel || levelKey,
+    },
+    ccnlKey,
+    levelKey,
+  }
+}
+
+function loadPayCommSettings() {
+  try {
+    const storedCriteria = localStorage.getItem(PAY_CRITERIA_STORAGE_KEY)
+    payCriteriaText.value = storedCriteria || DEFAULT_PAY_CRITERIA_TEXT
+    const storedMin = Number(localStorage.getItem(PAY_COMM_MIN_SAMPLE_KEY))
+    if (Number.isFinite(storedMin) && storedMin >= 2) payCommMinSample.value = Math.round(storedMin)
+  } catch {
+    payCriteriaText.value = DEFAULT_PAY_CRITERIA_TEXT
+  }
+}
+
+function persistPayCommSettings() {
+  try {
+    localStorage.setItem(PAY_CRITERIA_STORAGE_KEY, payCriteriaText.value)
+    localStorage.setItem(PAY_COMM_MIN_SAMPLE_KEY, String(payCommMinSample.value))
+  } catch {
+    /* ignore quota errors */
+  }
+}
+
+async function exportPayCommunicationPdf(person) {
+  if (payCommLoadingIndex.value != null || !person) return
+  const { row } = findCcnlLevelRowForPerson(person)
+  if (!row) {
+    uploadError.value =
+      'Impossibile generare la comunicazione: livello CCNL o contratto non individuato per questo dipendente.'
+    return
+  }
+  payCommLoadingIndex.value = person.index
+  uploadError.value = ''
+  try {
+    const payload = buildPayCommunicationPayload({
+      person,
+      levelRow: row,
+      companyName: reportCompanyName.value,
+      referencePeriod: reportReferencePeriod.value,
+      criteriaText: payCriteriaText.value,
+      minSample: payCommMinSample.value,
+    })
+    const res = await fetch('/api/report/pay-communication', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      let msg = `Errore ${res.status}`
+      try {
+        const j = await res.json()
+        if (j?.error) msg = j.error
+      } catch {
+        msg = await res.text()
+      }
+      throw new Error(msg)
+    }
+    const blob = await res.blob()
+    const stamp = payload.generatedAtIso.slice(0, 10)
+    const slug = String(payload.employee?.name || person.index)
+      .replace(/[^\w\-àèéìòù]/gi, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 40)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `comunicazione-retributiva-${slug}-${stamp}.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
+    saveStatus.value = `Comunicazione PDF generata per ${payload.employee.name}.`
+    persistPayCommSettings()
+  } catch (err) {
+    uploadError.value =
+      'Generazione comunicazione non riuscita: ' +
+      (err?.message || String(err)) +
+      (geminiApiUnreachable.value ? ' (avvia con vercel dev per le route API)' : '')
+  } finally {
+    payCommLoadingIndex.value = null
   }
 }
 
@@ -1876,6 +1984,7 @@ function cancelIncreaseEdit() {
 
 onMounted(async () => {
   // loadRules() — da ripristinare se si riattiva la sezione Revisione salariale
+  loadPayCommSettings()
   geminiApiUnreachable.value = false
   try {
     const res = await fetch('/api/gemini/status')
@@ -2007,8 +2116,6 @@ onMounted(async () => {
             >
               <span class="mapping-field-label">
                 <span class="mapping-field-name">{{ field.label }}</span>
-                <span v-if="field.badge === 'required'" class="mapping-badge mapping-badge--required">Obbligatorio</span>
-                <span v-else-if="field.badge === 'recommended'" class="mapping-badge mapping-badge--recommended">Consigliato</span>
                 <span v-if="field.hint" class="mapping-hint">{{ field.hint }}</span>
               </span>
               <select v-model.number="columnMapping[field.role]" class="mapping-select" :disabled="analysisLoading">
@@ -2162,6 +2269,38 @@ onMounted(async () => {
                 </button>
                 <span v-if="geminiApiUnreachable" class="muted gap-report-api-hint">Richiede server API (vercel dev o deploy).</span>
               </div>
+            </div>
+
+            <div class="eu-panel pay-comm-settings">
+              <h4 class="eu-panel-title">Comunicazione retributiva individuale (PDF)</h4>
+              <p class="eu-panel-desc muted">
+                Documento di risposta al diritto di informazione retributiva per singolo dipendente.
+                Usa ragione sociale e periodo indicati sopra; generabile da ogni riga dipendente nelle viste di confronto.
+              </p>
+              <label class="gap-report-field pay-comm-criteria-field">
+                <span class="gap-report-field-label">Criteri di determinazione retributiva (Sez. 3, riutilizzati per tutti)</span>
+                <textarea
+                  v-model="payCriteriaText"
+                  class="pay-comm-criteria-textarea"
+                  rows="5"
+                  placeholder="Testo su inquadramento CCNL, anzianità, progressione…"
+                  @blur="persistPayCommSettings"
+                />
+              </label>
+              <label class="gap-report-field pay-comm-min-sample-field">
+                <span class="gap-report-field-label">Soglia minima per media di genere (privacy)</span>
+                <input
+                  v-model.number="payCommMinSample"
+                  type="number"
+                  min="2"
+                  max="20"
+                  class="gap-report-input pay-comm-min-input"
+                  @change="persistPayCommSettings"
+                />
+              </label>
+              <p class="muted pay-comm-hint">
+                Metrica fissa: livello retributivo normalizzato FTE. Medie di categoria per stesso livello CCNL.
+              </p>
             </div>
 
             <p class="eu-legend-line">
@@ -2535,7 +2674,7 @@ onMounted(async () => {
                         <span>Ruolo</span>
                         <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
                         <span>{{ euMetricLabelShort }}</span>
-                        <span>Giustificativo</span>
+                        <span>Azioni</span>
                       </div>
                       <div
                         v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
@@ -2548,7 +2687,17 @@ onMounted(async () => {
                         <span>{{ p.role || '–' }}</span>
                         <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
                         <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
-                        <span class="hay-person-justify-cell">
+                        <span class="hay-person-actions-cell">
+                          <button
+                            type="button"
+                            class="btn-pay-communication"
+                            :disabled="payCommLoadingIndex === p.index"
+                            title="Genera comunicazione retributiva (PDF)"
+                            @click.stop="exportPayCommunicationPdf(p)"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+                            {{ payCommLoadingIndex === p.index ? '…' : 'Comunicazione' }}
+                          </button>
                           <button
                             v-if="ccnlLevelHasActionableGap(row) || personJustifications[String(p.index)]"
                             type="button"
@@ -2679,7 +2828,7 @@ onMounted(async () => {
                     >
                       <div class="people-detail hay-person-detail jg-role-persons-after-table">
                       <div class="people-header hay-person-header">
-                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span class="hay-person-deviation-head" title="Scostamento % retribuzione totale rispetto alla media della fascia">Scost. vs media fascia</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
+                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span class="hay-person-deviation-head" title="Scostamento % retribuzione totale rispetto alla media della fascia">Scost. vs media fascia</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Azioni</span>
                       </div>
                       <div
                         v-for="p in rb.people"
@@ -2726,7 +2875,17 @@ onMounted(async () => {
                         <span>{{ formatNum(p.baseSalary) }}</span>
                         <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
-                        <span class="hay-person-justify-cell">
+                        <span class="hay-person-actions-cell">
+                          <button
+                            type="button"
+                            class="btn-pay-communication"
+                            :disabled="payCommLoadingIndex === p.index"
+                            title="Genera comunicazione retributiva (PDF)"
+                            @click.stop="exportPayCommunicationPdf(p)"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+                            {{ payCommLoadingIndex === p.index ? '…' : 'Comunicazione' }}
+                          </button>
                           <button
                             v-if="hasHayBandDisparity(sub) || personJustifications[String(p.index)]"
                             type="button"
@@ -2876,7 +3035,7 @@ onMounted(async () => {
                     <span>Livello CCNL</span>
                     <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel centro di costo">Scost. vs media genere</span>
                     <span>{{ euMetricLabelShort }}</span>
-                    <span>Giustificativo</span>
+                    <span>Azioni</span>
                   </div>
                   <div
                     v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
@@ -2890,7 +3049,17 @@ onMounted(async () => {
                     <span>{{ p.level || '–' }}</span>
                     <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
                     <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
-                    <span class="hay-person-justify-cell">
+                    <span class="hay-person-actions-cell">
+                      <button
+                        type="button"
+                        class="btn-pay-communication"
+                        :disabled="payCommLoadingIndex === p.index"
+                        title="Genera comunicazione retributiva (PDF)"
+                        @click.stop="exportPayCommunicationPdf(p)"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+                        {{ payCommLoadingIndex === p.index ? '…' : 'Comunicazione' }}
+                      </button>
                       <button
                         v-if="groupHasActionableGap(row) || personJustifications[String(p.index)]"
                         type="button"
@@ -4681,6 +4850,36 @@ onMounted(async () => {
 .gap-report-api-hint {
   font-size: 0.82rem;
 }
+.pay-comm-settings {
+  margin-bottom: 1rem;
+}
+.pay-comm-criteria-field {
+  margin: 0.75rem 0 0.5rem;
+}
+.pay-comm-criteria-textarea {
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-family: inherit;
+  line-height: 1.45;
+  resize: vertical;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+}
+.pay-comm-min-sample-field {
+  max-width: 12rem;
+  margin-bottom: 0.35rem;
+}
+.pay-comm-min-input {
+  max-width: 5rem;
+}
+.pay-comm-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+}
 .eu-dash-title {
   margin: 0 0 0.35rem;
   font-size: 1.15rem;
@@ -5464,7 +5663,7 @@ onMounted(async () => {
 .people-header.ccnl-person-header,
 .people-row.ccnl-person-row {
   display: grid;
-  grid-template-columns: 2.5rem 1.2fr 3rem 1fr 1fr 1fr 7rem;
+  grid-template-columns: 2.5rem 1.2fr 3rem 1fr 1fr 1fr 7rem 10.5rem;
   gap: 0.5rem;
   align-items: center;
   font-size: 0.8125rem;
@@ -5534,7 +5733,7 @@ onMounted(async () => {
 }
 .people-header.cost-center-person-header,
 .people-row.cost-center-person-row {
-  grid-template-columns: 2.5rem 1.1fr 3rem 1fr 0.75fr 1fr 1fr 7rem;
+  grid-template-columns: 2.5rem 1.1fr 3rem 1fr 0.75fr 1fr 1fr 10.5rem;
 }
 .subtab--integrative {
   font-style: normal;
@@ -5940,7 +6139,7 @@ onMounted(async () => {
 
 .hay-person-header,
 .hay-person-row {
-  grid-template-columns: 0.4fr 1.5fr 0.9fr 1fr 1fr 1fr 1.15fr;
+  grid-template-columns: 0.4fr 1.5fr 0.9fr 1fr 1fr 1fr 11rem;
 }
 
 /* Blocco persone: sfondo bianco (stacca dal grigio/azzurro di .people-detail) */
@@ -6470,14 +6669,6 @@ onMounted(async () => {
   padding: 0.12rem 0.4rem;
   border-radius: 4px;
 }
-.mapping-badge--required {
-  background: rgba(220, 38, 38, 0.1);
-  color: #991b1b;
-}
-.mapping-badge--recommended {
-  background: rgba(202, 138, 4, 0.12);
-  color: #854d0e;
-}
 .mapping-row--unmapped-required {
   background: rgba(254, 242, 242, 0.5);
 }
@@ -6654,10 +6845,13 @@ onMounted(async () => {
 }
 
 /* Pulsante giustificativo persona (testo esplicito) */
-.hay-person-justify-cell {
+.hay-person-justify-cell,
+.hay-person-actions-cell {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   justify-content: flex-start;
+  gap: 0.35rem;
 }
 
 .hay-person-no-justify {
@@ -6699,6 +6893,38 @@ onMounted(async () => {
   background: rgba(22, 163, 74, 0.2);
   border-color: #16a34a;
   color: #14532d;
+}
+
+.btn-pay-communication {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid rgba(10, 108, 210, 0.35);
+  border-radius: 6px;
+  background: rgba(10, 108, 210, 0.08);
+  color: #0a4d8c;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.btn-pay-communication svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.btn-pay-communication:hover:not(:disabled) {
+  background: rgba(10, 108, 210, 0.16);
+  border-color: #0a6cd2;
+  color: #084a8a;
+}
+
+.btn-pay-communication:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 /* Modal giustificativo */
