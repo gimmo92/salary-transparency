@@ -328,6 +328,16 @@ function groupHasActionableGap(row) {
   return row && !row.insufficientSample && (row.status === 'yellow' || row.status === 'red')
 }
 
+/** Mostra + Giustificativo per tutte le persone del gruppo se c'è gap o almeno un giustificativo nel gruppo. */
+function groupAllowsPersonJustify(row) {
+  if (!row || row.insufficientSample) return false
+  return groupHasActionableGap(row) || !!row.hasJustification
+}
+
+function hayBandAllowsPersonJustify(hayBand) {
+  return hasHayBandDisparity(hayBand) || hayBandHasJustifications(hayBand)
+}
+
 const gapAnalysisOptions = computed(() => ({
   getSalary: personComparisonSalary,
   isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
@@ -971,7 +981,7 @@ function personPerformanceScore(person) {
 }
 
 /** Gap da pctGap / media M vs F: positivo = uomini pagati di più, negativo = donne pagate di più */
-function formatGapMforF(gap, rettificato = false) {
+function formatGapMforF(gap, hasJustification = false) {
   if (gap == null || !Number.isFinite(gap)) return '–'
   const a = Math.abs(gap)
   let body
@@ -980,6 +990,8 @@ function formatGapMforF(gap, rettificato = false) {
     const letter = gap > 0 ? 'M' : 'F'
     body = `${letter} + ${a.toFixed(2)}%`
   }
+  const rettificato =
+    hasJustification && Number.isFinite(gap) && Math.abs(gap) <= EU_GAP_THRESHOLD_PCT
   const lead = rettificato ? 'Gap rett.: ' : 'Gap: '
   return `${lead}${body}`
 }
@@ -2359,7 +2371,7 @@ onMounted(async () => {
                         <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
                         <span class="hay-person-justify-cell">
                           <button
-                            v-if="groupHasActionableGap(row) || personJustifications[String(p.index)]"
+                            v-if="groupAllowsPersonJustify(row)"
                             type="button"
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
@@ -2537,7 +2549,7 @@ onMounted(async () => {
                         <span>{{ formatNum(p.totalSalary) }}</span>
                         <span class="hay-person-justify-cell">
                           <button
-                            v-if="hasHayBandDisparity(sub) || personJustifications[String(p.index)]"
+                            v-if="hayBandAllowsPersonJustify(sub)"
                             type="button"
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
@@ -2701,7 +2713,7 @@ onMounted(async () => {
                     <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
                     <span class="hay-person-justify-cell">
                       <button
-                        v-if="groupHasActionableGap(row) || personJustifications[String(p.index)]"
+                        v-if="groupAllowsPersonJustify(row)"
                         type="button"
                         class="btn-justify-person"
                         :class="{ 'has-note': personJustifications[String(p.index)] }"
