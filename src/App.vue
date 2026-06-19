@@ -1925,8 +1925,8 @@ onMounted(async () => {
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
                 <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
                 <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
               </div>
               <div class="eu-salary-toggle eu-salary-toggle--fte">
@@ -2231,8 +2231,8 @@ onMounted(async () => {
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
                 <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
                 <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
               </div>
               <div class="eu-salary-toggle eu-salary-toggle--fte">
@@ -2359,7 +2359,7 @@ onMounted(async () => {
                         <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
                         <span class="hay-person-justify-cell">
                           <button
-                            v-if="ccnlLevelHasActionableGap(row) || personJustifications[String(p.index)]"
+                            v-if="groupHasActionableGap(row) || personJustifications[String(p.index)]"
                             type="button"
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
@@ -2574,8 +2574,8 @@ onMounted(async () => {
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
                 <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
+                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
                 <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
               </div>
               <div class="eu-salary-toggle eu-salary-toggle--fte">

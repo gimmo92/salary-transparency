@@ -65,6 +65,8 @@ export const MAPPING_REQUIRED_ROLES = [
   COLUMN_ROLES.gender,
   COLUMN_ROLES.level,
   COLUMN_ROLES.baseSalary,
+  COLUMN_ROLES.superminimo,
+  COLUMN_ROLES.superminimoAssoluto,
 ]
 
 /** Colonne consigliate per analisi normativa affidabile (non bloccano l'avvio) */
@@ -99,7 +101,19 @@ export const MAPPING_UI_SECTIONS = [
       {
         role: COLUMN_ROLES.baseSalary,
         label: 'Retribuzione base annua',
-        hint: 'Obbligatorio. Se mappati, superminimo e superminimo ass.le vengono esclusi da questo importo',
+        hint: 'Obbligatorio. Superminimo e superminimo ass.le (sotto) vengono esclusi da questo importo',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.superminimo,
+        label: 'Superminimo',
+        hint: 'Obbligatorio per procedere; escluso dalla retribuzione base nelle analisi',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.superminimoAssoluto,
+        label: 'Superminimo ass.le',
+        hint: 'Obbligatorio per procedere; escluso dalla retribuzione base nelle analisi',
         badge: 'required',
       },
       {
@@ -136,16 +150,6 @@ export const MAPPING_UI_SECTIONS = [
         role: COLUMN_ROLES.category,
         label: 'Centro di costo (o categoria / qualifica legale)',
         hint: 'Abilita l’analisi organizzativa per centro di costo',
-      },
-      {
-        role: COLUMN_ROLES.superminimo,
-        label: 'Superminimo',
-        hint: 'Escluso dalla retribuzione base nelle analisi',
-      },
-      {
-        role: COLUMN_ROLES.superminimoAssoluto,
-        label: 'Superminimo ass.le',
-        hint: 'Escluso dalla retribuzione base nelle analisi',
       },
     ],
   },
