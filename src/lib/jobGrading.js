@@ -425,6 +425,7 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
   const perfScoreIdx = idx(COLUMN_ROLES.performanceScore)
   const ptIdx = idx(COLUMN_ROLES.partTimePct)
   const hireIdx = idx(COLUMN_ROLES.hireDate)
+  const ccnlIdx = idx(COLUMN_ROLES.ccnl)
   const structIdx = idx(COLUMN_ROLES.structuralComponents)
   const indivIdx = idx(COLUMN_ROLES.individualComponents)
   const ccnlMinIdx = idx(COLUMN_ROLES.ccnlMinimum)
@@ -475,6 +476,10 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       totalSalary: total,
       partTimePct: ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100,
       hireDate: hireIdx != null ? row[hireIdx] : null,
+      ccnl:
+        ccnlIdx != null && row[ccnlIdx] != null && String(row[ccnlIdx]).trim() !== ''
+          ? String(row[ccnlIdx]).trim()
+          : null,
       ccnlMinimum: ccnlMinIdx != null ? parseNumber(row[ccnlMinIdx]) : null,
     })
   })

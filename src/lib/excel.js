@@ -20,6 +20,8 @@ export const COLUMN_ROLES = {
   partTimePct: 'partTimePct',
   /** Data assunzione / ingresso */
   hireDate: 'hireDate',
+  /** CCNL / contratto collettivo di riferimento (es. Metalmeccanico Industria) */
+  ccnl: 'ccnl',
   /** Componenti strutturali continuative (livello retributivo) */
   structuralComponents: 'structuralComponents',
   /** Componenti individuali / discrezionali (escluse dal livello retributivo) */
@@ -44,6 +46,7 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.performanceScore]: 'Punteggio performance',
     [COLUMN_ROLES.partTimePct]: '% Part-time',
     [COLUMN_ROLES.hireDate]: 'Data di assunzione',
+    [COLUMN_ROLES.ccnl]: 'CCNL (contratto collettivo / settore)',
     [COLUMN_ROLES.structuralComponents]: 'Componenti strutturali (voci continuative/fisse)',
     [COLUMN_ROLES.individualComponents]: 'Componenti individuali (voci discrezionali/una-tantum)',
     [COLUMN_ROLES.ccnlMinimum]: 'Minimo CCNL',
@@ -61,8 +64,8 @@ export const MAPPING_REQUIRED_ROLES = [
 /** Colonne consigliate per analisi normativa affidabile (non bloccano l'avvio) */
 export const MAPPING_RECOMMENDED_ROLES = [
   COLUMN_ROLES.partTimePct,
-  COLUMN_ROLES.structuralComponents,
-  COLUMN_ROLES.individualComponents,
+  COLUMN_ROLES.ccnl,
+  COLUMN_ROLES.ccnlMinimum,
 ]
 
 /**
@@ -83,7 +86,7 @@ export const MAPPING_UI_SECTIONS = [
       },
       {
         role: COLUMN_ROLES.level,
-        label: 'Livello contrattuale (es. Q, B1, C3)',
+        label: 'Livello CCNL (inquadramento contrattuale, es. Q, B1, C3)',
         hint: 'Obbligatorio per procedere',
         badge: 'required',
       },
@@ -100,15 +103,15 @@ export const MAPPING_UI_SECTIONS = [
         badge: 'recommended',
       },
       {
-        role: COLUMN_ROLES.structuralComponents,
-        label: 'Componenti strutturali (voci continuative/fisse)',
-        hint: 'Servono per il livello retributivo ex normativa',
+        role: COLUMN_ROLES.ccnl,
+        label: 'CCNL (contratto collettivo / settore)',
+        hint: 'Es. Metalmeccanico Industria, Commercio, Turismo',
         badge: 'recommended',
       },
       {
-        role: COLUMN_ROLES.individualComponents,
-        label: 'Componenti individuali (voci discrezionali/una-tantum)',
-        hint: 'Servono per gap su variabile e % percettori',
+        role: COLUMN_ROLES.ccnlMinimum,
+        label: 'Minimo tabellare CCNL',
+        hint: 'Importo minimo contrattuale per livello, se presente nel file',
         badge: 'recommended',
       },
     ],
@@ -128,7 +131,6 @@ export const MAPPING_UI_SECTIONS = [
         label: 'Centro di costo (o categoria / qualifica legale)',
         hint: 'Abilita l’analisi organizzativa per centro di costo',
       },
-      { role: COLUMN_ROLES.ccnlMinimum, label: 'Minimo CCNL' },
     ],
   },
 ]
@@ -310,6 +312,7 @@ export function buildNormalizedData(rows, headers, mapping) {
   const senIdx = idx(COLUMN_ROLES.seniority)
   const ptIdx = idx(COLUMN_ROLES.partTimePct)
   const hireIdx = idx(COLUMN_ROLES.hireDate)
+  const ccnlIdx = idx(COLUMN_ROLES.ccnl)
   const structIdx = idx(COLUMN_ROLES.structuralComponents)
   const indivIdx = idx(COLUMN_ROLES.individualComponents)
   const ccnlMinIdx = idx(COLUMN_ROLES.ccnlMinimum)
@@ -377,6 +380,10 @@ export function buildNormalizedData(rows, headers, mapping) {
         performanceScore: perfIdx != null ? parsePerformanceScore(row[perfIdx]) : null,
         partTimePct: ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100,
         hireDate: hireIdx != null ? row[hireIdx] : null,
+        ccnl:
+          ccnlIdx != null && row[ccnlIdx] != null && String(row[ccnlIdx]).trim() !== ''
+            ? String(row[ccnlIdx]).trim()
+            : null,
         ccnlMinimum: ccnlMinIdx != null ? parseNumber(row[ccnlMinIdx]) : null,
       })
     })

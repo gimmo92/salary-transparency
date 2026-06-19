@@ -14,6 +14,7 @@ const R = {
   performanceScore: 'performanceScore',
   partTimePct: 'partTimePct',
   hireDate: 'hireDate',
+  ccnl: 'ccnl',
   structuralComponents: 'structuralComponents',
   individualComponents: 'individualComponents',
   ccnlMinimum: 'ccnlMinimum',
@@ -65,6 +66,8 @@ const DISQUALIFY = {
     /\bral\s*fiss/i,
     /\bcentro\s*di\s*costo/i,
   ],
+  [R.ccnl]: [/\blivello\b/i, /\bminimo\b/i, /\btabell/i, /\binquadramento\b/i],
+  [R.level]: [/^ccnl$/i, /\bcontratto\s*collettivo\b/i],
 }
 
 const SCORE_PATTERNS = {
@@ -101,8 +104,14 @@ const SCORE_PATTERNS = {
     { re: /\bjob\b/i, w: 2 },
   ],
   [R.level]: [
-    { re: /\b(livello|level|grade|ccnl|inquadramento\s*contr)\b/i, w: 8 },
+    { re: /\b(livello\s*ccnl|liv\.\s*ccnl|inquadramento\s*contr)\b/i, w: 10 },
+    { re: /\b(livello|level|grade)\b/i, w: 8 },
     { re: /\bband\b/i, w: 4 },
+  ],
+  [R.ccnl]: [
+    { re: /\b(contratto\s*collettivo|ccnl\s*applicato|nome\s*ccnl|settore\s*contratt)\b/i, w: 10 },
+    { re: /^ccnl$/i, w: 9 },
+    { re: /\b(metalmecc|commercio|turismo|logistica|chimico)\b/i, w: 3 },
   ],
   [R.description]: [
     { re: /\b(job\s*desc|descrizione\s*ruolo|mansione|description)\b/i, w: 8 },
@@ -235,6 +244,7 @@ export function detectColumnRoles(headers, rows) {
     R.totalSalary,
     R.partTimePct,
     R.hireDate,
+    R.ccnl,
     R.role,
     R.level,
     R.category,
@@ -322,6 +332,7 @@ REGOLE OBBLIGATORIE (Italia):
 - performanceScore = valutazione performance se presente.
 - partTimePct = percentuale part-time (100 = full time).
 - hireDate = data assunzione / ingresso.
+- ccnl = nome CCNL / contratto collettivo / settore (es. Metalmeccanico Industria). NON livello di inquadramento né minimo tabellare.
 - structuralComponents = somma componenti strutturali continuative/fisse (escluse da totali INPS).
 - individualComponents = somma componenti individuali/discrezionali/una-tantum.
 - ccnlMinimum = minimo tabellare CCNL se presente.

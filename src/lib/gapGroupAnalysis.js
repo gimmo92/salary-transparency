@@ -3,6 +3,7 @@
  */
 import { mean, median, pctGap } from './indicators.js'
 import { classifyGapStatus, MIN_GENDER_SAMPLE, EU_GAP_THRESHOLD_PCT } from './salaryMetrics.js'
+import { normalizeLevelLabel, levelSortOrder } from './jobGrading.js'
 
 export function gapStatusCssClass(status) {
   if (status === 'red') return 'gap-status-red'
@@ -167,25 +168,97 @@ export function computeGapHotspots(rows, { topN = 5, thresholdPct = EU_GAP_THRES
   }))
 }
 
+/** Estrae tutte le persone da jobResults (band per livello). */
+export function flattenJobResultsPeople(jobResults) {
+  const people = []
+  for (const band of jobResults || []) {
+    for (const p of band.people || []) people.push(p)
+  }
+  return people
+}
+
+/** Confronto M/F per livello di inquadramento su un sottoinsieme di persone. */
+export function computeLevelComparisonFromPeople(peopleList, options = {}) {
+  const map = new Map()
+  for (const p of peopleList || []) {
+    if (p.gender !== 'M' && p.gender !== 'F') continue
+    const levelKey = normalizeLevelLabel(p.level) || 'N/D'
+    if (!map.has(levelKey)) {
+      map.set(levelKey, {
+        levelKey,
+        sortOrder: levelSortOrder(p.level),
+        people: [],
+      })
+    }
+    map.get(levelKey).people.push(p)
+  }
+
+  return Array.from(map.values())
+    .sort((a, b) => (b.sortOrder ?? 0) - (a.sortOrder ?? 0))
+    .map(({ levelKey, sortOrder, people }) => {
+      const row = buildComparisonRow(levelKey, levelKey, people, options)
+      return {
+        ...row,
+        levelKey,
+        levelLabel: levelKey,
+        sortOrder,
+      }
+    })
+}
+
+/**
+ * Raggruppa per CCNL (contratto) e, all'interno, analizza gap per livello di inquadramento.
+ */
+export function computeCcnlGroupedComparison(peopleList, options = {}) {
+  const ccnlMap = new Map()
+  for (const p of peopleList || []) {
+    if (p.gender !== 'M' && p.gender !== 'F') continue
+    const ccnlKey = String(p.ccnl ?? '').trim() || 'N/D'
+    if (!ccnlMap.has(ccnlKey)) ccnlMap.set(ccnlKey, [])
+    ccnlMap.get(ccnlKey).push(p)
+  }
+
+  return Array.from(ccnlMap.entries())
+    .map(([ccnlKey, people]) => {
+      const levels = computeLevelComparisonFromPeople(people, options)
+      return {
+        ccnlKey,
+        ccnlLabel: ccnlKey,
+        levels,
+        nTotal: levels.reduce((s, r) => s + (r.nTotal || 0), 0),
+        nLevels: levels.length,
+      }
+    })
+    .sort((a, b) => String(a.ccnlLabel).localeCompare(String(b.ccnlLabel), 'it'))
+}
+
+/** Righe piatte livello×CCNL (label composta se più CCNL). */
+export function flattenCcnlLevelRows(groups) {
+  const multiCcnl = (groups || []).length > 1
+  const rows = []
+  for (const g of groups || []) {
+    for (const level of g.levels || []) {
+      rows.push({
+        ...level,
+        ccnlKey: g.ccnlKey,
+        ccnlLabel: g.ccnlLabel,
+        compositeKey: `${g.ccnlKey}::${level.levelKey}`,
+        displayLevelLabel: level.levelLabel,
+        levelLabel: multiCcnl ? `${g.ccnlLabel} · ${level.levelLabel}` : level.levelLabel,
+      })
+    }
+  }
+  return rows
+}
+
 /**
  * Confronto M/F per livello CCNL (senza fasce di punteggio).
  * @param {Array} jobResults - output groupByLevel + enrichWithDeviation
  * @param {object} options - getSalary, isExcludedFromGap, hasGroupJustification(people)
  */
 export function computeCcnlLevelComparison(jobResults, options = {}) {
-  const rows = (jobResults || []).map((band) => {
-    const rawPeople = band.people || []
-    const row = buildComparisonRow(band.level, band.level, rawPeople, options)
-    return {
-      ...row,
-      levelKey: band.level,
-      levelLabel: band.level,
-      sortOrder: band.sortOrder ?? band.band ?? 0,
-      bandNum: band.band,
-    }
-  })
-
-  return rows.sort((a, b) => (b.sortOrder ?? 0) - (a.sortOrder ?? 0))
+  const groups = computeCcnlGroupedComparison(flattenJobResultsPeople(jobResults), options)
+  return flattenCcnlLevelRows(groups)
 }
 
 export function countGapStatuses(rows, { excludeInsufficient = true } = {}) {

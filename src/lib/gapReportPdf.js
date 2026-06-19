@@ -84,6 +84,7 @@ function drawCover(doc, payload) {
   doc.setFontSize(10)
   const lines = [
     ['Ragione sociale', payload.companyName || '–'],
+    ['CCNL di riferimento', payload.ccnlName || '–'],
     ['Periodo di riferimento', payload.referencePeriod || '–'],
     ['Data generazione', payload.generatedAtLabel || '–'],
     ['Dipendenti analizzati (M/F)', String(payload.nEmployees ?? '–')],
@@ -158,29 +159,36 @@ export function buildGapReportPdfBuffer(payload) {
   y = bodyText(
     doc,
     y,
-    'Confronto M/F per livello di inquadramento CCNL. I campioni con meno di 3 persone per genere sono segnalati e non considerati ai fini delle soglie.',
+    'Confronto M/F per CCNL e livello di inquadramento contrattuale. I campioni con meno di 3 persone per genere sono segnalati e non considerati ai fini delle soglie.',
     pageWidth - MARGIN * 2,
   )
-  const ccnlBody = (payload.ccnlLevels || []).map((r) => [
-    r.levelLabel || '–',
-    r.nTotal ?? 0,
-    r.nM ?? 0,
-    r.nF ?? 0,
-    r.insufficientSample ? 'n/d' : fmtEuro(r.avgM),
-    r.insufficientSample ? 'n/d' : fmtEuro(r.avgF),
-    r.insufficientSample ? 'n/d' : fmtGapSigned(r.gapMean, { short: true }),
-    r.insufficientSample ? 'n/d' : fmtGapSigned(r.gapMedian, { short: true }),
-    statusLabel(r.status, r.insufficientSample),
-  ])
+  const ccnlRows = payload.ccnlLevels || []
+  const multiCcnlPdf = new Set(ccnlRows.map((r) => r.ccnlKey).filter(Boolean)).size > 1
+  const ccnlBody = ccnlRows.map((r) => {
+    const base = [
+      r.nTotal ?? 0,
+      r.nM ?? 0,
+      r.nF ?? 0,
+      r.insufficientSample ? 'n/d' : fmtEuro(r.avgM),
+      r.insufficientSample ? 'n/d' : fmtEuro(r.avgF),
+      r.insufficientSample ? 'n/d' : fmtGapSigned(r.gapMean, { short: true }),
+      r.insufficientSample ? 'n/d' : fmtGapSigned(r.gapMedian, { short: true }),
+      statusLabel(r.status, r.insufficientSample),
+    ]
+    if (multiCcnlPdf) {
+      return [r.ccnlLabel || '–', r.displayLevelLabel || r.levelLabel || '–', ...base]
+    }
+    return [r.displayLevelLabel || r.levelLabel || '–', ...base]
+  })
+  const ccnlHead = multiCcnlPdf
+    ? [['CCNL', 'Livello', 'N', 'N M', 'N F', 'Media M', 'Media F', 'Gap medio', 'Gap mediano', 'Stato']]
+    : [['Livello', 'N', 'N M', 'N F', 'Media M', 'Media F', 'Gap medio', 'Gap mediano', 'Stato']]
   y = addTable(
     doc,
     y,
-    [['Livello', 'N', 'N M', 'N F', 'Media M', 'Media F', 'Gap medio', 'Gap mediano', 'Stato']],
-    ccnlBody.length ? ccnlBody : [['–', '–', '–', '–', '–', '–', '–', '–', '–']],
-    {
-      0: { cellWidth: 22 },
-      8: { cellWidth: 28 },
-    },
+    ccnlHead,
+    ccnlBody.length ? ccnlBody : [multiCcnlPdf ? ['–', '–', '–', '–', '–', '–', '–', '–', '–', '–'] : ['–', '–', '–', '–', '–', '–', '–', '–', '–']],
+    multiCcnlPdf ? { 0: { cellWidth: 24 }, 1: { cellWidth: 18 }, 9: { cellWidth: 24 } } : { 0: { cellWidth: 22 }, 8: { cellWidth: 28 } },
   )
 
   // 4. Quartili

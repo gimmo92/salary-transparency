@@ -35,7 +35,8 @@ export function buildGroupsAboveThreshold({
     )
     .map((r) => ({
       groupType: 'Livello CCNL',
-      label: r.levelLabel || r.levelKey,
+      label: r.levelLabel || r.displayLevelLabel || r.levelKey,
+      ccnlLabel: r.ccnlLabel,
       gapMean: r.gapMean,
       gapMedian: r.gapMedian,
       status: r.status,

@@ -43,7 +43,9 @@ import {
 } from './lib/salaryMetrics.js'
 import {
   analyzeGenderPayGap,
-  computeCcnlLevelComparison,
+  computeCcnlGroupedComparison,
+  flattenJobResultsPeople,
+  flattenCcnlLevelRows,
   computeCostCenterComparison,
   computeGapHotspots,
   gapStatusCssClass,
@@ -71,6 +73,8 @@ const analisiStep = ref('upload') // idle | upload | mapping | results — defau
 const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
+/** CCNL applicato (testo libero se assente come colonna nel file) */
+const analysisCcnlName = ref('')
 const excelUrl = ref('')
 const excelFile = ref(null)
 const excelFileInputRef = ref(null)
@@ -323,9 +327,16 @@ const gapAnalysisOptions = computed(() => ({
   isPersonJustified,
 }))
 
-const ccnlLevelRows = computed(() =>
-  computeCcnlLevelComparison(jobResults.value, gapAnalysisOptions.value),
+const ccnlGroups = computed(() =>
+  computeCcnlGroupedComparison(
+    flattenJobResultsPeople(jobResults.value),
+    gapAnalysisOptions.value,
+  ),
 )
+
+const hasMultipleCcnls = computed(() => ccnlGroups.value.length > 1)
+
+const ccnlLevelRows = computed(() => flattenCcnlLevelRows(ccnlGroups.value))
 
 const hasCostCenterData = computed(() =>
   genderNormalizedForAnalysis.value.some((r) => String(r.category ?? '').trim()),
@@ -356,17 +367,33 @@ function justifyGroupContextNoun(source) {
   return 'fascia'
 }
 
+const expandedCcnlContracts = ref(new Set())
 const expandedCcnlLevels = ref(new Set())
 
-function toggleCcnlLevel(levelKey) {
-  const key = String(levelKey || '')
+function ccnlLevelCompositeKey(group, row) {
+  return `${group.ccnlKey}::${row.levelKey}`
+}
+
+function toggleCcnlContract(ccnlKey) {
+  const k = String(ccnlKey || '')
+  if (expandedCcnlContracts.value.has(k)) expandedCcnlContracts.value.delete(k)
+  else expandedCcnlContracts.value.add(k)
+  expandedCcnlContracts.value = new Set(expandedCcnlContracts.value)
+}
+
+function isCcnlContractExpanded(ccnlKey) {
+  return expandedCcnlContracts.value.has(String(ccnlKey || ''))
+}
+
+function toggleCcnlLevel(compositeKey) {
+  const key = String(compositeKey || '')
   if (expandedCcnlLevels.value.has(key)) expandedCcnlLevels.value.delete(key)
   else expandedCcnlLevels.value.add(key)
   expandedCcnlLevels.value = new Set(expandedCcnlLevels.value)
 }
 
-function isCcnlLevelExpanded(levelKey) {
-  return expandedCcnlLevels.value.has(String(levelKey || ''))
+function isCcnlLevelExpanded(compositeKey) {
+  return expandedCcnlLevels.value.has(String(compositeKey || ''))
 }
 
 function ccnlLevelGapStatusClass(row) {
@@ -382,6 +409,25 @@ function formatDeviationVsGenderGroupMean(person) {
   if (v == null || !Number.isFinite(v)) return '–'
   const sign = v > 0 ? '+' : ''
   return `${sign}${v.toFixed(1)}%`
+}
+
+function resolveCcnlLabel() {
+  const manual = analysisCcnlName.value.trim()
+  if (manual) return manual
+  const counts = new Map()
+  for (const r of genderNormalizedCache.value || []) {
+    const c = r?.ccnl != null ? String(r.ccnl).trim() : ''
+    if (!c) continue
+    counts.set(c, (counts.get(c) || 0) + 1)
+  }
+  if (!counts.size) return ''
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+}
+
+function applyManualCcnlToRows(rows) {
+  const manual = analysisCcnlName.value.trim()
+  if (!manual) return rows
+  return (rows || []).map((r) => ({ ...r, ccnl: r.ccnl || manual }))
 }
 
 function buildGapReportPayloadForExport() {
@@ -419,6 +465,7 @@ function buildGapReportPayloadForExport() {
 
   return {
     companyName: reportCompanyName.value.trim() || 'Azienda',
+    ccnlName: resolveCcnlLabel() || '–',
     referencePeriod: reportReferencePeriod.value.trim() || `Anno ${now.getFullYear()}`,
     generatedAtIso: now.toISOString(),
     generatedAtLabel: now.toLocaleString('it-IT'),
@@ -558,8 +605,12 @@ function isRoleDetailExpanded(level, subLabel, role) {
 }
 
 function runJobGrading() {
-  const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
-  const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+  const normalizedJob = applyManualCcnlToRows(
+    buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value),
+  )
+  const normalizedGender = applyManualCcnlToRows(
+    buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value),
+  )
   const genderByIndex = new Map(normalizedGender.map((x) => [x.index, x.gender]))
   const enrichedJob = normalizedJob.map((p) => ({
     ...p,
@@ -589,6 +640,7 @@ function startNuovaAnalisi() {
   justifyingLevel.value = null
   genderViewMode.value = 'media'
   genderNormalizedCache.value = []
+  analysisCcnlName.value = ''
   quartileOutlierJustifications.value = {}
   transparencyRoleOverrides.value = {}
   bandGenderJustifications.value = {}
@@ -596,6 +648,7 @@ function startNuovaAnalisi() {
   euDashboardMetric.value = SALARY_METRICS.livello
   euDashboardFte.value = true
   justifyingPerson.value = null
+  expandedCcnlContracts.value = new Set()
   expandedCcnlLevels.value = new Set()
   expandedCostCenters.value = new Set()
 }
@@ -696,7 +749,9 @@ async function confirmMapping() {
   justifyingPerson.value = null
   try {
     // --- Analisi di genere ---
-    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+    const normalizedGender = applyManualCcnlToRows(
+      buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value),
+    )
     if (normalizedGender.length > 0) {
       const localIndicators = computeIndicators(normalizedGender, {
         metric: euDashboardMetric.value,
@@ -1003,7 +1058,8 @@ function openCcnlPersonJustify(person, levelRow) {
     performancePctVsFascia: performancePctVsLevel,
     roleName: person?.role || '–',
     bandNum: levelRow.bandNum,
-    levelLabel: levelRow.levelLabel,
+    levelLabel: levelRow.displayLevelLabel || levelRow.levelLabel,
+    ccnlLabel: levelRow.ccnlLabel || '–',
     fasciaId: null,
     fasciaRange: null,
     baseSalary: person.baseSalary,
@@ -1912,6 +1968,21 @@ onMounted(async () => {
           quelli consigliati migliorano l'affidabilità del gap retributivo.
         </p>
 
+        <div class="mapping-ccnl-manual">
+          <label class="mapping-ccnl-manual-label" for="analysis-ccnl-name">
+            <span class="mapping-field-name">CCNL applicato</span>
+            <span class="mapping-hint">Se nel file non c’è una colonna CCNL, indica qui il contratto collettivo (es. Metalmeccanico Industria).</span>
+          </label>
+          <input
+            id="analysis-ccnl-name"
+            v-model="analysisCcnlName"
+            type="text"
+            class="mapping-ccnl-input"
+            placeholder="Es. Metalmeccanico Industria"
+            :disabled="analysisLoading"
+          />
+        </div>
+
         <div
           v-for="section in mappingUiSections"
           :key="section.id"
@@ -2343,7 +2414,7 @@ onMounted(async () => {
             <div class="ccnl-level-head">
               <h3 class="ccnl-level-title">Confronto retributivo per livello CCNL</h3>
               <p class="ccnl-level-desc muted">
-                Confronto M/F per livello di inquadramento contrattuale, senza fasce di punteggio interno.
+                Persone raggruppate per <strong>CCNL</strong> (contratto collettivo); in ciascun CCNL il gap M/F è calcolato per <strong>livello di inquadramento</strong>.
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
@@ -2362,7 +2433,8 @@ onMounted(async () => {
 
             <div class="job-table ccnl-level-table">
               <div class="job-row header ccnl-level-row">
-                <span>Livello CCNL</span>
+                <span v-if="hasMultipleCcnls">CCNL / Livello</span>
+                <span v-else>Livello CCNL</span>
                 <span>N tot.</span>
                 <span>N uomini</span>
                 <span>N donne</span>
@@ -2372,104 +2444,128 @@ onMounted(async () => {
                 <span>Gap mediano</span>
                 <span>Stato</span>
               </div>
-              <template v-for="row in ccnlLevelRows" :key="'ccnl-' + row.levelKey">
+              <template v-for="group in ccnlGroups" :key="'ccnl-g-' + group.ccnlKey">
                 <div
-                  class="job-row ccnl-level-row clickable"
-                  :class="{ 'ccnl-level-row--insufficient': row.insufficientSample }"
-                  @click="toggleCcnlLevel(row.levelKey)"
+                  v-if="hasMultipleCcnls"
+                  class="ccnl-contract-row clickable"
+                  role="button"
+                  tabindex="0"
+                  @click="toggleCcnlContract(group.ccnlKey)"
+                  @keydown.enter.prevent="toggleCcnlContract(group.ccnlKey)"
                 >
-                  <span class="ccnl-level-label">
-                    <strong>{{ isCcnlLevelExpanded(row.levelKey) ? '▾' : '▸' }} {{ row.levelLabel }}</strong>
-                    <svg
-                      v-if="ccnlLevelHasActionableGap(row)"
-                      class="hay-band-alert-icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      width="14"
-                      height="14"
-                      title="Gap M/F oltre soglia nel livello"
+                  <span class="ccnl-contract-label">
+                    <strong>{{ isCcnlContractExpanded(group.ccnlKey) ? '▾' : '▸' }} {{ group.ccnlLabel }}</strong>
+                    <span class="muted ccnl-contract-meta">{{ group.nTotal }} dip. · {{ group.nLevels }} livelli</span>
+                  </span>
+                </div>
+                <template v-if="!hasMultipleCcnls || isCcnlContractExpanded(group.ccnlKey)">
+                  <template v-for="row in group.levels" :key="'ccnl-' + group.ccnlKey + '-' + row.levelKey">
+                    <div
+                      class="job-row ccnl-level-row clickable"
+                      :class="{
+                        'ccnl-level-row--insufficient': row.insufficientSample,
+                        'ccnl-level-row--nested': hasMultipleCcnls,
+                      }"
+                      @click="toggleCcnlLevel(ccnlLevelCompositeKey(group, row))"
                     >
-                      <path d="M12 3l10 18H2L12 3z" />
-                      <path d="M12 9v5" />
-                      <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
-                    </svg>
-                  </span>
-                  <span>{{ row.nTotal }}</span>
-                  <span>{{ row.nM }}</span>
-                  <span>{{ row.nF }}</span>
-                  <span>{{ row.avgM != null ? formatNum(row.avgM) : '–' }}</span>
-                  <span>{{ row.avgF != null ? formatNum(row.avgF) : '–' }}</span>
-                  <span>
-                    <span
-                      v-if="row.insufficientSample"
-                      class="ccnl-gap-na muted"
-                      :title="row.sampleMsg"
-                    >n/d</span>
-                    <span
-                      v-else-if="row.gapMean != null"
-                      class="hay-band-gap-pill"
-                      :class="[ccnlLevelGapStatusClass(row), { 'gap-alert': ccnlLevelHasActionableGap(row) }]"
-                    >{{ formatGapMforF(row.gapMean, row.hasJustification) }}</span>
-                    <span v-else class="muted">–</span>
-                  </span>
-                  <span>
-                    <span v-if="row.insufficientSample" class="ccnl-gap-na muted">n/d</span>
-                    <span v-else-if="row.gapMedian != null">{{ formatGapMforF(row.gapMedian) }}</span>
-                    <span v-else class="muted">–</span>
-                  </span>
-                  <span>
-                    <span
-                      v-if="row.insufficientSample"
-                      class="mapping-badge mapping-badge--insufficient"
-                      :title="row.sampleMsg"
-                    >Campione ridotto</span>
-                    <span
-                      v-else
-                      class="ccnl-status-badge"
-                      :class="ccnlLevelGapStatusClass(row)"
-                    >{{ row.status === 'green' ? 'OK' : row.status === 'yellow' ? 'Documentato' : row.status === 'red' ? 'Da correggere' : '–' }}</span>
-                  </span>
-                </div>
-                <div v-if="isCcnlLevelExpanded(row.levelKey)" class="people-detail ccnl-level-detail">
-                  <p v-if="row.insufficientSample" class="muted ccnl-sample-note">{{ row.sampleMsg }}</p>
-                  <div class="people-header ccnl-person-header">
-                    <span>#</span>
-                    <span>Persona</span>
-                    <span>Genere</span>
-                    <span>Ruolo</span>
-                    <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
-                    <span>{{ euMetricLabelShort }}</span>
-                    <span>Giustificativo</span>
-                  </div>
-                  <div
-                    v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
-                    :key="'ccnl-p-' + row.levelKey + '-' + p.index"
-                    class="people-row ccnl-person-row"
-                  >
-                    <span>{{ p.index }}</span>
-                    <span>{{ p.name || '–' }}</span>
-                    <span><span :class="personGenderClass(p.gender)">{{ p.gender }}</span></span>
-                    <span>{{ p.role || '–' }}</span>
-                    <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
-                    <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
-                    <span class="hay-person-justify-cell">
-                      <button
-                        v-if="ccnlLevelHasActionableGap(row) || personJustifications[String(p.index)]"
-                        type="button"
-                        class="btn-justify-person"
-                        :class="{ 'has-note': personJustifications[String(p.index)] }"
-                        title="Apri o modifica il giustificativo (gap M/F nel livello CCNL)"
-                        @click.stop="openCcnlPersonJustify(p, row)"
+                      <span class="ccnl-level-label">
+                        <strong>{{ isCcnlLevelExpanded(ccnlLevelCompositeKey(group, row)) ? '▾' : '▸' }} {{ row.levelLabel }}</strong>
+                        <svg
+                          v-if="ccnlLevelHasActionableGap(row)"
+                          class="hay-band-alert-icon"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          width="14"
+                          height="14"
+                          title="Gap M/F oltre soglia nel livello"
+                        >
+                          <path d="M12 3l10 18H2L12 3z" />
+                          <path d="M12 9v5" />
+                          <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
+                        </svg>
+                      </span>
+                      <span>{{ row.nTotal }}</span>
+                      <span>{{ row.nM }}</span>
+                      <span>{{ row.nF }}</span>
+                      <span>{{ row.avgM != null ? formatNum(row.avgM) : '–' }}</span>
+                      <span>{{ row.avgF != null ? formatNum(row.avgF) : '–' }}</span>
+                      <span>
+                        <span
+                          v-if="row.insufficientSample"
+                          class="ccnl-gap-na muted"
+                          :title="row.sampleMsg"
+                        >n/d</span>
+                        <span
+                          v-else-if="row.gapMean != null"
+                          class="hay-band-gap-pill"
+                          :class="[ccnlLevelGapStatusClass(row), { 'gap-alert': ccnlLevelHasActionableGap(row) }]"
+                        >{{ formatGapMforF(row.gapMean, row.hasJustification) }}</span>
+                        <span v-else class="muted">–</span>
+                      </span>
+                      <span>
+                        <span v-if="row.insufficientSample" class="ccnl-gap-na muted">n/d</span>
+                        <span v-else-if="row.gapMedian != null">{{ formatGapMforF(row.gapMedian) }}</span>
+                        <span v-else class="muted">–</span>
+                      </span>
+                      <span>
+                        <span
+                          v-if="row.insufficientSample"
+                          class="mapping-badge mapping-badge--insufficient"
+                          :title="row.sampleMsg"
+                        >Campione ridotto</span>
+                        <span
+                          v-else
+                          class="ccnl-status-badge"
+                          :class="ccnlLevelGapStatusClass(row)"
+                        >{{ row.status === 'green' ? 'OK' : row.status === 'yellow' ? 'Documentato' : row.status === 'red' ? 'Da correggere' : '–' }}</span>
+                      </span>
+                    </div>
+                    <div
+                      v-if="isCcnlLevelExpanded(ccnlLevelCompositeKey(group, row))"
+                      class="people-detail ccnl-level-detail"
+                      :class="{ 'ccnl-level-detail--nested': hasMultipleCcnls }"
+                    >
+                      <p v-if="row.insufficientSample" class="muted ccnl-sample-note">{{ row.sampleMsg }}</p>
+                      <div class="people-header ccnl-person-header">
+                        <span>#</span>
+                        <span>Persona</span>
+                        <span>Genere</span>
+                        <span>Ruolo</span>
+                        <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
+                        <span>{{ euMetricLabelShort }}</span>
+                        <span>Giustificativo</span>
+                      </div>
+                      <div
+                        v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
+                        :key="'ccnl-p-' + group.ccnlKey + '-' + row.levelKey + '-' + p.index"
+                        class="people-row ccnl-person-row"
                       >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
-                        + Giustificativo
-                      </button>
-                      <span v-else class="muted hay-person-no-justify">–</span>
-                    </span>
-                  </div>
-                </div>
+                        <span>{{ p.index }}</span>
+                        <span>{{ p.name || '–' }}</span>
+                        <span><span :class="personGenderClass(p.gender)">{{ p.gender }}</span></span>
+                        <span>{{ p.role || '–' }}</span>
+                        <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
+                        <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
+                        <span class="hay-person-justify-cell">
+                          <button
+                            v-if="ccnlLevelHasActionableGap(row) || personJustifications[String(p.index)]"
+                            type="button"
+                            class="btn-justify-person"
+                            :class="{ 'has-note': personJustifications[String(p.index)] }"
+                            title="Apri o modifica il giustificativo (gap M/F nel livello CCNL)"
+                            @click.stop="openCcnlPersonJustify(p, { ...row, ccnlKey: group.ccnlKey, ccnlLabel: group.ccnlLabel, compositeKey: ccnlLevelCompositeKey(group, row) })"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                            + Giustificativo
+                          </button>
+                          <span v-else class="muted hay-person-no-justify">–</span>
+                        </span>
+                      </div>
+                    </div>
+                  </template>
+                </template>
               </template>
             </div>
           </template>
@@ -2830,7 +2926,8 @@ onMounted(async () => {
             <p class="person-justify-tab-lead">
               <template v-if="justifyingPerson.justifySource === 'ccnl_level'">
                 <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
-                · <strong>Livello CCNL</strong> {{ justifyingPerson.levelLabel }}
+                · <strong>CCNL</strong> {{ justifyingPerson.ccnlLabel }}
+                · <strong>Livello</strong> {{ justifyingPerson.levelLabel }}
               </template>
               <template v-else-if="justifyingPerson.justifySource === 'cost_center'">
                 <strong>Ruolo:</strong> {{ justifyingPerson.roleName }}
@@ -5299,6 +5396,32 @@ onMounted(async () => {
 .ccnl-level-wrap {
   margin-top: 0.5rem;
 }
+.ccnl-contract-row {
+  display: grid;
+  grid-column: 1 / -1;
+  padding: 0.55rem 0.65rem;
+  background: rgba(59, 130, 246, 0.06);
+  border-bottom: 1px solid var(--border-light, #e2e8f0);
+  cursor: pointer;
+}
+.ccnl-contract-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.9rem;
+}
+.ccnl-contract-meta {
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+.job-row.ccnl-level-row.ccnl-level-row--nested {
+  background: rgba(248, 250, 252, 0.85);
+}
+.ccnl-level-detail--nested {
+  margin-left: 0.5rem;
+  border-left: 2px solid rgba(59, 130, 246, 0.2);
+}
 .ccnl-level-head {
   margin-bottom: 1rem;
 }
@@ -6286,6 +6409,30 @@ onMounted(async () => {
   color: #1e40af;
   font-size: 0.875rem;
   line-height: 1.45;
+}
+
+.mapping-ccnl-manual {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-secondary, #f8fafc);
+}
+.mapping-ccnl-manual-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.mapping-ccnl-input {
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
 }
 
 .mapping-section {
