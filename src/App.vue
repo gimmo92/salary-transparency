@@ -41,6 +41,7 @@ import {
   SALARY_METRICS,
   getComparisonValue,
   getMetricLabel,
+  MIN_GENDER_SAMPLE,
 } from './lib/salaryMetrics.js'
 import {
   analyzeGenderPayGap,
@@ -51,7 +52,7 @@ import {
   computeGapHotspots,
   gapStatusCssClass,
 } from './lib/gapGroupAnalysis.js'
-import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById, fetchRules, saveRule, updateRuleById, deleteRuleById } from './lib/persistence.js'
+import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById } from './lib/persistence.js'
 import {
   GAP_REPORT_VERSION,
   buildGroupsAboveThreshold,
@@ -70,7 +71,6 @@ const activeSection = ref('analisi')
 const sections = [
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
-  { id: 'salaryReview', label: 'Salary Review', icon: 'chart' },
 ]
 
 // Flusso unificato
@@ -153,10 +153,6 @@ const reportIncludeFascia = ref(true)
 const reportIncludeCostCenter = ref(true)
 const gapReportExportLoading = ref(false)
 
-const PAY_CRITERIA_STORAGE_KEY = 'st-pay-criteria-text'
-const PAY_COMM_MIN_SAMPLE_KEY = 'st-pay-comm-min-sample'
-const payCriteriaText = ref(DEFAULT_PAY_CRITERIA_TEXT)
-const payCommMinSample = ref(3)
 const payCommLoadingIndex = ref(null)
 
 const euMetricLabel = computed(() => getMetricLabel(euDashboardMetric.value))
@@ -528,24 +524,15 @@ function findCcnlLevelRowForPerson(person) {
   }
 }
 
-function loadPayCommSettings() {
-  try {
-    const storedCriteria = localStorage.getItem(PAY_CRITERIA_STORAGE_KEY)
-    payCriteriaText.value = storedCriteria || DEFAULT_PAY_CRITERIA_TEXT
-    const storedMin = Number(localStorage.getItem(PAY_COMM_MIN_SAMPLE_KEY))
-    if (Number.isFinite(storedMin) && storedMin >= 2) payCommMinSample.value = Math.round(storedMin)
-  } catch {
-    payCriteriaText.value = DEFAULT_PAY_CRITERIA_TEXT
+function findPersonByIndex(index) {
+  const key = String(index ?? '')
+  if (!key) return null
+  for (const band of jobResults.value || []) {
+    for (const p of band.people || []) {
+      if (String(p.index) === key) return p
+    }
   }
-}
-
-function persistPayCommSettings() {
-  try {
-    localStorage.setItem(PAY_CRITERIA_STORAGE_KEY, payCriteriaText.value)
-    localStorage.setItem(PAY_COMM_MIN_SAMPLE_KEY, String(payCommMinSample.value))
-  } catch {
-    /* ignore quota errors */
-  }
+  return null
 }
 
 async function exportPayCommunicationPdf(person) {
@@ -564,8 +551,8 @@ async function exportPayCommunicationPdf(person) {
       levelRow: row,
       companyName: reportCompanyName.value,
       referencePeriod: reportReferencePeriod.value,
-      criteriaText: payCriteriaText.value,
-      minSample: payCommMinSample.value,
+      criteriaText: DEFAULT_PAY_CRITERIA_TEXT,
+      minSample: MIN_GENDER_SAMPLE,
     })
     const res = await fetch('/api/report/pay-communication', {
       method: 'POST',
@@ -595,7 +582,6 @@ async function exportPayCommunicationPdf(person) {
     a.click()
     URL.revokeObjectURL(url)
     saveStatus.value = `Comunicazione PDF generata per ${payload.employee.name}.`
-    persistPayCommSettings()
   } catch (err) {
     uploadError.value =
       'Generazione comunicazione non riuscita: ' +
@@ -604,6 +590,17 @@ async function exportPayCommunicationPdf(person) {
   } finally {
     payCommLoadingIndex.value = null
   }
+}
+
+async function exportPayCommunicationForJustifyingPerson() {
+  const key = justifyingPerson.value?.key
+  if (!key) return
+  const person = findPersonByIndex(key)
+  if (!person) {
+    uploadError.value = 'Impossibile generare la comunicazione: dati dipendente non trovati.'
+    return
+  }
+  await exportPayCommunicationPdf(person)
 }
 
 async function exportGapReportPdf() {
@@ -1694,297 +1691,7 @@ function formatFileSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-// Salary Review
-const showSalaryReview = computed(() => activeSection.value === 'salaryReview')
-const srView = ref('list') // 'list' | 'editRule' | 'newIncrease'
-const srRules = ref([])
-const srCurrentRule = ref(null)
-const srIncreases = ref([])
-const srCurrentIncrease = ref(null)
-const srPillInput = ref('')
-const srObjInput = ref('')
-const srApprovalUserInput = ref({})
-const srRulesLoading = ref(false)
-const srRulesError = ref('')
-const srSaving = ref(false)
-const srSubTab = ref('reviews') // 'reviews' | 'rules'
-
-const sampleUsers = [
-  'Mario Rossi', 'Paolo Neri', 'Giulia Bianchi', 'Luca Verdi',
-  'Anna Ferrari', 'Marco Esposito', 'Sara Romano', 'Andrea Colombo',
-  'Francesca Ricci', 'Alessandro Marino',
-]
-
-const sampleUserData = {
-  'Mario Rossi': { role: 'Software Engineer', performanceScore: 85, objectives: ['Delivery Q1', 'Riduzione bug 30%', 'Mentoring junior'], objectivesReached: ['Delivery Q1', 'Riduzione bug 30%'] },
-  'Paolo Neri': { role: 'Product Manager', performanceScore: 72, objectives: ['Lancio prodotto X', 'NPS +10'], objectivesReached: ['Lancio prodotto X'] },
-  'Giulia Bianchi': { role: 'UX Designer', performanceScore: 91, objectives: ['Design system v2', 'User testing 50 utenti'], objectivesReached: ['Design system v2', 'User testing 50 utenti'] },
-  'Luca Verdi': { role: 'Data Analyst', performanceScore: 65, objectives: ['Dashboard analytics', 'Report mensili'], objectivesReached: ['Report mensili'] },
-  'Anna Ferrari': { role: 'HR Manager', performanceScore: 88, objectives: ['Onboarding revamp', 'Retention +5%', 'Survey clima'], objectivesReached: ['Onboarding revamp', 'Retention +5%', 'Survey clima'] },
-  'Marco Esposito': { role: 'Backend Developer', performanceScore: 78, objectives: ['Migrazione API', 'Copertura test 80%'], objectivesReached: ['Migrazione API'] },
-  'Sara Romano': { role: 'Marketing Specialist', performanceScore: 82, objectives: ['Campagna brand', 'Lead gen +20%'], objectivesReached: ['Campagna brand', 'Lead gen +20%'] },
-  'Andrea Colombo': { role: 'DevOps Engineer', performanceScore: 90, objectives: ['CI/CD pipeline', 'Infra cost -15%'], objectivesReached: ['CI/CD pipeline', 'Infra cost -15%'] },
-  'Francesca Ricci': { role: 'Sales Account', performanceScore: 60, objectives: ['Target fatturato', 'Nuovi clienti 10'], objectivesReached: [] },
-  'Alessandro Marino': { role: 'Finance Controller', performanceScore: 75, objectives: ['Chiusura bilancio', 'Forecast trimestrale'], objectivesReached: ['Chiusura bilancio', 'Forecast trimestrale'] },
-}
-
-const SR_OBJECTIVE_EXAMPLES = [
-  'Delivery Q1',
-  'Riduzione bug 30%',
-  'Mentoring junior',
-  'Lancio prodotto X',
-  'NPS +10',
-  'Design system v2',
-  'User testing 50 utenti',
-  'Dashboard analytics',
-  'Report mensili',
-  'Onboarding revamp',
-  'Retention +5%',
-  'Survey clima',
-  'Migrazione API',
-  'Copertura test 80%',
-  'Campagna brand',
-  'Lead gen +20%',
-  'CI/CD pipeline',
-  'Infra cost -15%',
-  'Target fatturato',
-  'Nuovi clienti 10',
-  'Chiusura bilancio',
-  'Forecast trimestrale',
-]
-
-const srReviewStatuses = ref({})
-const srViewingReview = ref(null)
-
-const eligibleReviews = computed(() => {
-  const reviews = []
-  const seen = new Set()
-  for (const rule of srRules.value) {
-    const users = rule.applyToAll ? sampleUsers : (rule.eligibleUsers || [])
-    for (const userName of users) {
-      if (seen.has(userName)) continue
-      const ud = sampleUserData[userName]
-      if (!ud) continue
-      let eligible = false
-      if (rule.triggerType === 'performance') {
-        eligible = ud.performanceScore >= (rule.performanceScore || 0)
-      } else {
-        const ruleObjs = rule.objectives || []
-        eligible = ruleObjs.length === 0 || ruleObjs.some((o) => (ud.objectivesReached || []).includes(o))
-      }
-      if (eligible) {
-        seen.add(userName)
-        reviews.push({
-          name: userName,
-          role: ud.role,
-          performanceScore: ud.performanceScore,
-          objectives: ud.objectives,
-          objectivesReached: ud.objectivesReached,
-          proposedRalPct: rule.defaultRalPct,
-          proposedVariablePct: rule.defaultVariablePct,
-          ruleName: rule.name,
-          ruleId: rule.id,
-        })
-      }
-    }
-  }
-  return reviews
-})
-
-function viewReview(review) {
-  srViewingReview.value = { ...review }
-  srView.value = 'viewReview'
-}
-
-function approveReview(name) {
-  srReviewStatuses.value[name] = 'approved'
-  srView.value = 'list'
-  srViewingReview.value = null
-}
-
-function rejectReview(name) {
-  srReviewStatuses.value[name] = 'rejected'
-  srView.value = 'list'
-  srViewingReview.value = null
-}
-
-function removeReview(name) {
-  srReviewStatuses.value[name] = 'removed'
-}
-
-function reviewStatus(name) {
-  return srReviewStatuses.value[name] || 'pending'
-}
-
-function backToReviewsList() {
-  srViewingReview.value = null
-  srView.value = 'list'
-}
-
-const srEligibilityDropdownOpen = ref(false)
-const srApprovalDropdownOpen = ref({})
-
-function toggleUserSelection(arr, user) {
-  const idx = arr.indexOf(user)
-  if (idx >= 0) arr.splice(idx, 1)
-  else arr.push(user)
-}
-
-function eligibleUsersFiltered() {
-  return sampleUsers.filter((u) => !srCurrentRule.value?.eligibleUsers?.includes(u))
-}
-
-function approvalUsersFiltered(stepUsers) {
-  return sampleUsers.filter((u) => !stepUsers.includes(u))
-}
-
-function ruleFromDb(row) {
-  const r = row.rule_json || {}
-  return { ...r, id: row.id, name: row.name || r.name || '' }
-}
-
-function newRuleTemplate() {
-  return {
-    id: null,
-    name: '',
-    applyToAll: false,
-    eligibleUsers: [],
-    year: new Date().getFullYear(),
-    triggerType: 'performance',
-    performanceScore: 70,
-    objectives: [],
-    approvalSteps: [{ type: 'manager', users: [] }],
-    defaultRalPct: 5,
-    defaultVariablePct: 0,
-  }
-}
-
-async function loadRules() {
-  srRulesLoading.value = true
-  srRulesError.value = ''
-  try {
-    const rows = await fetchRules()
-    srRules.value = rows.map(ruleFromDb)
-  } catch (err) {
-    srRulesError.value = err.message || 'Impossibile caricare le regole.'
-  } finally {
-    srRulesLoading.value = false
-  }
-}
-
-function startCreateRule() {
-  srCurrentRule.value = newRuleTemplate()
-  srObjInput.value = ''
-  srView.value = 'editRule'
-}
-
-function editRule(rule) {
-  srCurrentRule.value = JSON.parse(JSON.stringify(rule))
-  srObjInput.value = ''
-  srView.value = 'editRule'
-}
-
-function duplicateRule(rule) {
-  const copy = JSON.parse(JSON.stringify(rule))
-  copy.id = null
-  copy.name = (copy.name || 'Regola') + ' (copia)'
-  srCurrentRule.value = copy
-  srObjInput.value = ''
-  srView.value = 'editRule'
-}
-
-async function saveCurrentRule() {
-  const r = srCurrentRule.value
-  if (!r || srSaving.value) return
-  if (!r.name.trim()) { r.name = 'Regola ' + (srRules.value.length + 1) }
-  srSaving.value = true
-  srRulesError.value = ''
-  try {
-    const { id: _id, ...ruleData } = r
-    const isExisting = r.id && srRules.value.some((x) => x.id === r.id)
-    if (isExisting) {
-      await updateRuleById({ id: r.id, name: r.name, rule: ruleData })
-    } else {
-      const { id: newId } = await saveRule({ name: r.name, rule: ruleData })
-      r.id = newId
-    }
-    await loadRules()
-    srCurrentRule.value = null
-    srView.value = 'list'
-  } catch (err) {
-    srRulesError.value = 'Salvataggio non riuscito: ' + (err.message || String(err))
-  } finally {
-    srSaving.value = false
-  }
-}
-
-async function removeRule(id) {
-  if (!confirm('Eliminare questa regola?')) return
-  srRulesError.value = ''
-  try {
-    await deleteRuleById(id)
-    srRules.value = srRules.value.filter((x) => x.id !== id)
-  } catch (err) {
-    srRulesError.value = 'Eliminazione non riuscita: ' + (err.message || String(err))
-  }
-}
-
-function cancelRuleEdit() {
-  srCurrentRule.value = null
-  srObjInput.value = ''
-  srView.value = 'list'
-}
-
-function addPill(arr, val) {
-  const v = (typeof val === 'string' ? val : val?.value || '').trim()
-  if (v && !arr.includes(v)) arr.push(v)
-}
-
-function addSelectedObjective() {
-  if (!srCurrentRule.value) return
-  addPill(srCurrentRule.value.objectives, srObjInput.value)
-  srObjInput.value = ''
-}
-
-function removePill(arr, idx) {
-  arr.splice(idx, 1)
-}
-
-function addApprovalStep() {
-  srCurrentRule.value.approvalSteps.push({ type: 'manager', users: [] })
-}
-
-function removeApprovalStep(idx) {
-  srCurrentRule.value.approvalSteps.splice(idx, 1)
-}
-
-function startCreateIncrease() {
-  srCurrentIncrease.value = {
-    id: Date.now(),
-    employee: '',
-    ralPct: 0,
-    variablePct: 0,
-    notes: '',
-  }
-  srView.value = 'newIncrease'
-}
-
-function saveCurrentIncrease() {
-  const inc = srCurrentIncrease.value
-  if (!inc) return
-  srIncreases.value.push({ ...inc })
-  srCurrentIncrease.value = null
-  srView.value = 'list'
-}
-
-function cancelIncreaseEdit() {
-  srCurrentIncrease.value = null
-  srView.value = 'list'
-}
-
 onMounted(async () => {
-  // loadRules() — da ripristinare se si riattiva la sezione Revisione salariale
-  loadPayCommSettings()
   geminiApiUnreachable.value = false
   try {
     const res = await fetch('/api/gemini/status')
@@ -2016,7 +1723,6 @@ onMounted(async () => {
           <span class="tab-icon">
             <svg v-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
             <svg v-else-if="s.icon === 'history'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            <svg v-else-if="s.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg>
           </span>
           <span class="tab-label">{{ s.label }}</span>
         </button>
@@ -2229,78 +1935,6 @@ onMounted(async () => {
                 <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
               </div>
               <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
-            </div>
-
-            <div class="eu-panel gap-report-export">
-              <h4 class="eu-panel-title">Report analisi divario retributivo (PDF)</h4>
-              <p class="eu-panel-desc muted">
-                Documento di supporto alla reportistica e alla documentazione interna.
-                Riflette metrica e filtri attivi in questa dashboard.
-              </p>
-              <div class="gap-report-export-fields">
-                <label class="gap-report-field">
-                  <span class="gap-report-field-label">Ragione sociale</span>
-                  <input v-model="reportCompanyName" type="text" class="gap-report-input" placeholder="Es. Acme S.p.A." />
-                </label>
-                <label class="gap-report-field">
-                  <span class="gap-report-field-label">Periodo di riferimento</span>
-                  <input v-model="reportReferencePeriod" type="text" class="gap-report-input" placeholder="Es. Anno 2025" />
-                </label>
-              </div>
-              <div class="gap-report-export-options">
-                <label class="gap-report-check">
-                  <input v-model="reportIncludeFascia" type="checkbox" />
-                  Includi analisi per fascia di grading (integrativa, non normativa)
-                </label>
-                <label v-if="hasCostCenterData" class="gap-report-check">
-                  <input v-model="reportIncludeCostCenter" type="checkbox" />
-                  Includi analisi per centro di costo (integrativa, non normativa)
-                </label>
-              </div>
-              <div class="gap-report-export-actions">
-                <button
-                  type="button"
-                  class="btn-primary"
-                  :disabled="gapReportExportLoading"
-                  @click="exportGapReportPdf"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="vertical-align: -3px; margin-right: 0.35rem;" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-                  {{ gapReportExportLoading ? 'Generazione in corso…' : 'Scarica report PDF' }}
-                </button>
-                <span v-if="geminiApiUnreachable" class="muted gap-report-api-hint">Richiede server API (vercel dev o deploy).</span>
-              </div>
-            </div>
-
-            <div class="eu-panel pay-comm-settings">
-              <h4 class="eu-panel-title">Comunicazione retributiva individuale (PDF)</h4>
-              <p class="eu-panel-desc muted">
-                Documento di risposta al diritto di informazione retributiva per singolo dipendente.
-                Usa ragione sociale e periodo indicati sopra; generabile da ogni riga dipendente nelle viste di confronto.
-              </p>
-              <label class="gap-report-field pay-comm-criteria-field">
-                <span class="gap-report-field-label">Criteri di determinazione retributiva (Sez. 3, riutilizzati per tutti)</span>
-                <textarea
-                  v-model="payCriteriaText"
-                  class="pay-comm-criteria-textarea"
-                  rows="5"
-                  placeholder="Testo su inquadramento CCNL, anzianità, progressione…"
-                  @blur="persistPayCommSettings"
-                />
-              </label>
-              <label class="gap-report-field pay-comm-min-sample-field">
-                <span class="gap-report-field-label">Soglia minima per media di genere (privacy)</span>
-                <input
-                  v-model.number="payCommMinSample"
-                  type="number"
-                  min="2"
-                  max="20"
-                  class="gap-report-input pay-comm-min-input"
-                  @change="persistPayCommSettings"
-                />
-              </label>
-              <p class="muted pay-comm-hint">
-                Metrica fissa: livello retributivo normalizzato FTE. Medie di categoria per stesso livello CCNL.
-              </p>
             </div>
 
             <p class="eu-legend-line">
@@ -2544,6 +2178,46 @@ onMounted(async () => {
               <p v-else class="muted">Nessuna fascia con |gap| &gt; 5% tra quelle confrontabili, oppure dati insufficienti.</p>
             </div>
 
+            <div class="eu-panel gap-report-export eu-panel--page-footer">
+              <h4 class="eu-panel-title">Report analisi divario retributivo (PDF)</h4>
+              <p class="eu-panel-desc muted">
+                Documento di supporto alla reportistica e alla documentazione interna.
+                Riflette metrica e filtri attivi in questa dashboard.
+              </p>
+              <div class="gap-report-export-fields">
+                <label class="gap-report-field">
+                  <span class="gap-report-field-label">Ragione sociale</span>
+                  <input v-model="reportCompanyName" type="text" class="gap-report-input" placeholder="Es. Acme S.p.A." />
+                </label>
+                <label class="gap-report-field">
+                  <span class="gap-report-field-label">Periodo di riferimento</span>
+                  <input v-model="reportReferencePeriod" type="text" class="gap-report-input" placeholder="Es. Anno 2025" />
+                </label>
+              </div>
+              <div class="gap-report-export-options">
+                <label class="gap-report-check">
+                  <input v-model="reportIncludeFascia" type="checkbox" />
+                  Includi analisi per fascia di grading (integrativa, non normativa)
+                </label>
+                <label v-if="hasCostCenterData" class="gap-report-check">
+                  <input v-model="reportIncludeCostCenter" type="checkbox" />
+                  Includi analisi per centro di costo (integrativa, non normativa)
+                </label>
+              </div>
+              <div class="gap-report-export-actions">
+                <button
+                  type="button"
+                  class="btn-primary"
+                  :disabled="gapReportExportLoading"
+                  @click="exportGapReportPdf"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="vertical-align: -3px; margin-right: 0.35rem;" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+                  {{ gapReportExportLoading ? 'Generazione in corso…' : 'Scarica report PDF' }}
+                </button>
+                <span v-if="geminiApiUnreachable" class="muted gap-report-api-hint">Richiede server API (vercel dev o deploy).</span>
+              </div>
+            </div>
+
           </template>
         </div>
 
@@ -2650,15 +2324,11 @@ onMounted(async () => {
                       </span>
                       <span>
                         <span
-                          v-if="row.insufficientSample"
-                          class="mapping-badge mapping-badge--insufficient"
-                          :title="row.sampleMsg"
-                        >Campione ridotto</span>
-                        <span
-                          v-else
+                          v-if="!row.insufficientSample"
                           class="ccnl-status-badge"
                           :class="ccnlLevelGapStatusClass(row)"
                         >{{ row.status === 'green' ? 'OK' : row.status === 'yellow' ? 'Documentato' : row.status === 'red' ? 'Da correggere' : '–' }}</span>
+                        <span v-else class="muted">–</span>
                       </span>
                     </div>
                     <div
@@ -2674,7 +2344,7 @@ onMounted(async () => {
                         <span>Ruolo</span>
                         <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
                         <span>{{ euMetricLabelShort }}</span>
-                        <span>Azioni</span>
+                        <span>Giustificativo</span>
                       </div>
                       <div
                         v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
@@ -2687,17 +2357,7 @@ onMounted(async () => {
                         <span>{{ p.role || '–' }}</span>
                         <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
                         <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
-                        <span class="hay-person-actions-cell">
-                          <button
-                            type="button"
-                            class="btn-pay-communication"
-                            :disabled="payCommLoadingIndex === p.index"
-                            title="Genera comunicazione retributiva (PDF)"
-                            @click.stop="exportPayCommunicationPdf(p)"
-                          >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-                            {{ payCommLoadingIndex === p.index ? '…' : 'Comunicazione' }}
-                          </button>
+                        <span class="hay-person-justify-cell">
                           <button
                             v-if="ccnlLevelHasActionableGap(row) || personJustifications[String(p.index)]"
                             type="button"
@@ -2828,7 +2488,7 @@ onMounted(async () => {
                     >
                       <div class="people-detail hay-person-detail jg-role-persons-after-table">
                       <div class="people-header hay-person-header">
-                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span class="hay-person-deviation-head" title="Scostamento % retribuzione totale rispetto alla media della fascia">Scost. vs media fascia</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Azioni</span>
+                        <span>#</span><span><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0113 0"/></svg> Persona</span><span class="hay-person-deviation-head" title="Scostamento % retribuzione totale rispetto alla media della fascia">Scost. vs media fascia</span><span>Retrib. base</span><span>Comp. variabile</span>                        <span>Retrib. totale</span><span>Giustificativo</span>
                       </div>
                       <div
                         v-for="p in rb.people"
@@ -2875,17 +2535,7 @@ onMounted(async () => {
                         <span>{{ formatNum(p.baseSalary) }}</span>
                         <span>{{ formatNum(p.variableComponents) }}</span>
                         <span>{{ formatNum(p.totalSalary) }}</span>
-                        <span class="hay-person-actions-cell">
-                          <button
-                            type="button"
-                            class="btn-pay-communication"
-                            :disabled="payCommLoadingIndex === p.index"
-                            title="Genera comunicazione retributiva (PDF)"
-                            @click.stop="exportPayCommunicationPdf(p)"
-                          >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-                            {{ payCommLoadingIndex === p.index ? '…' : 'Comunicazione' }}
-                          </button>
+                        <span class="hay-person-justify-cell">
                           <button
                             v-if="hasHayBandDisparity(sub) || personJustifications[String(p.index)]"
                             type="button"
@@ -3016,13 +2666,13 @@ onMounted(async () => {
                   </span>
                   <span>
                     <span
-                      v-if="row.insufficientSample"
-                      class="mapping-badge mapping-badge--insufficient"
-                      :title="row.sampleMsg"
-                    >Campione ridotto</span>
-                    <span v-else class="ccnl-status-badge" :class="groupGapStatusClass(row)">{{
+                      v-if="!row.insufficientSample"
+                      class="ccnl-status-badge"
+                      :class="groupGapStatusClass(row)"
+                    >{{
                       row.status === 'green' ? 'OK' : row.status === 'yellow' ? 'Da verificare' : row.status === 'red' ? 'Da correggere' : '–'
                     }}</span>
+                    <span v-else class="muted">–</span>
                   </span>
                 </div>
                 <div v-if="isCostCenterExpanded(row.costCenterKey)" class="people-detail ccnl-level-detail cost-center-detail">
@@ -3035,7 +2685,7 @@ onMounted(async () => {
                     <span>Livello CCNL</span>
                     <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel centro di costo">Scost. vs media genere</span>
                     <span>{{ euMetricLabelShort }}</span>
-                    <span>Azioni</span>
+                    <span>Giustificativo</span>
                   </div>
                   <div
                     v-for="p in row.people.filter((x) => x.gender === 'M' || x.gender === 'F')"
@@ -3049,17 +2699,7 @@ onMounted(async () => {
                     <span>{{ p.level || '–' }}</span>
                     <span class="hay-person-deviation-cell">{{ formatDeviationVsGenderGroupMean(p) }}</span>
                     <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
-                    <span class="hay-person-actions-cell">
-                      <button
-                        type="button"
-                        class="btn-pay-communication"
-                        :disabled="payCommLoadingIndex === p.index"
-                        title="Genera comunicazione retributiva (PDF)"
-                        @click.stop="exportPayCommunicationPdf(p)"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-                        {{ payCommLoadingIndex === p.index ? '…' : 'Comunicazione' }}
-                      </button>
+                    <span class="hay-person-justify-cell">
                       <button
                         v-if="groupHasActionableGap(row) || personJustifications[String(p.index)]"
                         type="button"
@@ -3240,6 +2880,17 @@ onMounted(async () => {
               </div>
             </div>
             <div class="justify-actions justify-actions-tab">
+              <button
+                type="button"
+                class="btn-pay-communication btn-pay-communication--profile"
+                :disabled="payCommLoadingIndex === justifyingPerson.key"
+                title="Genera PDF comunicazione retributiva per questo dipendente"
+                @click="exportPayCommunicationForJustifyingPerson"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
+                {{ payCommLoadingIndex === justifyingPerson.key ? 'Generazione PDF…' : 'Genera comunicazione retributiva (PDF)' }}
+              </button>
+              <span class="justify-actions-spacer"></span>
               <button type="button" class="btn-secondary" @click="cancelPersonJustify">Annulla</button>
               <button type="button" class="btn-primary" @click="savePersonJustify">Salva giustificativo</button>
             </div>
@@ -3440,367 +3091,6 @@ onMounted(async () => {
         </div>
       </div>
     </template>
-
-    <!-- Salary Review -->
-    <template v-else-if="showSalaryReview">
-
-      <!-- CTA buttons + Sub-tab bar -->
-      <div v-if="srView === 'list'" class="sr-top-bar">
-        <div class="sr-cta-bar">
-          <button class="btn-primary" @click="startCreateRule">+ Nuova Regola</button>
-          <button class="btn-outline" @click="startCreateIncrease">+ Nuovo Aumento</button>
-        </div>
-        <div class="results-subtabs">
-          <button class="subtab" :class="{ active: srSubTab === 'reviews' }" @click="srSubTab = 'reviews'">
-            Revisioni Salariali
-            <span v-if="eligibleReviews.filter(r => reviewStatus(r.name) === 'pending').length" class="sr-badge">{{ eligibleReviews.filter(r => reviewStatus(r.name) === 'pending').length }}</span>
-          </button>
-          <button class="subtab" :class="{ active: srSubTab === 'rules' }" @click="srSubTab = 'rules'">Regole</button>
-        </div>
-      </div>
-
-      <!-- Vista lista -->
-      <template v-if="srView === 'list'">
-
-        <!-- Sub-tab: Rules -->
-        <template v-if="srSubTab === 'rules'">
-          <p v-if="srRulesError" class="upload-error">{{ srRulesError }}</p>
-
-          <div class="sr-section">
-            <p v-if="srRulesLoading" class="storico-status">Caricamento regole…</p>
-            <div v-if="!srRulesLoading && srRules.length === 0 && !srRulesError" class="no-data-msg">Nessuna regola creata.</div>
-            <div class="sr-rules-grid">
-              <article v-for="rule in srRules" :key="rule.id" class="sr-rule-card">
-                <div class="sr-rule-header">
-                  <h3>{{ rule.name || 'Regola senza nome' }}</h3>
-                  <span class="sr-rule-year">{{ rule.year }}</span>
-                </div>
-                <div class="sr-rule-meta">
-                  <span v-if="rule.applyToAll">Tutti i dipendenti</span>
-                  <span v-else>{{ (rule.eligibleUsers || []).length }} dipendent{{ (rule.eligibleUsers || []).length !== 1 ? 'i' : 'e' }}</span>
-                  <span>Trigger: {{ rule.triggerType === 'performance' ? 'Performance \u2265 ' + rule.performanceScore : (rule.objectives || []).length + ' obiettivi' }}</span>
-                  <span>RAL +{{ rule.defaultRalPct }}% / Var +{{ rule.defaultVariablePct }}%</span>
-                </div>
-                <div class="sr-rule-meta">
-                  <span>{{ (rule.approvalSteps || []).length }} step di approvazione</span>
-                </div>
-                <div class="sr-rule-actions">
-                  <button class="btn-secondary" @click="editRule(rule)">Modifica</button>
-                  <button class="btn-outline" @click="duplicateRule(rule)">Duplica</button>
-                  <button class="btn-delete" @click="removeRule(rule.id)">Elimina</button>
-                </div>
-              </article>
-            </div>
-          </div>
-
-          <div v-if="srIncreases.length > 0" class="sr-section">
-            <h2 class="analisi-title">Aumenti</h2>
-            <table class="storico-table">
-              <thead>
-                <tr><th>Dipendente</th><th>Base %</th><th>Variabile %</th><th>Note</th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="inc in srIncreases" :key="inc.id">
-                  <td>{{ inc.employee || '–' }}</td>
-                  <td>{{ inc.ralPct }}%</td>
-                  <td>{{ inc.variablePct }}%</td>
-                  <td>{{ inc.notes || '–' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-
-        <!-- Sub-tab: Salary Reviews -->
-        <template v-if="srSubTab === 'reviews'">
-          <div v-if="eligibleReviews.length === 0" class="no-data-msg">
-            Nessun dipendente idoneo. Crea una regola nella tab Regole per generare le revisioni salariali.
-          </div>
-          <div v-else class="rv-list">
-            <div class="rv-header">
-              <span class="rv-col rv-col-name">NOME</span>
-              <span class="rv-col rv-col-role">RUOLO</span>
-              <span class="rv-col rv-col-perf">PERFORMANCE</span>
-              <span class="rv-col rv-col-increase">AUMENTO PROPOSTO</span>
-              <span class="rv-col rv-col-rule">REGOLA</span>
-              <span class="rv-col rv-col-status">STATO</span>
-              <span class="rv-col rv-col-actions">AZIONI</span>
-            </div>
-            <div
-              v-for="rv in eligibleReviews"
-              :key="rv.name"
-              class="rv-row"
-              :class="{ 'rv-row-removed': reviewStatus(rv.name) === 'removed' }"
-            >
-              <span class="rv-col rv-col-name">
-                <span class="rv-avatar">
-                  <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
-                </span>
-                <span class="rv-name">{{ rv.name }}</span>
-              </span>
-              <span class="rv-col rv-col-role">
-                <span class="rv-role-badge">{{ rv.role }}</span>
-              </span>
-              <span class="rv-col rv-col-perf">
-                <span class="rv-perf-bar-wrap">
-                  <span class="rv-perf-bar" :style="{ width: rv.performanceScore + '%' }" :class="rv.performanceScore >= 80 ? 'rv-perf-high' : rv.performanceScore >= 60 ? 'rv-perf-mid' : 'rv-perf-low'"></span>
-                </span>
-                <span class="rv-perf-label">{{ rv.performanceScore }}/100</span>
-              </span>
-              <span class="rv-col rv-col-increase">
-                <span class="rv-increase-badge">Base +{{ rv.proposedRalPct }}%</span>
-                <span class="rv-increase-badge rv-increase-var">Var +{{ rv.proposedVariablePct }}%</span>
-              </span>
-              <span class="rv-col rv-col-rule">{{ rv.ruleName }}</span>
-              <span class="rv-col rv-col-status">
-                <span class="sr-status" :class="'sr-status-' + reviewStatus(rv.name)">
-                  {{ reviewStatus(rv.name) === 'approved' ? 'Approvato' : reviewStatus(rv.name) === 'rejected' ? 'Rifiutato' : reviewStatus(rv.name) === 'removed' ? 'Rimosso' : 'In attesa' }}
-                </span>
-              </span>
-              <span class="rv-col rv-col-actions" v-if="reviewStatus(rv.name) !== 'removed'">
-                <button class="rv-action-btn rv-action-view" title="Visualizza" @click="viewReview(rv)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
-                <button class="rv-action-btn rv-action-delete" title="Elimina" @click="removeReview(rv.name)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
-                </button>
-              </span>
-              <span class="rv-col rv-col-actions" v-else></span>
-            </div>
-          </div>
-        </template>
-      </template>
-
-      <!-- Dettaglio review -->
-      <template v-if="srView === 'viewReview' && srViewingReview">
-        <div class="sr-form">
-          <button class="btn-secondary" style="margin-bottom: 1rem;" @click="backToReviewsList">&larr; Torna alla lista</button>
-          <h2 class="analisi-title">{{ srViewingReview.name }}</h2>
-          <p class="sr-rule-meta" style="margin-bottom: 1.25rem;">{{ srViewingReview.role }} &middot; Regola: {{ srViewingReview.ruleName }}</p>
-
-          <div class="sr-review-grid">
-            <div class="sr-review-card">
-              <div class="sr-review-card-label">Performance</div>
-              <div class="sr-review-card-value" :class="{ 'gap-alert': srViewingReview.performanceScore < 60 }">{{ srViewingReview.performanceScore }} <span class="sr-hint">/ 100</span></div>
-            </div>
-            <div class="sr-review-card">
-              <div class="sr-review-card-label">Aumento Base Proposto</div>
-              <div class="sr-review-card-value">+{{ srViewingReview.proposedRalPct }}%</div>
-            </div>
-            <div class="sr-review-card">
-              <div class="sr-review-card-label">Aumento Variabile Proposto</div>
-              <div class="sr-review-card-value">+{{ srViewingReview.proposedVariablePct }}%</div>
-            </div>
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Obiettivi</label>
-            <div class="sr-obj-list">
-              <div v-for="obj in srViewingReview.objectives" :key="obj" class="sr-obj-item">
-                <span class="sr-obj-check" :class="{ reached: (srViewingReview.objectivesReached || []).includes(obj) }">
-                  {{ (srViewingReview.objectivesReached || []).includes(obj) ? '&#10003;' : '&#10007;' }}
-                </span>
-                <span>{{ obj }}</span>
-              </div>
-              <div v-if="!srViewingReview.objectives || srViewingReview.objectives.length === 0" class="sr-hint">Nessun obiettivo definito</div>
-            </div>
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Stato attuale: <span class="sr-status" :class="'sr-status-' + reviewStatus(srViewingReview.name)">{{ reviewStatus(srViewingReview.name) === 'approved' ? 'Approvato' : reviewStatus(srViewingReview.name) === 'rejected' ? 'Rifiutato' : 'In attesa' }}</span></label>
-          </div>
-
-          <div class="mapping-actions">
-            <button class="btn-delete" style="padding: 0.65rem 1.25rem; font-size: 0.85rem;" @click="rejectReview(srViewingReview.name)">Rifiuta</button>
-            <button class="btn-primary" @click="approveReview(srViewingReview.name)">Approva</button>
-          </div>
-        </div>
-      </template>
-
-      <!-- Pannello crea/modifica regola -->
-      <template v-if="srView === 'editRule' && srCurrentRule">
-        <div class="sr-form">
-          <h2 class="analisi-title">{{ srRules.some(r => r.id === srCurrentRule.id) ? 'Modifica Regola' : 'Nuova Regola' }}</h2>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Nome Regola</label>
-            <input v-model="srCurrentRule.name" type="text" class="sr-input" placeholder="Es. Revisione Annuale 2026" />
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Idoneità</label>
-            <label class="sr-checkbox-row">
-              <input type="checkbox" v-model="srCurrentRule.applyToAll" />
-              <span>Applica a tutti i dipendenti</span>
-            </label>
-            <div v-if="!srCurrentRule.applyToAll" class="multi-select-wrap">
-              <div class="multi-select-box" @click="srEligibilityDropdownOpen = !srEligibilityDropdownOpen">
-                <div class="multi-select-pills">
-                  <span v-for="(u, i) in srCurrentRule.eligibleUsers" :key="i" class="pill">
-                    {{ u }}
-                    <button type="button" class="pill-x" @click.stop="removePill(srCurrentRule.eligibleUsers, i)">&times;</button>
-                  </span>
-                  <span v-if="srCurrentRule.eligibleUsers.length === 0" class="multi-select-placeholder">Seleziona dipendenti...</span>
-                </div>
-                <span class="multi-select-arrow">&#9662;</span>
-              </div>
-              <div v-if="srEligibilityDropdownOpen" class="multi-select-dropdown">
-                <div
-                  v-for="u in sampleUsers" :key="u"
-                  class="multi-select-option"
-                  :class="{ selected: srCurrentRule.eligibleUsers.includes(u) }"
-                  @click="toggleUserSelection(srCurrentRule.eligibleUsers, u)"
-                >
-                  <input type="checkbox" :checked="srCurrentRule.eligibleUsers.includes(u)" tabindex="-1" />
-                  <span>{{ u }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Anno di Riferimento</label>
-            <input v-model.number="srCurrentRule.year" type="number" class="sr-input sr-input-sm" min="2020" max="2040" />
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Condizione di attivazione</label>
-            <div class="sr-radio-group">
-              <label class="sr-radio-row">
-                <input type="radio" v-model="srCurrentRule.triggerType" value="performance" />
-                <span>Punteggio performance minimo</span>
-              </label>
-              <div v-if="srCurrentRule.triggerType === 'performance'" class="sr-indent">
-                <input v-model.number="srCurrentRule.performanceScore" type="number" class="sr-input sr-input-sm" min="0" max="100" />
-                <span class="sr-hint">/ 100</span>
-              </div>
-              <label class="sr-radio-row">
-                <input type="radio" v-model="srCurrentRule.triggerType" value="objectives" />
-                <span>Obiettivi specifici raggiunti</span>
-              </label>
-              <div v-if="srCurrentRule.triggerType === 'objectives'" class="sr-indent sr-objectives-wrap">
-                <div class="pills-wrap">
-                  <span v-for="(o, i) in srCurrentRule.objectives" :key="i" class="pill">
-                    {{ o }}
-                    <button type="button" class="pill-x" @click="removePill(srCurrentRule.objectives, i)">&times;</button>
-                  </span>
-                </div>
-                <div class="sr-objective-add-row">
-                  <select v-model="srObjInput" class="sr-select">
-                    <option value="">Seleziona obiettivo esempio...</option>
-                    <option v-for="obj in SR_OBJECTIVE_EXAMPLES" :key="obj" :value="obj">{{ obj }}</option>
-                  </select>
-                  <button type="button" class="btn-outline" :disabled="!srObjInput" @click="addSelectedObjective">
-                    Aggiungi
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Workflow di Approvazione</label>
-            <div class="wf-steps">
-              <div v-for="(step, si) in srCurrentRule.approvalSteps" :key="si" class="wf-step">
-                <div class="wf-step-header">
-                  <span class="wf-step-num">{{ si + 1 }}</span>
-                  <select v-model="step.type" class="sr-select">
-                    <option value="manager">Manager Diretto</option>
-                    <option value="users">Utenti Specifici</option>
-                  </select>
-                  <button v-if="srCurrentRule.approvalSteps.length > 1" type="button" class="wf-step-remove" @click="removeApprovalStep(si)">&times;</button>
-                </div>
-                <div v-if="step.type === 'users'" class="multi-select-wrap wf-step-pills">
-                  <div class="multi-select-box" @click="srApprovalDropdownOpen[si] = !srApprovalDropdownOpen[si]">
-                    <div class="multi-select-pills">
-                      <span v-for="(u, ui) in step.users" :key="ui" class="pill">
-                        {{ u }}
-                        <button type="button" class="pill-x" @click.stop="removePill(step.users, ui)">&times;</button>
-                      </span>
-                      <span v-if="step.users.length === 0" class="multi-select-placeholder">Seleziona approvatori...</span>
-                    </div>
-                    <span class="multi-select-arrow">&#9662;</span>
-                  </div>
-                  <div v-if="srApprovalDropdownOpen[si]" class="multi-select-dropdown">
-                    <div
-                      v-for="u in sampleUsers" :key="u"
-                      class="multi-select-option"
-                      :class="{ selected: step.users.includes(u) }"
-                      @click="toggleUserSelection(step.users, u)"
-                    >
-                      <input type="checkbox" :checked="step.users.includes(u)" tabindex="-1" />
-                      <span>{{ u }}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <button type="button" class="btn-outline sr-add-step" @click="addApprovalStep">+ Aggiungi step</button>
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Aumento Predefinito</label>
-            <div class="sr-pct-row">
-              <div class="sr-pct-field">
-                <label>% Base</label>
-                <input v-model.number="srCurrentRule.defaultRalPct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
-              </div>
-              <div class="sr-pct-field">
-                <label>% Variabile</label>
-                <input v-model.number="srCurrentRule.defaultVariablePct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
-              </div>
-            </div>
-          </div>
-
-          <p v-if="srRulesError" class="upload-error">{{ srRulesError }}</p>
-          <div class="mapping-actions">
-            <button class="btn-secondary" :disabled="srSaving" @click="cancelRuleEdit">Annulla</button>
-            <button class="btn-primary" :disabled="srSaving" @click="saveCurrentRule">
-              {{ srSaving ? 'Salvataggio…' : 'Salva Regola' }}
-            </button>
-          </div>
-        </div>
-      </template>
-
-      <!-- Form crea aumento -->
-      <template v-if="srView === 'newIncrease' && srCurrentIncrease">
-        <div class="sr-form">
-          <h2 class="analisi-title">Nuovo Aumento</h2>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Dipendente</label>
-            <select v-model="srCurrentIncrease.employee" class="sr-select">
-              <option value="" disabled>Seleziona dipendente...</option>
-              <option v-for="u in sampleUsers" :key="u" :value="u">{{ u }}</option>
-            </select>
-          </div>
-
-          <div class="sr-form-section">
-            <div class="sr-pct-row">
-              <div class="sr-pct-field">
-                <label>Aumento Base %</label>
-                <input v-model.number="srCurrentIncrease.ralPct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
-              </div>
-              <div class="sr-pct-field">
-                <label>Aumento Variabile %</label>
-                <input v-model.number="srCurrentIncrease.variablePct" type="number" class="sr-input sr-input-sm" min="0" step="0.5" />
-              </div>
-            </div>
-          </div>
-
-          <div class="sr-form-section">
-            <label class="sr-label">Note</label>
-            <textarea v-model="srCurrentIncrease.notes" class="justify-textarea" rows="3" placeholder="Motivazione o dettagli..."></textarea>
-          </div>
-
-          <div class="mapping-actions">
-            <button class="btn-secondary" @click="cancelIncreaseEdit">Annulla</button>
-            <button class="btn-primary" @click="saveCurrentIncrease">Salva Aumento</button>
-          </div>
-        </div>
-      </template>
-
-    </template>
     </div>
   </div>
 
@@ -3927,719 +3217,6 @@ onMounted(async () => {
 .btn-icon svg {
   width: 22px;
   height: 22px;
-}
-
-/* Salary Review */
-.sr-top-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin-bottom: 1.5rem;
-}
-
-.sr-top-bar .sr-cta-bar {
-  margin-bottom: 1rem;
-}
-
-.sr-top-bar .results-subtabs {
-  margin-bottom: 0;
-}
-
-.sr-cta-bar {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.sr-section {
-  margin-bottom: 2rem;
-}
-
-.sr-rules-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 1rem;
-}
-
-.sr-rule-card {
-  background: var(--bg-card);
-  border-radius: var(--radius-md);
-  padding: 1.25rem;
-  box-shadow: var(--shadow-card);
-  transition: box-shadow 0.15s;
-}
-
-.sr-rule-card:hover {
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
-}
-
-.sr-rule-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 0.6rem;
-}
-
-.sr-rule-header h3 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.sr-rule-year {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.sr-rule-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.5rem;
-}
-
-.sr-rule-actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-}
-
-/* Form regola / aumento */
-.sr-form {
-  max-width: 640px;
-}
-
-.sr-form-section {
-  margin-bottom: 1.5rem;
-}
-
-.sr-label {
-  display: block;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 0.4rem;
-}
-
-.sr-input {
-  width: 100%;
-  padding: 0.65rem 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  background: var(--bg-card);
-  box-sizing: border-box;
-}
-
-.sr-input:focus {
-  outline: none;
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px rgba(10, 108, 210, 0.2);
-}
-
-.sr-input-sm {
-  width: 120px;
-}
-
-.sr-select {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  background: var(--bg-card);
-  color: var(--text-primary);
-  flex: 1;
-}
-
-.sr-checkbox-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  cursor: pointer;
-  margin-bottom: 0.5rem;
-}
-
-.sr-checkbox-row input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent-blue);
-}
-
-.sr-radio-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.sr-radio-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.sr-radio-row input {
-  accent-color: var(--accent-blue);
-}
-
-.sr-indent {
-  padding-left: 1.6rem;
-  margin-top: 0.35rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.sr-objectives-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-}
-.sr-objective-add-row {
-  display: flex;
-  gap: 0.5rem;
-}
-.sr-objective-add-row .sr-select {
-  flex: 1;
-}
-
-.sr-hint {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.sr-pct-row {
-  display: flex;
-  gap: 1.5rem;
-}
-
-.sr-pct-field {
-  flex: 1;
-}
-
-.sr-pct-field label {
-  display: block;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.3rem;
-}
-
-/* Pills */
-.pills-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-  align-items: center;
-  min-height: 40px;
-}
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.25rem 0.6rem;
-  background: rgba(10, 108, 210, 0.1);
-  color: var(--accent-blue);
-  border-radius: 20px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.pill-x {
-  border: none;
-  background: none;
-  color: var(--accent-blue);
-  font-size: 1rem;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-  opacity: 0.7;
-  transition: opacity 0.12s;
-}
-
-.pill-x:hover {
-  opacity: 1;
-}
-
-/* Workflow steps */
-.wf-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.wf-step {
-  background: var(--bg-page);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  padding: 0.75rem;
-}
-
-.wf-step-header {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.wf-step-num {
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-blue);
-  color: #fff;
-  border-radius: 50%;
-  font-size: 0.75rem;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.wf-step-remove {
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  font-size: 1.1rem;
-  cursor: pointer;
-  padding: 0 0.3rem;
-  line-height: 1;
-  transition: color 0.12s;
-}
-
-.wf-step-remove:hover {
-  color: #ef4444;
-}
-
-.wf-step-pills {
-  margin-top: 0.5rem;
-}
-
-.sr-add-step {
-  font-size: 0.8rem;
-  padding: 0.4rem 0.75rem;
-}
-
-/* Salary Review badges & statuses */
-.sr-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 10px;
-  background: #ef4444;
-  color: #fff;
-  font-size: 0.7rem;
-  font-weight: 700;
-  margin-left: 6px;
-}
-
-.sr-status {
-  display: inline-block;
-  padding: 0.2rem 0.6rem;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.sr-status-pending {
-  background: rgba(234, 179, 8, 0.12);
-  color: #a16207;
-}
-
-.sr-status-approved {
-  background: rgba(34, 197, 94, 0.12);
-  color: #15803d;
-}
-
-.sr-status-rejected {
-  background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
-}
-
-.sr-status-removed {
-  background: var(--border-light);
-  color: var(--text-muted);
-}
-
-.sr-row-removed td {
-  opacity: 0.45;
-  text-decoration: line-through;
-}
-
-/* Review detail */
-.sr-review-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.sr-review-card {
-  background: var(--bg-card);
-  border-radius: var(--radius-md);
-  padding: 1rem 1.25rem;
-  box-shadow: var(--shadow-soft);
-}
-
-.sr-review-card-label {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin-bottom: 0.35rem;
-}
-
-.sr-review-card-value {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--accent-blue);
-}
-
-.sr-obj-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.sr-obj-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-}
-
-.sr-obj-check {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 0.75rem;
-  font-weight: 700;
-  background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
-  flex-shrink: 0;
-}
-
-.sr-obj-check.reached {
-  background: rgba(34, 197, 94, 0.12);
-  color: #15803d;
-}
-
-/* Reviews card-row list */
-.rv-list {
-  width: 100%;
-}
-
-.rv-header {
-  display: flex;
-  align-items: center;
-  padding: 0 1rem;
-  margin-bottom: 0.25rem;
-}
-
-.rv-header .rv-col {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  user-select: none;
-}
-
-.rv-row {
-  display: flex;
-  align-items: center;
-  background: var(--bg-card);
-  border-radius: var(--radius-md);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.5rem;
-  transition: box-shadow 0.15s;
-}
-
-.rv-row:hover {
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.09);
-}
-
-.rv-row-removed {
-  opacity: 0.4;
-}
-
-.rv-col {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.rv-col-name {
-  flex: 2;
-  gap: 0.6rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.rv-col-role {
-  flex: 1.5;
-}
-
-.rv-col-perf {
-  flex: 1.5;
-  gap: 0.5rem;
-}
-
-.rv-col-increase {
-  flex: 1.8;
-  gap: 0.35rem;
-}
-
-.rv-col-rule {
-  flex: 1.2;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.rv-col-status {
-  flex: 1;
-}
-
-.rv-col-actions {
-  flex: 0 0 80px;
-  justify-content: flex-end;
-  gap: 0.35rem;
-}
-
-.rv-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: linear-gradient(310deg, rgba(33, 82, 255, 0.15) 0%, rgba(33, 212, 253, 0.15) 100%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #0a6cd2;
-  flex-shrink: 0;
-}
-
-.rv-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.rv-role-badge {
-  display: inline-block;
-  padding: 0.2rem 0.65rem;
-  border-radius: 12px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  background: linear-gradient(310deg, #2152ff 0%, #21d4fd 100%);
-  color: #fff;
-  white-space: nowrap;
-}
-
-.rv-perf-bar-wrap {
-  display: block;
-  width: 60px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border-light);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.rv-perf-bar {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.3s;
-}
-
-.rv-perf-high { background: linear-gradient(90deg, #22c55e, #16a34a); }
-.rv-perf-mid  { background: linear-gradient(90deg, #eab308, #f59e0b); }
-.rv-perf-low  { background: linear-gradient(90deg, #ef4444, #f87171); }
-
-.rv-perf-label {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-}
-
-.rv-increase-badge {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background: rgba(34, 197, 94, 0.1);
-  color: #15803d;
-  white-space: nowrap;
-}
-
-.rv-increase-var {
-  background: rgba(10, 108, 210, 0.1);
-  color: #0a6cd2;
-}
-
-.rv-action-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-}
-
-.rv-action-view:hover {
-  background: rgba(10, 108, 210, 0.1);
-  color: #0a6cd2;
-}
-
-.rv-action-delete:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-}
-
-@media (max-width: 900px) {
-  .rv-header { display: none; }
-  .rv-row {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .rv-col-name { flex: 1 1 100%; }
-  .rv-col-role,
-  .rv-col-perf,
-  .rv-col-increase,
-  .rv-col-rule,
-  .rv-col-status { flex: 1 1 45%; }
-  .rv-col-actions { flex: 1 1 100%; justify-content: flex-start; }
-}
-
-/* Multi-select dropdown */
-.multi-select-wrap {
-  position: relative;
-}
-
-.multi-select-box {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-  cursor: pointer;
-  min-height: 40px;
-  transition: border-color 0.15s;
-}
-
-.multi-select-box:hover {
-  border-color: var(--accent-blue);
-}
-
-.multi-select-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  flex: 1;
-  align-items: center;
-}
-
-.multi-select-placeholder {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-}
-
-.multi-select-arrow {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  margin-left: 0.5rem;
-  flex-shrink: 0;
-}
-
-.multi-select-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  margin-top: 2px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.multi-select-option {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.55rem 0.75rem;
-  font-size: 0.85rem;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.multi-select-option:hover {
-  background: rgba(10, 108, 210, 0.06);
-}
-
-.multi-select-option.selected {
-  background: rgba(10, 108, 210, 0.1);
-  font-weight: 600;
-}
-
-.multi-select-option input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent-blue);
-  pointer-events: none;
-}
-
-.btn-outline {
-  padding: 0.5rem 0.875rem;
-  border: 1px solid var(--accent-blue);
-  border-radius: var(--radius-sm);
-  background: white;
-  color: var(--accent-blue);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.btn-outline:hover {
-  background: rgba(10, 108, 210, 0.08);
 }
 
 .btn-secondary {
@@ -4789,10 +3366,11 @@ onMounted(async () => {
 
 .justify-actions-tab {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 1rem;
+  width: 100%;
 }
 
 .eu-dashboard-wrap {
@@ -4802,7 +3380,12 @@ onMounted(async () => {
   margin-bottom: 1rem;
 }
 .gap-report-export {
-  margin-bottom: 1rem;
+  margin-bottom: 0;
+  margin-top: 1.5rem;
+}
+.eu-panel--page-footer {
+  border-top: 1px solid var(--border-light);
+  padding-top: 1.25rem;
 }
 .gap-report-export-fields {
   display: grid;
@@ -4848,36 +3431,6 @@ onMounted(async () => {
   gap: 0.75rem;
 }
 .gap-report-api-hint {
-  font-size: 0.82rem;
-}
-.pay-comm-settings {
-  margin-bottom: 1rem;
-}
-.pay-comm-criteria-field {
-  margin: 0.75rem 0 0.5rem;
-}
-.pay-comm-criteria-textarea {
-  width: 100%;
-  min-height: 6rem;
-  padding: 0.55rem 0.65rem;
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: 6px;
-  font-size: 0.88rem;
-  font-family: inherit;
-  line-height: 1.45;
-  resize: vertical;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary);
-}
-.pay-comm-min-sample-field {
-  max-width: 12rem;
-  margin-bottom: 0.35rem;
-}
-.pay-comm-min-input {
-  max-width: 5rem;
-}
-.pay-comm-hint {
-  margin: 0.35rem 0 0;
   font-size: 0.82rem;
 }
 .eu-dash-title {
@@ -5643,14 +4196,6 @@ onMounted(async () => {
   border-radius: 4px;
   white-space: nowrap;
 }
-.mapping-badge--insufficient {
-  background: rgba(100, 116, 139, 0.15);
-  color: #475569;
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-}
 .ccnl-level-detail {
   padding: 0.5rem 0.85rem 0.85rem;
   background: var(--bg-page, #f8fafc);
@@ -5663,7 +4208,7 @@ onMounted(async () => {
 .people-header.ccnl-person-header,
 .people-row.ccnl-person-row {
   display: grid;
-  grid-template-columns: 2.5rem 1.2fr 3rem 1fr 1fr 1fr 7rem 10.5rem;
+  grid-template-columns: 2.5rem 1.2fr 3rem 1fr 1fr 1fr 7rem;
   gap: 0.5rem;
   align-items: center;
   font-size: 0.8125rem;
@@ -5733,7 +4278,7 @@ onMounted(async () => {
 }
 .people-header.cost-center-person-header,
 .people-row.cost-center-person-row {
-  grid-template-columns: 2.5rem 1.1fr 3rem 1fr 0.75fr 1fr 1fr 10.5rem;
+  grid-template-columns: 2.5rem 1.1fr 3rem 1fr 0.75fr 1fr 1fr 7rem;
 }
 .subtab--integrative {
   font-style: normal;
@@ -6139,7 +4684,7 @@ onMounted(async () => {
 
 .hay-person-header,
 .hay-person-row {
-  grid-template-columns: 0.4fr 1.5fr 0.9fr 1fr 1fr 1fr 11rem;
+  grid-template-columns: 0.4fr 1.5fr 0.9fr 1fr 1fr 1fr 1.15fr;
 }
 
 /* Blocco persone: sfondo bianco (stacca dal grigio/azzurro di .people-detail) */
@@ -6659,16 +5204,6 @@ onMounted(async () => {
   color: var(--text-secondary);
   line-height: 1.35;
 }
-.mapping-badge {
-  display: inline-block;
-  align-self: flex-start;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 0.12rem 0.4rem;
-  border-radius: 4px;
-}
 .mapping-row--unmapped-required {
   background: rgba(254, 242, 242, 0.5);
 }
@@ -6845,13 +5380,10 @@ onMounted(async () => {
 }
 
 /* Pulsante giustificativo persona (testo esplicito) */
-.hay-person-justify-cell,
-.hay-person-actions-cell {
+.hay-person-justify-cell {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: flex-start;
-  gap: 0.35rem;
 }
 
 .hay-person-no-justify {
@@ -6925,6 +5457,15 @@ onMounted(async () => {
 .btn-pay-communication:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+
+.btn-pay-communication--profile {
+  font-size: 0.82rem;
+  padding: 0.5rem 0.85rem;
+}
+
+.justify-actions-spacer {
+  flex: 1;
 }
 
 /* Modal giustificativo */
