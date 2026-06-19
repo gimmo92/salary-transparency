@@ -28,6 +28,26 @@ export function parsePartTimePct(value) {
   return Math.min(100, n)
 }
 
+/** Importo positivo o 0 se assente/non valido. */
+export function parseSalaryAmount(value) {
+  if (value == null || value === '') return 0
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : 0
+  const cleaned = String(value)
+    .replace(/\./g, '')
+    .replace(/,/g, '.')
+    .replace(/[^\d.-]/g, '')
+  const n = Number(cleaned)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** Retribuzione base netta: esclude superminimo e superminimo ass.le dal valore grezzo. */
+export function effectiveBaseSalary(rawBase, superminimo = 0, superminimoAssoluto = 0) {
+  const raw = Number.isFinite(rawBase) ? rawBase : 0
+  const sm = parseSalaryAmount(superminimo)
+  const sma = parseSalaryAmount(superminimoAssoluto)
+  return Math.max(0, raw - sm - sma)
+}
+
 /**
  * Risolve le tre metriche da input grezzi (retrocompatibile con solo base + variabile).
  */
@@ -54,8 +74,13 @@ export function resolveSalaryComponents({
 
 /** Aggiunge metriche FTE e orarie a un record dipendente già parsato. */
 export function enrichEmployeeSalaries(r, annualHours = DEFAULT_ANNUAL_HOURS) {
+  const baseSalaryRaw = r.baseSalary ?? 0
+  const superminimo = r.superminimo ?? 0
+  const superminimoAssoluto = r.superminimoAssoluto ?? 0
+  const baseSalary = effectiveBaseSalary(baseSalaryRaw, superminimo, superminimoAssoluto)
+
   const resolved = resolveSalaryComponents({
-    base: r.baseSalary ?? 0,
+    base: baseSalary,
     structural: r.structuralComponents,
     individual: r.individualComponents,
     variableLegacy: r.variableComponents ?? 0,
@@ -67,7 +92,6 @@ export function enrichEmployeeSalaries(r, annualHours = DEFAULT_ANNUAL_HOURS) {
   const toFte = (v) => (Number.isFinite(v) && v > 0 ? v / fteFactor : 0)
   const toHourly = (fteVal) => (fteVal > 0 ? fteVal / annualHours : 0)
 
-  const baseSalary = r.baseSalary ?? 0
   const { structuralComponents, individualComponents, livelloRetributivo, totalSalary, variableComponents } =
     resolved
 
@@ -82,6 +106,10 @@ export function enrichEmployeeSalaries(r, annualHours = DEFAULT_ANNUAL_HOURS) {
   return {
     ...r,
     partTimePct,
+    baseSalaryRaw,
+    superminimo: parseSalaryAmount(superminimo),
+    superminimoAssoluto: parseSalaryAmount(superminimoAssoluto),
+    baseSalary,
     structuralComponents,
     individualComponents,
     livelloRetributivo,

@@ -429,6 +429,8 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
   const structIdx = idx(COLUMN_ROLES.structuralComponents)
   const indivIdx = idx(COLUMN_ROLES.individualComponents)
   const ccnlMinIdx = idx(COLUMN_ROLES.ccnlMinimum)
+  const superminimoIdx = idx(COLUMN_ROLES.superminimo)
+  const superminimoAssIdx = idx(COLUMN_ROLES.superminimoAssoluto)
 
   const parseNumber = (value) => {
     if (value == null || value === '' || value === 'N/D') return 0
@@ -451,6 +453,10 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
 
   return rows.map((row, index) => {
     const base = baseIdx != null ? parseNumber(row[baseIdx]) : 0
+    const superminimo =
+      superminimoIdx != null ? parseNumber(row[superminimoIdx]) : 0
+    const superminimoAssoluto =
+      superminimoAssIdx != null ? parseNumber(row[superminimoAssIdx]) : 0
     const variableLegacy = varIdx != null ? parseNumber(row[varIdx]) : 0
     const structural = structIdx != null ? parseNumber(row[structIdx]) : null
     const individual = indivIdx != null ? parseNumber(row[indivIdx]) : null
@@ -470,6 +476,8 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       roleSeniority: roleSeniorityIdx != null ? parseSeniorityDisplay(row[roleSeniorityIdx]) : null,
       performanceScore: perfScoreIdx != null ? parsePerformanceScore(row[perfScoreIdx]) : null,
       baseSalary: base,
+      superminimo,
+      superminimoAssoluto,
       structuralComponents: structural,
       individualComponents: individual,
       variableComponents: variableLegacy,

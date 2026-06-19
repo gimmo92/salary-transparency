@@ -18,6 +18,8 @@ const R = {
   structuralComponents: 'structuralComponents',
   individualComponents: 'individualComponents',
   ccnlMinimum: 'ccnlMinimum',
+  superminimo: 'superminimo',
+  superminimoAssoluto: 'superminimoAssoluto',
 }
 
 /** Ruoli per cui l'euristica ha priorità sull'AI (evita 14ma → base, INPS → totale). */
@@ -27,6 +29,8 @@ const SALARY_PRIORITY_ROLES = new Set([
   R.structuralComponents,
   R.individualComponents,
   R.totalSalary,
+  R.superminimo,
+  R.superminimoAssoluto,
 ])
 
 const DISQUALIFY = {
@@ -45,6 +49,7 @@ const DISQUALIFY = {
     /\bcosto\s*(del\s*)?lavoro/i,
     /\bcentro\s*di\s*costo/i,
     /\bjob\s*desc/i,
+    /\bsuperminimo\b/i,
   ],
   [R.totalSalary]: [
     /\binps\b/i,
@@ -68,6 +73,7 @@ const DISQUALIFY = {
   ],
   [R.ccnl]: [/\blivello\b/i, /\bminimo\b/i, /\btabell/i, /\binquadramento\b/i],
   [R.level]: [/^ccnl$/i, /\bcontratto\s*collettivo\b/i],
+  [R.superminimo]: [/\bass\.?\s*le\b/i, /\bassorb/i],
 }
 
 const SCORE_PATTERNS = {
@@ -143,6 +149,14 @@ const SCORE_PATTERNS = {
   ],
   [R.ccnlMinimum]: [
     { re: /\b(minimo\s*ccnl|minimo\s*tabell|tabellare)\b/i, w: 9 },
+  ],
+  [R.superminimoAssoluto]: [
+    { re: /\bsuperminimo\s*ass\.?\s*le\b/i, w: 12 },
+    { re: /\bsuperminimo\s*assorb/i, w: 11 },
+    { re: /\bass\.?\s*le\b/i, w: 5 },
+  ],
+  [R.superminimo]: [
+    { re: /\bsuperminimo\b/i, w: 10 },
   ],
 }
 
@@ -253,6 +267,8 @@ export function detectColumnRoles(headers, rows) {
     R.seniority,
     R.performanceScore,
     R.ccnlMinimum,
+    R.superminimoAssoluto,
+    R.superminimo,
   ]
 
   for (const role of roleOrder) {
@@ -336,6 +352,8 @@ REGOLE OBBLIGATORIE (Italia):
 - structuralComponents = somma componenti strutturali continuative/fisse (escluse da totali INPS).
 - individualComponents = somma componenti individuali/discrezionali/una-tantum.
 - ccnlMinimum = minimo tabellare CCNL se presente.
+- superminimo = importo superminimo (escluso dalla retribuzione base in analisi).
+- superminimoAssoluto = superminimo ass.le / assorbibile (escluso dalla retribuzione base in analisi).
 
 Usa gli ESEMPI numerici: importi in euro → colonne retributive; M/F → genere; 50/80/100 → part-time.
 

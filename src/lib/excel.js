@@ -28,6 +28,10 @@ export const COLUMN_ROLES = {
   individualComponents: 'individualComponents',
   /** Minimo tabellare CCNL (opzionale) */
   ccnlMinimum: 'ccnlMinimum',
+  /** Superminimo (escluso dalla retribuzione base in analisi) */
+  superminimo: 'superminimo',
+  /** Superminimo assorbibile / ass.le (escluso dalla retribuzione base in analisi) */
+  superminimoAssoluto: 'superminimoAssoluto',
 }
 
 export function getRoleLabel(role) {
@@ -50,6 +54,8 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.structuralComponents]: 'Componenti strutturali (voci continuative/fisse)',
     [COLUMN_ROLES.individualComponents]: 'Componenti individuali (voci discrezionali/una-tantum)',
     [COLUMN_ROLES.ccnlMinimum]: 'Minimo CCNL',
+    [COLUMN_ROLES.superminimo]: 'Superminimo',
+    [COLUMN_ROLES.superminimoAssoluto]: 'Superminimo ass.le',
   }
   return labels[role] ?? role
 }
@@ -93,7 +99,7 @@ export const MAPPING_UI_SECTIONS = [
       {
         role: COLUMN_ROLES.baseSalary,
         label: 'Retribuzione base annua',
-        hint: 'Obbligatorio per procedere',
+        hint: 'Obbligatorio. Se mappati, superminimo e superminimo ass.le vengono esclusi da questo importo',
         badge: 'required',
       },
       {
@@ -130,6 +136,16 @@ export const MAPPING_UI_SECTIONS = [
         role: COLUMN_ROLES.category,
         label: 'Centro di costo (o categoria / qualifica legale)',
         hint: 'Abilita l’analisi organizzativa per centro di costo',
+      },
+      {
+        role: COLUMN_ROLES.superminimo,
+        label: 'Superminimo',
+        hint: 'Escluso dalla retribuzione base nelle analisi',
+      },
+      {
+        role: COLUMN_ROLES.superminimoAssoluto,
+        label: 'Superminimo ass.le',
+        hint: 'Escluso dalla retribuzione base nelle analisi',
       },
     ],
   },
@@ -316,6 +332,8 @@ export function buildNormalizedData(rows, headers, mapping) {
   const structIdx = idx(COLUMN_ROLES.structuralComponents)
   const indivIdx = idx(COLUMN_ROLES.individualComponents)
   const ccnlMinIdx = idx(COLUMN_ROLES.ccnlMinimum)
+  const superminimoIdx = idx(COLUMN_ROLES.superminimo)
+  const superminimoAssIdx = idx(COLUMN_ROLES.superminimoAssoluto)
 
   const parseNumber = (value) => {
     if (value == null || value === '') return 0
@@ -353,6 +371,10 @@ export function buildNormalizedData(rows, headers, mapping) {
       const gender = normalizeGender(genderRaw)
 
       const base = baseIdx != null ? parseNumber(row[baseIdx]) : 0
+      const superminimo =
+        superminimoIdx != null ? parseNumber(row[superminimoIdx]) : 0
+      const superminimoAssoluto =
+        superminimoAssIdx != null ? parseNumber(row[superminimoAssIdx]) : 0
       const variableLegacy = varIdx != null ? parseNumber(row[varIdx]) : 0
       const structural =
         structIdx != null ? parseNumber(row[structIdx]) : null
@@ -364,6 +386,8 @@ export function buildNormalizedData(rows, headers, mapping) {
         gender,
         name: nameIdx != null ? row[nameIdx] : null,
         baseSalary: base,
+        superminimo,
+        superminimoAssoluto,
         structuralComponents: structural,
         individualComponents: individual,
         variableComponents: variableLegacy,
