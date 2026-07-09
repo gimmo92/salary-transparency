@@ -1526,14 +1526,12 @@ const euDashboard = computed(() =>
 const quartileOutlierResult = computed(() =>
   computeQuartileOutliers(genderNormalizedForAnalysis.value, euDashboardMetric.value),
 )
-)
 const quartileOutlierRows = computed(() => quartileOutlierResult.value.rows)
 const quartileOutlierTruncated = computed(() => quartileOutlierResult.value.truncated)
 const quartileOutlierTotal = computed(() => quartileOutlierResult.value.total)
 
 const quartilePeopleGroups = computed(() =>
   assignSalaryQuartiles(genderNormalizedForAnalysis.value, euDashboardMetric.value),
-)
 )
 
 const expandedQuartiles = ref(new Set())
