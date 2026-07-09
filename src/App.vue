@@ -2441,7 +2441,7 @@ onMounted(async () => {
                         <span>Persona</span>
                         <span>Genere</span>
                         <span>Ruolo</span>
-                        <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
+                        <span class="hay-person-deviation-head" title="Scostamento vs media oraria uomini nel livello CCNL (stesso denominatore del GPG)">Scost. vs media M</span>
                         <span title="Retribuzione oraria ({{ euMetricLabel }})">Oraria</span>
                         <span>Giustificativo</span>
                       </div>
@@ -2780,7 +2780,7 @@ onMounted(async () => {
                     <span>Genere</span>
                     <span>Ruolo</span>
                     <span>Livello CCNL</span>
-                    <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel centro di costo">Scost. vs media genere</span>
+                    <span class="hay-person-deviation-head" title="Scostamento vs media oraria uomini nel centro di costo (stesso denominatore del GPG)">Scost. vs media M</span>
                     <span>{{ euMetricLabelShort }}</span>
                     <span>Giustificativo</span>
                   </div>

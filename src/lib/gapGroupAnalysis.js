@@ -66,23 +66,17 @@ export function analyzeGenderPayGap(people, options = {}) {
   }
 }
 
-/** Scostamento retributivo vs media di genere nello stesso livello/gruppo. */
+/** Scostamento retributivo vs media uomini nello stesso livello/gruppo (denominatore = media M, come GPG). */
 export function enrichPeopleWithGenderMeanDeviation(people, getSalary, options = {}) {
   const isExcludedFromGap = options.isExcludedFromGap || (() => false)
   const eligible = (people || []).filter((p) => !isExcludedFromGap(p))
   const men = eligible.filter((p) => p.gender === 'M' && getSalary(p) != null)
-  const women = eligible.filter((p) => p.gender === 'F' && getSalary(p) != null)
   const avgM = men.length ? mean(men.map(getSalary)) : null
-  const avgF = women.length ? mean(women.map(getSalary)) : null
 
   return (people || []).map((p) => {
     const sal = getSalary?.(p)
-    const genderAvg =
-      p.gender === 'M' ? avgM : p.gender === 'F' ? avgF : null
     const deviationFromGenderMeanPct =
-      sal != null && genderAvg != null && genderAvg > 0
-        ? ((sal - genderAvg) / genderAvg) * 100
-        : null
+      sal != null && avgM != null && avgM > 0 ? ((sal - avgM) / avgM) * 100 : null
     return {
       ...p,
       comparisonSalary: sal,
