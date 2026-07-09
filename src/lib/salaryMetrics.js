@@ -8,6 +8,7 @@ export const SALARY_METRICS = {
   base: 'base',
   livello: 'livello',
   totale: 'totale',
+  variabile: 'variabile',
 }
 
 export const DEFAULT_ANNUAL_HOURS = 1720
@@ -124,6 +125,7 @@ export function enrichEmployeeSalaries(r, annualHours = DEFAULT_ANNUAL_HOURS) {
     baseSalaryHourly: toHourly(baseSalaryFte),
     livelloRetributivoHourly: toHourly(livelloRetributivoFte),
     totalSalaryHourly: toHourly(totalSalaryFte),
+    variableComponentsHourly: toHourly(variableComponentsFte),
   }
 }
 
@@ -133,7 +135,8 @@ export function getSalaryFieldName(metric, { fte = true, hourly = false } = {}) 
       [SALARY_METRICS.base]: 'baseSalary',
       [SALARY_METRICS.livello]: 'livelloRetributivo',
       [SALARY_METRICS.totale]: 'totalSalary',
-    }[metric] || 'livelloRetributivo'
+      [SALARY_METRICS.variabile]: 'variableComponents',
+    }[metric] || 'baseSalary'
 
   if (hourly) {
     return `${core}Hourly`
@@ -143,6 +146,7 @@ export function getSalaryFieldName(metric, { fte = true, hourly = false } = {}) 
       baseSalary: 'baseSalaryFte',
       livelloRetributivo: 'livelloRetributivoFte',
       totalSalary: 'totalSalaryFte',
+      variableComponents: 'variableComponentsFte',
     }
     return fteMap[core]
   }
@@ -156,7 +160,8 @@ export function getMetricLabel(metric, { short = false } = {}) {
         [SALARY_METRICS.base]: 'Base',
         [SALARY_METRICS.livello]: 'Livello retrib.',
         [SALARY_METRICS.totale]: 'Totale',
-      }[metric] || 'Livello retrib.'
+        [SALARY_METRICS.variabile]: 'Comp. variabili',
+      }[metric] || 'Base'
     )
   }
   return (
@@ -164,7 +169,8 @@ export function getMetricLabel(metric, { short = false } = {}) {
       [SALARY_METRICS.base]: 'Retribuzione base annua',
       [SALARY_METRICS.livello]: 'Livello retributivo (continuità fissa)',
       [SALARY_METRICS.totale]: 'Retribuzione totale annua',
-    }[metric] || 'Livello retributivo'
+      [SALARY_METRICS.variabile]: 'Componenti variabili annue',
+    }[metric] || 'Retribuzione base annua'
   )
 }
 
@@ -172,10 +178,13 @@ export function getComparisonValue(r, metric, { fte = true, hourly = false } = {
   if (!r) return null
   const field = getSalaryFieldName(metric, { fte, hourly })
   const v = r[field]
-  if (Number.isFinite(v) && v > 0) return v
+  const allowZero = metric === SALARY_METRICS.variabile
+  if (Number.isFinite(v) && (allowZero ? v >= 0 : v > 0)) return v
   if (hourly) {
     const annual = getComparisonValue(r, metric, { fte, hourly: false })
-    return annual != null && annual > 0 ? annual / DEFAULT_ANNUAL_HOURS : null
+    return annual != null && (allowZero ? annual >= 0 : annual > 0)
+      ? annual / DEFAULT_ANNUAL_HOURS
+      : null
   }
   return null
 }

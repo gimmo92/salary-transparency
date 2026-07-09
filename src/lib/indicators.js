@@ -79,10 +79,11 @@ export function computeIndicators(normalized, options = {}) {
         base: fte ? 'baseSalaryFte' : 'baseSalary',
         livello: fte ? 'livelloRetributivoFte' : 'livelloRetributivo',
         totale: fte ? 'totalSalaryFte' : 'totalSalary',
-      }[options.metric] || (fte ? 'livelloRetributivoFte' : 'livelloRetributivo')
+        variabile: fte ? 'variableComponentsFte' : 'variableComponents',
+      }[options.metric] || (fte ? 'baseSalaryFte' : 'baseSalary')
     primaryField = core
   }
-  if (!primaryField) primaryField = 'livelloRetributivoFte'
+  if (!primaryField) primaryField = 'baseSalaryFte'
 
   const fte = primaryField.endsWith('Fte')
   const varField = fte ? 'variableComponentsFte' : 'variableComponents'

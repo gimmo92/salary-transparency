@@ -142,10 +142,14 @@ function saveRoleValuationModal() {
 const resultsTab = ref('eu_dashboard')
 /** Tab risultati da ripristinare dopo chiusura giustificativo persona */
 const resultsTabBeforeJustify = ref('job_grading')
-/** Metrica retributiva per KPI dashboard (default: livello retributivo) */
-const euDashboardMetric = ref(SALARY_METRICS.livello)
-/** Confronti su valori normalizzati FTE (default) o grezzi annui */
-const euDashboardFte = ref(true)
+/** Metrica retributiva per KPI dashboard (default: retribuzione base) */
+const euDashboardMetric = ref(SALARY_METRICS.base)
+
+const euDashboardMetricOptions = [
+  { value: SALARY_METRICS.base, label: 'Retribuzione base' },
+  { value: SALARY_METRICS.totale, label: 'Retribuzione totale' },
+  { value: SALARY_METRICS.variabile, label: 'Componenti variabili' },
+]
 
 const reportCompanyName = ref('')
 const reportReferencePeriod = ref('')
@@ -283,15 +287,12 @@ function isPersonJustified(person) {
 }
 
 function personComparisonSalary(person) {
-  return getComparisonValue(person, euDashboardMetric.value, { fte: euDashboardFte.value })
+  return getComparisonValue(person, euDashboardMetric.value)
 }
 
 /** Retribuzione oraria per GPG CCNL (Dir. UE 2023/970: denominatore = media oraria uomini). */
 function personCcnlGapSalary(person) {
-  return getComparisonValue(person, euDashboardMetric.value, {
-    fte: euDashboardFte.value,
-    hourly: true,
-  })
+  return getComparisonValue(person, euDashboardMetric.value, { hourly: true })
 }
 
 function gapAnalysisOptionsForGroup(people, hasJustification = false) {
@@ -487,12 +488,9 @@ function buildGapReportPayloadForExport() {
     }
   }
 
-  const fte = euDashboardFte.value
   const methodNote =
-    'Il livello retributivo include la base e le componenti strutturali continuative/fisse; esclude le voci individuali/discrezionali non strutturali. ' +
-    (fte
-      ? 'I valori sono normalizzati full-time equivalent (FTE) per un confronto corretto tra full-time e part-time.'
-      : 'I valori sono annui grezzi: in presenza di part-time il gap può risultare sovrastimato.')
+    'Confronti retributivi normalizzati full-time equivalent (FTE). ' +
+    `Metrica attiva: ${euMetricLabel.value}.`
 
   return {
     companyName: reportCompanyName.value.trim() || 'Azienda',
@@ -502,8 +500,8 @@ function buildGapReportPayloadForExport() {
     generatedAtLabel: now.toLocaleString('it-IT'),
     version: GAP_REPORT_VERSION,
     metric: euDashboardMetric.value,
-    metricLabel: euMetricLabel.value + (fte ? ' (normalizzato FTE)' : ' (grezzo annuo)'),
-    fte,
+    metricLabel: `${euMetricLabel.value} (normalizzato FTE)`,
+    fte: true,
     nEmployees: dash.nTotaleAnalizzati ?? genderNormalizedForAnalysis.value.length,
     methodNote,
     executiveSummary: {
@@ -774,8 +772,7 @@ function startNuovaAnalisi() {
   transparencyRoleOverrides.value = {}
   bandGenderJustifications.value = {}
   resultsTab.value = 'eu_dashboard'
-  euDashboardMetric.value = SALARY_METRICS.livello
-  euDashboardFte.value = true
+  euDashboardMetric.value = SALARY_METRICS.base
   justifyingPerson.value = null
   expandedCcnlContracts.value = new Set()
   expandedCcnlLevels.value = new Set()
@@ -884,7 +881,6 @@ async function confirmMapping() {
     if (normalizedGender.length > 0) {
       const localIndicators = computeIndicators(normalizedGender, {
         metric: euDashboardMetric.value,
-        fte: euDashboardFte.value,
       })
       if (geminiEnabled.value) {
         geminiLoading.value = true
@@ -1524,23 +1520,20 @@ const euDashboard = computed(() =>
     genderNormalizedForAnalysis.value,
     jobResults.value,
     euDashboardMetric.value,
-    { fte: euDashboardFte.value },
   ),
 )
 
 const quartileOutlierResult = computed(() =>
-  computeQuartileOutliers(genderNormalizedForAnalysis.value, euDashboardMetric.value, {
-    fte: euDashboardFte.value,
-  }),
+  computeQuartileOutliers(genderNormalizedForAnalysis.value, euDashboardMetric.value),
+)
 )
 const quartileOutlierRows = computed(() => quartileOutlierResult.value.rows)
 const quartileOutlierTruncated = computed(() => quartileOutlierResult.value.truncated)
 const quartileOutlierTotal = computed(() => quartileOutlierResult.value.total)
 
 const quartilePeopleGroups = computed(() =>
-  assignSalaryQuartiles(genderNormalizedForAnalysis.value, euDashboardMetric.value, {
-    fte: euDashboardFte.value,
-  }),
+  assignSalaryQuartiles(genderNormalizedForAnalysis.value, euDashboardMetric.value),
+)
 )
 
 const expandedQuartiles = ref(new Set())
@@ -1974,16 +1967,15 @@ onMounted(async () => {
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
+                <button
+                  v-for="opt in euDashboardMetricOptions"
+                  :key="'eu-m-' + opt.value"
+                  type="button"
+                  :class="['toggle-btn', { active: euDashboardMetric === opt.value }]"
+                  @click="euDashboardMetric = opt.value"
+                >{{ opt.label }}</button>
               </div>
-              <div class="eu-salary-toggle eu-salary-toggle--fte">
-                <span class="eu-salary-toggle-label">Confronto su:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardFte }]" @click="euDashboardFte = true">Normalizzato FTE</button>
-                <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
-              </div>
-              <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
+              <p class="eu-fte-note muted">Valori normalizzati full-time equivalent (FTE) per confronto corretto.</p>
             </div>
 
             <p class="eu-legend-line">
@@ -2036,7 +2028,7 @@ onMounted(async () => {
               <h4 class="eu-panel-title">Decomposizione del gap</h4>
               <p class="eu-panel-desc">
                 Quota del gap spiegata da fattori oggettivi (anzianità, % part-time, livello CCNL) vs residuo non spiegato
-                ({{ euMetricLabel }}{{ euDashboardFte ? ', FTE' : '' }}).
+                ({{ euMetricLabel }}, normalizzato FTE).
               </p>
               <div class="eu-decomp-grid">
                 <div class="eu-decomp-item">
@@ -2064,7 +2056,7 @@ onMounted(async () => {
                 <h4 class="eu-panel-title">Quartili retributivi</h4>
                 <p class="eu-panel-desc">
                   Quattro gruppi uguali (dal 25% più basso al 25% più alto). Per ciascun quartile: <strong>media retributiva</strong> uomini vs donne
-                  ({{ euMetricLabel }}{{ euDashboardFte ? ', normalizzato FTE' : ', grezzo annuo' }}). Le barre confrontano M e F <em>nello stesso quartile</em>.
+                  ({{ euMetricLabel }}, normalizzato FTE). Le barre confrontano M e F <em>nello stesso quartile</em>.
                   Clicca su un quartile per vedere l’elenco dipendenti.
                 </p>
                 <div class="eu-quartile-chart">
@@ -2196,7 +2188,7 @@ onMounted(async () => {
 
               <div class="eu-panel">
                 <h4 class="eu-panel-title">Gap medio per livello CCNL</h4>
-                <p class="eu-panel-desc">Confronto media M vs F per livello ({{ euMetricLabel }}{{ euDashboardFte ? ', FTE' : '' }}).</p>
+                <p class="eu-panel-desc">Confronto media M vs F per livello ({{ euMetricLabel }}, FTE).</p>
                 <div class="eu-level-list">
                   <div v-for="row in euDashboard.levelRows" :key="'lv-' + row.band + '-' + row.levelLabel" class="eu-level-row">
                     <div class="eu-level-head">
@@ -2338,21 +2330,19 @@ onMounted(async () => {
               <p class="ccnl-level-desc muted">
                 Persone raggruppate per <strong>CCNL</strong> (contratto collettivo); in ciascun CCNL il <strong>GPG</strong> è calcolato per livello di inquadramento come
                 <em>(media oraria uomini − media oraria donne) / media oraria uomini × 100</em>
-                ({{ euMetricLabel }}{{ euDashboardFte ? ', normalizzato FTE' : '' }}).
+                ({{ euMetricLabel }}, normalizzato FTE).
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
+                <button
+                  v-for="opt in euDashboardMetricOptions"
+                  :key="'eu-m-' + opt.value"
+                  type="button"
+                  :class="['toggle-btn', { active: euDashboardMetric === opt.value }]"
+                  @click="euDashboardMetric = opt.value"
+                >{{ opt.label }}</button>
               </div>
-              <div class="eu-salary-toggle eu-salary-toggle--fte">
-                <span class="eu-salary-toggle-label">Confronto su:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardFte }]" @click="euDashboardFte = true">Normalizzato FTE</button>
-                <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
-              </div>
-              <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
-              <p v-else class="mapping-warn ccnl-fte-warn">Valori non normalizzati per part-time: il gap può risultare sovrastimato.</p>
+              <p class="eu-fte-note muted">Valori normalizzati full-time equivalent (FTE) per confronto corretto.</p>
             </div>
 
             <div class="job-table ccnl-level-table">
@@ -2685,17 +2675,15 @@ onMounted(async () => {
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.livello }]" @click="euDashboardMetric = SALARY_METRICS.livello">Livello retributivo</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.base }]" @click="euDashboardMetric = SALARY_METRICS.base">Retribuzione base</button>
-                <button type="button" :class="['toggle-btn', { active: euDashboardMetric === SALARY_METRICS.totale }]" @click="euDashboardMetric = SALARY_METRICS.totale">Retribuzione totale</button>
+                <button
+                  v-for="opt in euDashboardMetricOptions"
+                  :key="'eu-m-' + opt.value"
+                  type="button"
+                  :class="['toggle-btn', { active: euDashboardMetric === opt.value }]"
+                  @click="euDashboardMetric = opt.value"
+                >{{ opt.label }}</button>
               </div>
-              <div class="eu-salary-toggle eu-salary-toggle--fte">
-                <span class="eu-salary-toggle-label">Confronto su:</span>
-                <button type="button" :class="['toggle-btn', { active: euDashboardFte }]" @click="euDashboardFte = true">Normalizzato FTE</button>
-                <button type="button" :class="['toggle-btn', { active: !euDashboardFte }]" @click="euDashboardFte = false">Grezzo annuo</button>
-              </div>
-              <p v-if="euDashboardFte" class="eu-fte-note muted">Valori normalizzati full-time equivalent per confronto corretto.</p>
-              <p v-else class="mapping-warn ccnl-fte-warn">Valori non normalizzati per part-time: il gap può risultare sovrastimato.</p>
+              <p class="eu-fte-note muted">Valori normalizzati full-time equivalent (FTE) per confronto corretto.</p>
             </div>
 
             <div v-if="costCenterGapHotspots.length" class="eu-panel cost-center-hotspots">
@@ -3563,9 +3551,6 @@ onMounted(async () => {
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
-.eu-salary-toggle--fte {
-  margin-top: 0.35rem;
-}
 .eu-fte-note {
   margin: 0.35rem 0 0;
   font-size: 0.82rem;
@@ -4328,9 +4313,6 @@ onMounted(async () => {
 .ccnl-level-desc {
   margin: 0 0 0.75rem;
   font-size: 0.875rem;
-}
-.ccnl-fte-warn {
-  margin: 0.35rem 0 0;
 }
 .ccnl-status-badge {
   display: inline-block;

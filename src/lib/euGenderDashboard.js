@@ -17,7 +17,7 @@ export { EU_GAP_THRESHOLD_PCT }
 export const MAX_QUARTILE_OUTLIERS = 50
 
 export function salaryFieldForMode(metric, { fte = true } = {}) {
-  return getSalaryFieldName(metric || 'livello', { fte })
+  return getSalaryFieldName(metric || 'base', { fte })
 }
 
 /** Verde <4%, giallo 4–5%, rosso >5% (valore assoluto) */
@@ -41,7 +41,9 @@ function percentileSorted(sortedArr, p) {
 
 function validSalary(r, field) {
   const v = r[field]
-  return Number.isFinite(v) && v > 0
+  if (!Number.isFinite(v)) return false
+  if (String(field).includes('variableComponents')) return v >= 0
+  return v > 0
 }
 
 /**
