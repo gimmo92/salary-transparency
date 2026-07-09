@@ -1157,6 +1157,8 @@ function openCcnlPersonJustify(person, levelRow) {
       ? String(person.name).trim()
       : `Dipendente #${key}`
   const gapPct = levelRow.gapMean
+  const jgCtx = findJobGradingContextByIndex(person?.index)
+  const roleBlock = jgCtx?.roleBlock ?? null
 
   justifyingPerson.value = {
     key,
@@ -1183,9 +1185,9 @@ function openCcnlPersonJustify(person, levelRow) {
     variableComponents: person.variableComponents,
     totalSalary: person.totalSalary,
     gender: person.gender,
-    roleScoresBlock: null,
-    trWeightedScore: null,
-    trParametricScore100: null,
+    roleScoresBlock: roleBlock,
+    trWeightedScore: roleBlock?.trWeightedScore ?? null,
+    trParametricScore100: roleBlock?.trParametricScore100 ?? null,
     gapFasciaPct: gapPct,
     gapFasciaFormatted: gapPct != null ? formatGapMforF(gapPct, levelRow.hasJustification) : '–',
     avgFasciaSalary: null,
@@ -1253,6 +1255,8 @@ function openCostCenterPersonJustify(person, centerRow) {
       ? String(person.name).trim()
       : `Dipendente #${key}`
   const gapPct = centerRow.gapMean
+  const jgCtx = findJobGradingContextByIndex(person?.index)
+  const roleBlock = jgCtx?.roleBlock ?? null
 
   justifyingPerson.value = {
     key,
@@ -1279,9 +1283,9 @@ function openCostCenterPersonJustify(person, centerRow) {
     variableComponents: person.variableComponents,
     totalSalary: person.totalSalary,
     gender: person.gender,
-    roleScoresBlock: null,
-    trWeightedScore: null,
-    trParametricScore100: null,
+    roleScoresBlock: roleBlock,
+    trWeightedScore: roleBlock?.trWeightedScore ?? null,
+    trParametricScore100: roleBlock?.trParametricScore100 ?? null,
     gapFasciaPct: gapPct,
     gapFasciaFormatted: gapPct != null ? formatGapMforF(gapPct, centerRow.hasJustification) : '–',
     avgFasciaSalary: null,
@@ -2841,7 +2845,10 @@ onMounted(async () => {
                   <li><strong>Genere:</strong> {{ justifyingPerson.gender === 'M' ? 'M' : justifyingPerson.gender === 'F' ? 'F' : '–' }}</li>
                 </ul>
               </div>
-              <div v-if="justifyingPerson.justifySource !== 'ccnl_level' && justifyingPerson.justifySource !== 'cost_center'" class="person-justify-summary-card person-justify-summary-card--hay">
+              <div
+                v-if="justifyingPerson.justifySource === 'job_grading' || justifyingPerson.justifySource === 'ccnl_level' || justifyingPerson.justifySource === 'cost_center'"
+                class="person-justify-summary-card person-justify-summary-card--hay"
+              >
                 <h4 class="person-justify-summary-title">Punteggi ruolo (0–100)</h4>
                 <ul class="person-justify-summary-list person-justify-hay-list">
                   <li v-for="f in TRANSPARENCY_FLAT_FACTORS" :key="f.id">
