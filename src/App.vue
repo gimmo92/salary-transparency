@@ -337,16 +337,6 @@ function groupHasActionableGap(row) {
   return row && !row.insufficientSample && (row.status === 'yellow' || row.status === 'red')
 }
 
-/** Mostra + Giustificativo per tutte le persone del gruppo se c'è gap o almeno un giustificativo nel gruppo. */
-function groupAllowsPersonJustify(row) {
-  if (!row || row.insufficientSample) return false
-  return groupHasActionableGap(row) || !!row.hasJustification
-}
-
-function hayBandAllowsPersonJustify(hayBand) {
-  return hasHayBandDisparity(hayBand) || hayBandHasJustifications(hayBand)
-}
-
 const gapAnalysisOptions = computed(() => ({
   getSalary: personComparisonSalary,
   isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
@@ -2458,7 +2448,6 @@ onMounted(async () => {
                         <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
                         <span class="hay-person-justify-cell">
                           <button
-                            v-if="groupAllowsPersonJustify(row)"
                             type="button"
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
@@ -2468,7 +2457,6 @@ onMounted(async () => {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
                             + Giustificativo
                           </button>
-                          <span v-else class="muted hay-person-no-justify">–</span>
                         </span>
                       </div>
                     </div>
@@ -2636,7 +2624,6 @@ onMounted(async () => {
                         <span>{{ formatNum(p.totalSalary) }}</span>
                         <span class="hay-person-justify-cell">
                           <button
-                            v-if="hayBandAllowsPersonJustify(sub)"
                             type="button"
                             class="btn-justify-person"
                             :class="{ 'has-note': personJustifications[String(p.index)] }"
@@ -2646,7 +2633,6 @@ onMounted(async () => {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
                             + Giustificativo
                           </button>
-                          <span v-else class="muted hay-person-no-justify">–</span>
                         </span>
                       </div>
                       </div>
@@ -2798,7 +2784,6 @@ onMounted(async () => {
                     <span>{{ p.comparisonSalary != null ? formatNum(p.comparisonSalary) : '–' }}</span>
                     <span class="hay-person-justify-cell">
                       <button
-                        v-if="groupAllowsPersonJustify(row)"
                         type="button"
                         class="btn-justify-person"
                         :class="{ 'has-note': personJustifications[String(p.index)] }"
@@ -2808,7 +2793,6 @@ onMounted(async () => {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
                         + Giustificativo
                       </button>
-                      <span v-else class="muted hay-person-no-justify">–</span>
                     </span>
                   </div>
                 </div>
