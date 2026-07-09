@@ -1,8 +1,13 @@
 /**
  * Analisi gap M/F per gruppi (livello CCNL, fascia job grading, …).
  */
-import { mean, median, pctGap } from './indicators.js'
-import { classifyGapStatus, MIN_GENDER_SAMPLE, EU_GAP_THRESHOLD_PCT } from './salaryMetrics.js'
+import { mean, median } from './indicators.js'
+import {
+  classifyGapStatus,
+  genderPayGapPct,
+  MIN_GENDER_SAMPLE,
+  EU_GAP_THRESHOLD_PCT,
+} from './salaryMetrics.js'
 import { normalizeLevelLabel, levelSortOrder } from './jobGrading.js'
 
 export function gapStatusCssClass(status) {
@@ -38,8 +43,9 @@ export function analyzeGenderPayGap(people, options = {}) {
 
   const avgM = mVals.length ? mean(mVals) : null
   const avgF = fVals.length ? mean(fVals) : null
-  const gapMean = mVals.length && fVals.length ? pctGap(avgM, avgF) : null
-  const gapMedian = mVals.length && fVals.length ? pctGap(median(mVals), median(fVals)) : null
+  const gapMean = mVals.length && fVals.length ? genderPayGapPct(avgM, avgF) : null
+  const gapMedian =
+    mVals.length && fVals.length ? genderPayGapPct(median(mVals), median(fVals)) : null
 
   const status = classifyGapStatus(gapMean, { hasJustification, nM, nF })
   const insufficientSample = status === 'insufficient'
@@ -61,9 +67,11 @@ export function analyzeGenderPayGap(people, options = {}) {
 }
 
 /** Scostamento retributivo vs media di genere nello stesso livello/gruppo. */
-export function enrichPeopleWithGenderMeanDeviation(people, getSalary) {
-  const men = (people || []).filter((p) => p.gender === 'M' && getSalary(p) != null)
-  const women = (people || []).filter((p) => p.gender === 'F' && getSalary(p) != null)
+export function enrichPeopleWithGenderMeanDeviation(people, getSalary, options = {}) {
+  const isExcludedFromGap = options.isExcludedFromGap || (() => false)
+  const eligible = (people || []).filter((p) => !isExcludedFromGap(p))
+  const men = eligible.filter((p) => p.gender === 'M' && getSalary(p) != null)
+  const women = eligible.filter((p) => p.gender === 'F' && getSalary(p) != null)
   const avgM = men.length ? mean(men.map(getSalary)) : null
   const avgF = women.length ? mean(women.map(getSalary)) : null
 
@@ -95,7 +103,7 @@ function buildComparisonRow(groupKey, groupLabel, rawPeople, options = {}) {
     isExcludedFromGap,
     hasJustification,
   })
-  const people = enrichPeopleWithGenderMeanDeviation(rawPeople, getSalary)
+  const people = enrichPeopleWithGenderMeanDeviation(rawPeople, getSalary, { isExcludedFromGap })
   return {
     groupKey,
     groupLabel,

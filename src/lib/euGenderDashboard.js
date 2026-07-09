@@ -45,6 +45,43 @@ function validSalary(r, field) {
 }
 
 /**
+ * Assegna ogni dipendente con retribuzione valida a Q1–Q4 (ordinamento crescente per metrica).
+ * @returns {Array<{ quartile: number, people: Array<{ index, name, gender, role, level, salary }> }>}
+ */
+export function assignSalaryQuartiles(normalized, metric, options = {}) {
+  const fte = options.fte !== false
+  const field = salaryFieldForMode(metric, { fte })
+  const groups = [1, 2, 3, 4].map((quartile) => ({ quartile, people: [] }))
+  const sortedForQ = (normalized || [])
+    .filter((r) => validSalary(r, field))
+    .sort((a, b) => a[field] - b[field])
+  const lenQ = sortedForQ.length
+  if (lenQ === 0) return groups
+
+  const qSize = Math.ceil(lenQ / 4) || 1
+  sortedForQ.forEach((r, idx) => {
+    const qIndex = Math.min(3, Math.floor(idx / qSize))
+    groups[qIndex].people.push({
+      index: r.index,
+      name: r.name,
+      gender: r.gender,
+      role: r.role,
+      level: r.level,
+      salary: r[field],
+    })
+  })
+  return groups
+}
+
+function quartileIndexByPerson(normalized, metric, options = {}) {
+  const map = new Map()
+  for (const g of assignSalaryQuartiles(normalized, metric, options)) {
+    for (const p of g.people) map.set(p.index, g.quartile)
+  }
+  return map
+}
+
+/**
  * Outlier retributivi: dipendenti la cui retribuzione si scosta di oltre il 5%
  * dalla media generale.
  * @returns {{ rows: Array, total: number, truncated: boolean }}
@@ -59,21 +96,14 @@ export function computeQuartileOutliers(normalized, metric, options = {}) {
   if (norm.length < 2) return empty
 
   const avg = norm.reduce((s, r) => s + r[field], 0) / norm.length
-
-  const sortedBySalary = [...norm].sort((a, b) => a[field] - b[field])
-  const len = sortedBySalary.length
-  const qSize = Math.ceil(len / 4) || 1
-  const quartileOf = (r) => {
-    const pos = sortedBySalary.indexOf(r)
-    return Math.min(4, Math.floor(pos / qSize) + 1)
-  }
+  const quartileOf = quartileIndexByPerson(normalized, metric, options)
 
   const outliers = []
   for (const r of norm) {
     const v = r[field]
     const dev = ((v - avg) / avg) * 100
     if (Math.abs(dev) > 5) {
-      const q = quartileOf(r)
+      const q = quartileOf.get(r.index) ?? 1
       const sign = dev > 0 ? '+' : ''
       outliers.push({
         index: r.index,
@@ -149,64 +179,43 @@ export function computeEuGenderDashboard(normalized, jobResults, metric, options
   const pctMenWithVar = allM.length > 0 ? (mWithVar / allM.length) * 100 : null
   const pctWomenWithVar = allF.length > 0 ? (fWithVar / allF.length) * 100 : null
 
-  const quartiles = [1, 2, 3, 4].map((quartile) => ({
-    quartile,
-    maschile: 0,
-    femminile: 0,
-    totale: 0,
-    avgMaschile: null,
-    avgFemminile: null,
-    barPctM: 0,
-    barPctF: 0,
-    gapPct: null,
-  }))
-
-  const sortedForQ = norm.filter((r) => validSalary(r, field)).sort((a, b) => a[field] - b[field])
-  const lenQ = sortedForQ.length
-  if (lenQ > 0) {
-    const qSize = Math.ceil(lenQ / 4) || 1
-    sortedForQ.forEach((r, idx) => {
-      const qIndex = Math.min(3, Math.floor(idx / qSize))
-      const bucket = quartiles[qIndex]
-      bucket.totale += 1
-      const sal = r[field]
-      if (r.gender === 'M') {
-        bucket.maschile += 1
-        bucket._mSum = (bucket._mSum || 0) + sal
-      } else if (r.gender === 'F') {
-        bucket.femminile += 1
-        bucket._fSum = (bucket._fSum || 0) + sal
-      }
-    })
-    quartiles.forEach((q) => {
-      q.avgMaschile = q.maschile > 0 ? (q._mSum || 0) / q.maschile : null
-      q.avgFemminile = q.femminile > 0 ? (q._fSum || 0) / q.femminile : null
-      delete q._mSum
-      delete q._fSum
-      const maxAvg = Math.max(q.avgMaschile ?? 0, q.avgFemminile ?? 0)
-      if (maxAvg > 0) {
-        q.barPctM = q.avgMaschile != null ? (q.avgMaschile / maxAvg) * 100 : 0
-        q.barPctF = q.avgFemminile != null ? (q.avgFemminile / maxAvg) * 100 : 0
-      }
-      if (
-        q.avgMaschile != null &&
-        q.avgFemminile != null &&
-        Number.isFinite(q.avgMaschile) &&
-        Number.isFinite(q.avgFemminile) &&
-        q.avgMaschile > 0
-      ) {
-        q.gapPct = pctGap(q.avgMaschile, q.avgFemminile)
-      } else {
-        q.gapPct = null
-      }
-    })
-    const totalM = allM.length
-    const totalF = allF.length
-    quartiles.forEach((q) => {
-      q.pctOfTotalM = totalM > 0 ? (q.maschile / totalM) * 100 : null
-      q.pctOfTotalF = totalF > 0 ? (q.femminile / totalF) * 100 : null
-    })
-  }
+  const qGroups = assignSalaryQuartiles(norm, metric, options)
+  const quartiles = qGroups.map(({ quartile, people }) => {
+    const maschile = people.filter((p) => p.gender === 'M').length
+    const femminile = people.filter((p) => p.gender === 'F').length
+    const mSalaries = people.filter((p) => p.gender === 'M').map((p) => p.salary)
+    const fSalaries = people.filter((p) => p.gender === 'F').map((p) => p.salary)
+    const avgMaschile = mSalaries.length ? mean(mSalaries) : null
+    const avgFemminile = fSalaries.length ? mean(fSalaries) : null
+    const maxAvg = Math.max(avgMaschile ?? 0, avgFemminile ?? 0)
+    let gapPct = null
+    if (
+      avgMaschile != null &&
+      avgFemminile != null &&
+      Number.isFinite(avgMaschile) &&
+      Number.isFinite(avgFemminile) &&
+      avgMaschile > 0
+    ) {
+      gapPct = pctGap(avgMaschile, avgFemminile)
+    }
+    return {
+      quartile,
+      maschile,
+      femminile,
+      totale: people.length,
+      avgMaschile,
+      avgFemminile,
+      barPctM: maxAvg > 0 && avgMaschile != null ? (avgMaschile / maxAvg) * 100 : 0,
+      barPctF: maxAvg > 0 && avgFemminile != null ? (avgFemminile / maxAvg) * 100 : 0,
+      gapPct,
+    }
+  })
+  const totalM = allM.length
+  const totalF = allF.length
+  quartiles.forEach((q) => {
+    q.pctOfTotalM = totalM > 0 ? (q.maschile / totalM) * 100 : null
+    q.pctOfTotalF = totalF > 0 ? (q.femminile / totalF) * 100 : null
+  })
 
   const normMap = normByIndexMap(norm)
 

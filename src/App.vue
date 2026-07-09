@@ -34,6 +34,7 @@ import {
 import {
   computeEuGenderDashboard,
   computeQuartileOutliers,
+  assignSalaryQuartiles,
   gapSeverityClass as euGapSeverityClass,
   EU_GAP_THRESHOLD_PCT,
 } from './lib/euGenderDashboard.js'
@@ -46,7 +47,6 @@ import {
 import {
   analyzeGenderPayGap,
   computeCcnlGroupedComparison,
-  flattenJobResultsPeople,
   flattenCcnlLevelRows,
   computeCostCenterComparison,
   computeGapHotspots,
@@ -286,6 +286,14 @@ function personComparisonSalary(person) {
   return getComparisonValue(person, euDashboardMetric.value, { fte: euDashboardFte.value })
 }
 
+/** Retribuzione oraria per GPG CCNL (Dir. UE 2023/970: denominatore = media oraria uomini). */
+function personCcnlGapSalary(person) {
+  return getComparisonValue(person, euDashboardMetric.value, {
+    fte: euDashboardFte.value,
+    hourly: true,
+  })
+}
+
 function gapAnalysisOptionsForGroup(people, hasJustification = false) {
   return {
     getSalary: personComparisonSalary,
@@ -344,10 +352,16 @@ const gapAnalysisOptions = computed(() => ({
   isPersonJustified,
 }))
 
+const ccnlGapAnalysisOptions = computed(() => ({
+  getSalary: personCcnlGapSalary,
+  isExcludedFromGap: (p) => isPersonJustified(p) || isQuartileAnalysisExcluded(p?.index),
+  isPersonJustified,
+}))
+
 const ccnlGroups = computed(() =>
   computeCcnlGroupedComparison(
-    flattenJobResultsPeople(jobResults.value),
-    gapAnalysisOptions.value,
+    genderNormalizedForAnalysis.value,
+    ccnlGapAnalysisOptions.value,
   ),
 )
 
@@ -1523,6 +1537,29 @@ const quartileOutlierRows = computed(() => quartileOutlierResult.value.rows)
 const quartileOutlierTruncated = computed(() => quartileOutlierResult.value.truncated)
 const quartileOutlierTotal = computed(() => quartileOutlierResult.value.total)
 
+const quartilePeopleGroups = computed(() =>
+  assignSalaryQuartiles(genderNormalizedForAnalysis.value, euDashboardMetric.value, {
+    fte: euDashboardFte.value,
+  }),
+)
+
+const expandedQuartiles = ref(new Set())
+
+function toggleQuartile(quartile) {
+  const k = String(quartile)
+  if (expandedQuartiles.value.has(k)) expandedQuartiles.value.delete(k)
+  else expandedQuartiles.value.add(k)
+  expandedQuartiles.value = new Set(expandedQuartiles.value)
+}
+
+function isQuartileExpanded(quartile) {
+  return expandedQuartiles.value.has(String(quartile))
+}
+
+function quartilePeople(quartile) {
+  return quartilePeopleGroups.value.find((g) => g.quartile === quartile)?.people || []
+}
+
 const quartileExcludedEntries = computed(() => {
   const cache = genderNormalizedCache.value
   const out = []
@@ -2028,10 +2065,25 @@ onMounted(async () => {
                 <p class="eu-panel-desc">
                   Quattro gruppi uguali (dal 25% più basso al 25% più alto). Per ciascun quartile: <strong>media retributiva</strong> uomini vs donne
                   ({{ euMetricLabel }}{{ euDashboardFte ? ', normalizzato FTE' : ', grezzo annuo' }}). Le barre confrontano M e F <em>nello stesso quartile</em>.
+                  Clicca su un quartile per vedere l’elenco dipendenti.
                 </p>
                 <div class="eu-quartile-chart">
-                  <div v-for="q in euDashboard.quartiles" :key="q.quartile" class="eu-quartile-col">
-                    <div class="eu-q-label">Q{{ q.quartile }}</div>
+                  <div
+                    v-for="q in euDashboard.quartiles"
+                    :key="q.quartile"
+                    class="eu-quartile-col"
+                    :class="{
+                      'eu-quartile-col--clickable': q.totale > 0,
+                      'eu-quartile-col--expanded': isQuartileExpanded(q.quartile),
+                    }"
+                    :role="q.totale > 0 ? 'button' : undefined"
+                    :tabindex="q.totale > 0 ? 0 : undefined"
+                    :title="q.totale > 0 ? 'Mostra elenco dipendenti' : undefined"
+                    @click="q.totale > 0 && toggleQuartile(q.quartile)"
+                    @keydown.enter.prevent="q.totale > 0 && toggleQuartile(q.quartile)"
+                    @keydown.space.prevent="q.totale > 0 && toggleQuartile(q.quartile)"
+                  >
+                    <div class="eu-q-label">{{ isQuartileExpanded(q.quartile) ? '▾' : '▸' }} Q{{ q.quartile }}</div>
                     <div class="eu-q-chart-body">
                       <div class="eu-q-pair">
                         <div class="eu-q-bar-col">
@@ -2070,11 +2122,43 @@ onMounted(async () => {
                     <div class="eu-q-meta">n = {{ q.totale }} ({{ q.maschile }} M · {{ q.femminile }} F)</div>
                   </div>
                 </div>
+                <div
+                  v-for="q in euDashboard.quartiles"
+                  v-show="isQuartileExpanded(q.quartile)"
+                  :key="'q-people-' + q.quartile"
+                  class="eu-quartile-people"
+                >
+                  <h5 class="eu-quartile-people-title">Dipendenti in Q{{ q.quartile }} ({{ quartilePeople(q.quartile).length }})</h5>
+                  <div class="eu-outlier-table-wrap">
+                    <table class="eu-outlier-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Nome</th>
+                          <th>Genere</th>
+                          <th>Ruolo</th>
+                          <th>Livello</th>
+                          <th class="eu-outlier-num">{{ euMetricLabelShort }}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="p in quartilePeople(q.quartile)" :key="'qp-' + q.quartile + '-' + p.index">
+                          <td>{{ p.index }}</td>
+                          <td>{{ p.name || '—' }}</td>
+                          <td><span :class="personGenderClass(p.gender)">{{ p.gender }}</span></td>
+                          <td>{{ p.role || '—' }}</td>
+                          <td>{{ p.level || '—' }}</td>
+                          <td class="eu-outlier-num">{{ formatNum(p.salary) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
 
               <div class="eu-panel" style="margin-top: 1rem;">
                 <h4 class="eu-panel-title">Composizione quartili per genere</h4>
-                <p class="eu-panel-desc">Percentuale di uomini e donne in ciascun quartile, calcolata sulla popolazione totale di ciascun genere.</p>
+                <p class="eu-panel-desc">Percentuale di uomini e donne in ciascun quartile, calcolata sulla popolazione totale di ciascun genere. Clicca su una riga per l’elenco dipendenti.</p>
                 <table class="eu-outlier-table">
                   <thead>
                     <tr>
@@ -2086,8 +2170,21 @@ onMounted(async () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="q in euDashboard.quartiles" :key="'qc-' + q.quartile">
-                      <td>Q{{ q.quartile }}</td>
+                    <tr
+                      v-for="q in euDashboard.quartiles"
+                      :key="'qc-' + q.quartile"
+                      class="eu-quartile-table-row"
+                      :class="{
+                        'eu-quartile-table-row--clickable': q.totale > 0,
+                        'eu-quartile-table-row--expanded': isQuartileExpanded(q.quartile),
+                      }"
+                      :role="q.totale > 0 ? 'button' : undefined"
+                      :tabindex="q.totale > 0 ? 0 : undefined"
+                      @click="q.totale > 0 && toggleQuartile(q.quartile)"
+                      @keydown.enter.prevent="q.totale > 0 && toggleQuartile(q.quartile)"
+                      @keydown.space.prevent="q.totale > 0 && toggleQuartile(q.quartile)"
+                    >
+                      <td>{{ isQuartileExpanded(q.quartile) ? '▾' : '▸' }} Q{{ q.quartile }}</td>
                       <td class="eu-outlier-num">{{ q.maschile }}</td>
                       <td class="eu-outlier-num">{{ q.pctOfTotalM != null ? q.pctOfTotalM.toFixed(1) + '%' : 'n/d' }}</td>
                       <td class="eu-outlier-num">{{ q.femminile }}</td>
@@ -2239,7 +2336,9 @@ onMounted(async () => {
             <div class="ccnl-level-head">
               <h3 class="ccnl-level-title">Confronto retributivo per livello CCNL</h3>
               <p class="ccnl-level-desc muted">
-                Persone raggruppate per <strong>CCNL</strong> (contratto collettivo); in ciascun CCNL il gap M/F è calcolato per <strong>livello di inquadramento</strong>.
+                Persone raggruppate per <strong>CCNL</strong> (contratto collettivo); in ciascun CCNL il <strong>GPG</strong> è calcolato per livello di inquadramento come
+                <em>(media oraria uomini − media oraria donne) / media oraria uomini × 100</em>
+                ({{ euMetricLabel }}{{ euDashboardFte ? ', normalizzato FTE' : '' }}).
               </p>
               <div class="eu-salary-toggle">
                 <span class="eu-salary-toggle-label">Metrica retributiva:</span>
@@ -2263,10 +2362,10 @@ onMounted(async () => {
                 <span>N tot.</span>
                 <span>N uomini</span>
                 <span>N donne</span>
-                <span>Media M</span>
-                <span>Media F</span>
-                <span>Gap medio</span>
-                <span>Gap mediano</span>
+                <span>Media oraria M</span>
+                <span>Media oraria F</span>
+                <span>GPG</span>
+                <span>GPG mediano</span>
                 <span>Stato</span>
               </div>
               <template v-for="group in ccnlGroups" :key="'ccnl-g-' + group.ccnlKey">
@@ -2355,7 +2454,7 @@ onMounted(async () => {
                         <span>Genere</span>
                         <span>Ruolo</span>
                         <span class="hay-person-deviation-head" title="Scostamento vs media di genere nel livello CCNL">Scost. vs media genere</span>
-                        <span>{{ euMetricLabelShort }}</span>
+                        <span title="Retribuzione oraria ({{ euMetricLabel }})">Oraria</span>
                         <span>Giustificativo</span>
                       </div>
                       <div
@@ -3777,6 +3876,39 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+}
+.eu-quartile-col--clickable {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 0.25rem 0.15rem;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.eu-quartile-col--clickable:hover {
+  background: var(--bg-page);
+}
+.eu-quartile-col--expanded {
+  background: var(--bg-page);
+  box-shadow: inset 0 0 0 2px var(--accent-blue, #3b82f6);
+}
+.eu-quartile-people {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-light);
+}
+.eu-quartile-people-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.eu-quartile-table-row--clickable {
+  cursor: pointer;
+}
+.eu-quartile-table-row--clickable:hover {
+  background: var(--bg-page);
+}
+.eu-quartile-table-row--expanded {
+  background: var(--bg-page);
+  font-weight: 600;
 }
 .eu-q-label {
   font-weight: 700;

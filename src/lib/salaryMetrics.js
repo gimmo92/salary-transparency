@@ -172,7 +172,23 @@ export function getComparisonValue(r, metric, { fte = true, hourly = false } = {
   if (!r) return null
   const field = getSalaryFieldName(metric, { fte, hourly })
   const v = r[field]
-  return Number.isFinite(v) && v > 0 ? v : null
+  if (Number.isFinite(v) && v > 0) return v
+  if (hourly) {
+    const annual = getComparisonValue(r, metric, { fte, hourly: false })
+    return annual != null && annual > 0 ? annual / DEFAULT_ANNUAL_HOURS : null
+  }
+  return null
+}
+
+/**
+ * Gender pay gap (Dir. UE 2023/970): differenza tra retribuzione oraria media M e F
+ * rapportata alla retribuzione oraria media degli uomini.
+ * @returns {number|null} positivo = uomini pagati di più
+ */
+export function genderPayGapPct(avgHourlyMen, avgHourlyWomen) {
+  if (!Number.isFinite(avgHourlyMen) || !Number.isFinite(avgHourlyWomen)) return null
+  if (avgHourlyMen <= 0) return null
+  return ((avgHourlyMen - avgHourlyWomen) / avgHourlyMen) * 100
 }
 
 export function validComparisonSalary(r, metric, options) {

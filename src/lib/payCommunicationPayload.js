@@ -105,8 +105,10 @@ export function buildPayCommunicationPayload({
     (requesterGender === 'M' && !showM) || (requesterGender === 'F' && !showF)
   const showDisaggregated = !requesterGenderUnderThreshold
 
-  const avgM = showDisaggregated && showM ? (levelRow?.avgM ?? null) : null
-  const avgF = showDisaggregated && showF ? (levelRow?.avgF ?? null) : null
+  const mSalaries = withSal.filter((p) => p.gender === 'M').map(getSalary)
+  const fSalaries = withSal.filter((p) => p.gender === 'F').map(getSalary)
+  const avgM = showDisaggregated && showM ? mean(mSalaries) : null
+  const avgF = showDisaggregated && showF ? mean(fSalaries) : null
   const suppressedM = showDisaggregated && !showM
   const suppressedF = showDisaggregated && !showF
 
