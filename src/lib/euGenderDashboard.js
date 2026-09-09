@@ -6,7 +6,6 @@ import { mean, median, pctGap } from './indicators.js'
 import {
   getSalaryFieldName,
   classifyGapStatus,
-  computeGapDecomposition,
   gapSampleSufficient,
   EU_GAP_THRESHOLD_PCT,
   MIN_GENDER_SAMPLE,
@@ -327,8 +326,6 @@ export function computeEuGenderDashboard(normalized, jobResults, metric, options
     .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap))
     .slice(0, 3)
 
-  const decomposition = computeGapDecomposition(norm, metric, { fte })
-
   return {
     metric,
     fte,
@@ -352,6 +349,5 @@ export function computeEuGenderDashboard(normalized, jobResults, metric, options
     fasciaRows,
     criticalAlerts,
     segregationWarnings: fasciaRows.filter((r) => r.segregation),
-    decomposition,
   }
 }

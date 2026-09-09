@@ -78,8 +78,6 @@ const analisiStep = ref('upload') // idle | upload | mapping | results — defau
 const excelRows = ref([])
 const excelHeaders = ref([])
 const columnMapping = ref({})
-/** CCNL applicato (testo libero se assente come colonna nel file) */
-const analysisCcnlName = ref('')
 const excelUrl = ref('')
 const excelFile = ref(null)
 const excelFileInputRef = ref(null)
@@ -434,8 +432,6 @@ function formatDeviationVsGenderGroupMean(person) {
 }
 
 function resolveCcnlLabel() {
-  const manual = analysisCcnlName.value.trim()
-  if (manual) return manual
   const counts = new Map()
   for (const r of genderNormalizedCache.value || []) {
     const c = r?.ccnl != null ? String(r.ccnl).trim() : ''
@@ -444,12 +440,6 @@ function resolveCcnlLabel() {
   }
   if (!counts.size) return ''
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
-}
-
-function applyManualCcnlToRows(rows) {
-  const manual = analysisCcnlName.value.trim()
-  if (!manual) return rows
-  return (rows || []).map((r) => ({ ...r, ccnl: r.ccnl || manual }))
 }
 
 function buildGapReportPayloadForExport() {
@@ -518,8 +508,7 @@ function buildGapReportPayloadForExport() {
 }
 
 function findCcnlLevelRowForPerson(person) {
-  const manual = analysisCcnlName.value.trim()
-  const ccnlKey = String(person?.ccnl ?? manual).trim() || 'N/D'
+  const ccnlKey = String(person?.ccnl ?? '').trim() || 'N/D'
   const levelKey = normalizeLevelLabel(person?.level) || 'N/D'
   const group = ccnlGroups.value.find((g) => g.ccnlKey === ccnlKey)
   const row = group?.levels?.find((l) => l.levelKey === levelKey)
@@ -722,12 +711,8 @@ function isRoleDetailExpanded(level, subLabel, role) {
 }
 
 function runJobGrading() {
-  const normalizedJob = applyManualCcnlToRows(
-    buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value),
-  )
-  const normalizedGender = applyManualCcnlToRows(
-    buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value),
-  )
+  const normalizedJob = buildNormalizedJobGradingData(excelRows.value, excelHeaders.value, columnMapping.value)
+  const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
   const genderByIndex = new Map(normalizedGender.map((x) => [x.index, x.gender]))
   const enrichedJob = normalizedJob.map((p) => ({
     ...p,
@@ -757,7 +742,6 @@ function startNuovaAnalisi() {
   justifyingLevel.value = null
   genderViewMode.value = 'media'
   genderNormalizedCache.value = []
-  analysisCcnlName.value = ''
   quartileOutlierJustifications.value = {}
   transparencyRoleOverrides.value = {}
   bandGenderJustifications.value = {}
@@ -837,7 +821,10 @@ async function processLoadedWorkbook(rows, headers) {
         if (aiMapping && Object.keys(aiMapping).length > 0)
           suggested = mergeColumnMappings(heuristic, aiMapping, headers)
       } catch (geminiErr) {
-        uploadError.value = 'Riconoscimento AI non riuscito: ' + (geminiErr.message || String(geminiErr)) + '. Usa il mapping manuale.'
+        geminiInfoNotice.value =
+          'Riconoscimento AI non disponibile (' +
+          (geminiErr.message || String(geminiErr)) +
+          '). È attivo il mapping automatico delle colonne: controllalo e correggilo se serve.'
       } finally { geminiLoading.value = false }
     } else {
       if (geminiApiUnreachable.value) {
@@ -865,9 +852,7 @@ async function confirmMapping() {
   justifyingPerson.value = null
   try {
     // --- Analisi di genere ---
-    const normalizedGender = applyManualCcnlToRows(
-      buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value),
-    )
+    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
     if (normalizedGender.length > 0) {
       const localIndicators = computeIndicators(normalizedGender, {
         metric: euDashboardMetric.value,
@@ -1817,21 +1802,6 @@ onMounted(async () => {
           quelli consigliati migliorano l'affidabilità del gap retributivo.
         </p>
 
-        <div class="mapping-ccnl-manual">
-          <label class="mapping-ccnl-manual-label" for="analysis-ccnl-name">
-            <span class="mapping-field-name">CCNL applicato</span>
-            <span class="mapping-hint">Se nel file non c’è una colonna CCNL, indica qui il contratto collettivo (es. Metalmeccanico Industria).</span>
-          </label>
-          <input
-            id="analysis-ccnl-name"
-            v-model="analysisCcnlName"
-            type="text"
-            class="mapping-ccnl-input"
-            placeholder="Es. Metalmeccanico Industria"
-            :disabled="analysisLoading"
-          />
-        </div>
-
         <div
           v-for="section in mappingUiSections"
           :key="section.id"
@@ -2014,33 +1984,6 @@ onMounted(async () => {
                   <strong>Donne:</strong> {{ euDashboard.pctWomenWithVar != null ? euDashboard.pctWomenWithVar.toFixed(1) + '%' : 'n/d' }}
                 </div>
               </div>
-            </div>
-
-            <div v-if="euDashboard.decomposition" class="eu-panel eu-decomposition-panel">
-              <h4 class="eu-panel-title">Decomposizione del gap</h4>
-              <p class="eu-panel-desc">
-                Quota del gap spiegata da fattori oggettivi (anzianità, % part-time, livello CCNL) vs residuo non spiegato
-                ({{ euMetricLabel }}, normalizzato FTE).
-              </p>
-              <div class="eu-decomp-grid">
-                <div class="eu-decomp-item">
-                  <span class="eu-decomp-label">Gap osservato</span>
-                  <span class="eu-decomp-val" :class="euGapSeverityClass(euDashboard.decomposition.rawGapPct)">{{ formatGapMforF(euDashboard.decomposition.rawGapPct) }}</span>
-                </div>
-                <div class="eu-decomp-item">
-                  <span class="eu-decomp-label">Spiegato (fattori oggettivi)</span>
-                  <span class="eu-decomp-val">{{ formatGapMforF(euDashboard.decomposition.explainedGapPct) }}</span>
-                </div>
-                <div class="eu-decomp-item eu-decomp-item--residual">
-                  <span class="eu-decomp-label">Residuo (esposizione)</span>
-                  <span class="eu-decomp-val" :class="euGapSeverityClass(euDashboard.decomposition.residualGapPct)">{{ formatGapMforF(euDashboard.decomposition.residualGapPct) }}</span>
-                </div>
-              </div>
-              <ul class="eu-decomp-factors muted">
-                <li>Anzianità: {{ formatGapMforF(euDashboard.decomposition.factors.seniority) }}</li>
-                <li>Part-time: {{ formatGapMforF(euDashboard.decomposition.factors.partTime) }}</li>
-                <li>Livello CCNL: {{ formatGapMforF(euDashboard.decomposition.factors.level) }}</li>
-              </ul>
             </div>
 
             <div class="eu-charts-row">
@@ -3542,41 +3485,6 @@ onMounted(async () => {
 }
 .eu-fte-note {
   margin: 0.35rem 0 0;
-  font-size: 0.82rem;
-}
-.eu-decomposition-panel {
-  margin: 0.75rem 0;
-}
-.eu-decomp-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 0.75rem;
-  margin: 0.5rem 0;
-}
-.eu-decomp-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 8px;
-  background: var(--bg-secondary, #f8fafc);
-  border: 1px solid var(--border, #e2e8f0);
-}
-.eu-decomp-item--residual {
-  border-color: rgba(220, 38, 38, 0.25);
-}
-.eu-decomp-label {
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-}
-.eu-decomp-val {
-  font-size: 1.05rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.eu-decomp-factors {
-  margin: 0.35rem 0 0;
-  padding-left: 1.2rem;
   font-size: 0.82rem;
 }
 .eu-level-sample {
@@ -5268,30 +5176,6 @@ onMounted(async () => {
   color: #1e40af;
   font-size: 0.875rem;
   line-height: 1.45;
-}
-
-.mapping-ccnl-manual {
-  margin: 0 0 1.25rem;
-  padding: 0.85rem 1rem;
-  border-radius: 8px;
-  border: 1px solid var(--border, #e2e8f0);
-  background: var(--bg-secondary, #f8fafc);
-}
-.mapping-ccnl-manual-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
-}
-.mapping-ccnl-input {
-  width: 100%;
-  max-width: 28rem;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary);
 }
 
 .mapping-section {

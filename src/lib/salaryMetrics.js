@@ -2,8 +2,6 @@
  * Metriche retributive, normalizzazione part-time e campi di confronto gap.
  * Riferimento normativo in commenti (Dir. UE 2023/970 / D.Lgs.) — non esporre in UI.
  */
-import { mean, pctGap } from './indicators.js'
-
 export const SALARY_METRICS = {
   base: 'base',
   livello: 'livello',
@@ -218,101 +216,4 @@ export function classifyGapStatus(gapPct, { hasJustification = false, nM = 0, nF
   }
   if (hasJustification) return 'yellow'
   return 'red'
-}
-
-function seniorityYearsApprox(r) {
-  if (r?.seniorityYears != null && Number.isFinite(r.seniorityYears)) return r.seniorityYears
-  const raw = r?.seniority
-  if (raw == null || raw === '') return null
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
-  const s = String(raw).trim()
-  const n = Number(s.replace(',', '.'))
-  if (Number.isFinite(n) && n >= 0 && n < 80) return n
-  return null
-}
-
-function levelIndex(level) {
-  const s = String(level || '').trim()
-  if (!s) return 0
-  return s.charCodeAt(0) + s.length
-}
-
-/**
- * Decomposizione semplificata: quota spiegata da anzianità, % part-time e livello vs residuo.
- */
-export function computeGapDecomposition(normalized, metric, { fte = true } = {}) {
-  const rows = (normalized || []).filter(
-    (r) => (r.gender === 'M' || r.gender === 'F') && validComparisonSalary(r, metric, { fte }),
-  )
-  const men = rows.filter((r) => r.gender === 'M')
-  const women = rows.filter((r) => r.gender === 'F')
-  if (!men.length || !women.length) return null
-
-  const val = (r) => getComparisonValue(r, metric, { fte })
-  const meanM = mean(men.map(val))
-  const meanF = mean(women.map(val))
-  const rawGapPct = pctGap(meanM, meanF)
-  if (rawGapPct == null) return null
-
-  const pooled = rows.map((r) => ({
-    y: val(r),
-    sen: seniorityYearsApprox(r) ?? mean(rows.map(seniorityYearsApprox).filter(Number.isFinite)) ?? 0,
-    pt: (r.partTimePct ?? 100) / 100,
-    lvl: levelIndex(r.level),
-  }))
-
-  const meanY = mean(pooled.map((p) => p.y))
-  const meanSen = mean(pooled.map((p) => p.sen))
-  const meanPt = mean(pooled.map((p) => p.pt))
-  const meanLvl = mean(pooled.map((p) => p.lvl))
-
-  let varSen = 0
-  let covSenY = 0
-  let varPt = 0
-  let covPtY = 0
-  let varLvl = 0
-  let covLvlY = 0
-  for (const p of pooled) {
-    const ds = p.sen - meanSen
-    const dpt = p.pt - meanPt
-    const dl = p.lvl - meanLvl
-    varSen += ds * ds
-    covSenY += ds * (p.y - meanY)
-    varPt += dpt * dpt
-    covPtY += dpt * (p.y - meanY)
-    varLvl += dl * dl
-    covLvlY += dl * (p.y - meanY)
-  }
-  const n = pooled.length || 1
-  const slopeSen = varSen > 0 ? covSenY / varSen : 0
-  const slopePt = varPt > 0 ? covPtY / varPt : 0
-  const slopeLvl = varLvl > 0 ? covLvlY / varLvl : 0
-
-  const meanSenM = mean(men.map((r) => seniorityYearsApprox(r) ?? meanSen))
-  const meanSenF = mean(women.map((r) => seniorityYearsApprox(r) ?? meanSen))
-  const meanPtM = mean(men.map((r) => (r.partTimePct ?? 100) / 100))
-  const meanPtF = mean(women.map((r) => (r.partTimePct ?? 100) / 100))
-  const meanLvlM = mean(men.map((r) => levelIndex(r.level)))
-  const meanLvlF = mean(women.map((r) => levelIndex(r.level)))
-
-  const explainedDiff =
-    slopeSen * (meanSenM - meanSenF) + slopePt * (meanPtM - meanPtF) + slopeLvl * (meanLvlM - meanLvlF)
-  const explainedGapPct = meanM > 0 ? (explainedDiff / meanM) * 100 : 0
-  const residualGapPct =
-    rawGapPct != null && explainedGapPct != null ? rawGapPct - explainedGapPct : rawGapPct
-
-  return {
-    metric,
-    fte,
-    rawGapPct,
-    explainedGapPct: Math.round(explainedGapPct * 100) / 100,
-    residualGapPct: Math.round(residualGapPct * 100) / 100,
-    factors: {
-      seniority: Math.round(slopeSen * (meanSenM - meanSenF) * 100) / 100,
-      partTime: Math.round(slopePt * (meanPtM - meanPtF) * 100) / 100,
-      level: Math.round(slopeLvl * (meanLvlM - meanLvlF) * 100) / 100,
-    },
-    nMaschi: men.length,
-    nFemmine: women.length,
-  }
 }
