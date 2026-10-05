@@ -79,16 +79,13 @@ const sideMenu = [
   { id: 'profilo', label: 'Profilo', icon: 'info' },
   { id: 'dashboard', label: 'Dashboard', icon: 'chart' },
   { id: 'azienda', label: 'La mia azienda', icon: 'user', expandable: true },
-  { id: 'onboarding', label: 'Onboarding', icon: 'bookmark' },
   { id: 'mbo', label: 'MBO', icon: 'target', expandable: true },
-  { id: 'smart-upload', label: 'Smart Upload', icon: 'info' },
   { id: 'competenze', label: 'Competenze', icon: 'book-open', expandable: true },
   { id: 'valutazioni', label: 'Valutazioni', icon: 'eval', expandable: true },
   { id: 'okr', label: 'OKR', icon: 'okr', expandable: true },
   { id: 'clima', label: 'Analisi di Clima', icon: 'clipboard', expandable: true },
   { id: 'formazione', label: 'Formazione', icon: 'book', expandable: true },
   { id: 'compensation', label: 'Compensation', icon: 'info' },
-  { id: 'ats', label: 'ATS', icon: 'briefcase' },
 ]
 const activeSideLabel = computed(
   () => sideMenu.find((item) => item.id === activeSideItem.value)?.label ?? '',
@@ -1766,60 +1763,52 @@ onMounted(async () => {
           @click="activeSideItem = item.id"
         >
           <span class="side-nav-icon" aria-hidden="true">
-            <svg v-if="item.icon === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-if="item.icon === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <circle cx="12" cy="12" r="8.25"/>
               <path d="M12 11.2v5" stroke-linecap="round"/>
               <circle cx="12" cy="8.1" r="0.85" fill="currentColor" stroke="none"/>
             </svg>
-            <svg v-else-if="item.icon === 'chart'" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="4" y="12" width="3.4" height="8" rx="0.7"/>
-              <rect x="10.3" y="7.5" width="3.4" height="12.5" rx="0.7"/>
-              <rect x="16.6" y="4" width="3.4" height="16" rx="0.7"/>
+            <svg v-else-if="item.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <rect x="4.2" y="12" width="3.4" height="7" rx="0.6"/>
+              <rect x="10.3" y="7.2" width="3.4" height="11.8" rx="0.6"/>
+              <rect x="16.4" y="4.2" width="3.4" height="14.8" rx="0.6"/>
             </svg>
-            <svg v-else-if="item.icon === 'user'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'user'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <circle cx="12" cy="8.2" r="3.1"/>
               <path d="M5.6 19.2c1.15-3.05 3.35-4.55 6.4-4.55s5.25 1.5 6.4 4.55" stroke-linecap="round"/>
             </svg>
-            <svg v-else-if="item.icon === 'bookmark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
-              <path d="M7 4.5h8.2A1.8 1.8 0 0 1 17 6.3V19.5l-5-2.6-5 2.6V6.3A1.8 1.8 0 0 1 8.8 4.5H7z" stroke-linejoin="round"/>
-            </svg>
-            <svg v-else-if="item.icon === 'target'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'target'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <circle cx="12" cy="12" r="8"/>
               <circle cx="12" cy="12" r="4.2"/>
               <circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none"/>
             </svg>
-            <svg v-else-if="item.icon === 'book-open'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'book-open'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <path d="M12 6.2C10.4 5 8.1 4.4 4.5 4.4V17.2c3.6 0 5.9.6 7.5 1.8" stroke-linejoin="round"/>
               <path d="M12 6.2c1.6-1.2 3.9-1.8 7.5-1.8v12.8c-3.6 0-5.9.6-7.5 1.8" stroke-linejoin="round"/>
             </svg>
-            <svg v-else-if="item.icon === 'eval'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'eval'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <path d="M4.5 16.5 9 12l3 2.6 6.2-7.1" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M14.2 7.5H18.5V11.6" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <svg v-else-if="item.icon === 'okr'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'okr'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <path d="M4.5 17.5V12" stroke-linecap="round"/>
               <path d="M9.5 17.5V9" stroke-linecap="round"/>
               <path d="M14.5 17.5V6.5" stroke-linecap="round"/>
               <path d="M19.5 17.5V4.5" stroke-linecap="round"/>
               <path d="M4 19.2h16" stroke-linecap="round"/>
             </svg>
-            <svg v-else-if="item.icon === 'clipboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'clipboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <rect x="6.2" y="4.8" width="11.6" height="15" rx="1.8"/>
               <path d="M9.2 4.6h5.6v2.1H9.2z" stroke-linejoin="round"/>
               <path d="M9 11.2h6M9 14.2h6M9 17.2h3.6" stroke-linecap="round"/>
             </svg>
-            <svg v-else-if="item.icon === 'book'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <svg v-else-if="item.icon === 'book'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
               <path d="M6.2 5h10.2A1.6 1.6 0 0 1 18 6.6V19H8.4A2.2 2.2 0 0 0 6.2 21.2V5z" stroke-linejoin="round"/>
               <path d="M6.2 5A2.2 2.2 0 0 0 4 7.2V18" stroke-linecap="round"/>
             </svg>
-            <svg v-else-if="item.icon === 'briefcase'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
-              <rect x="3.6" y="7.4" width="16.8" height="11.4" rx="1.8"/>
-              <path d="M9 7.4V6.1A1.6 1.6 0 0 1 10.6 4.5h2.8A1.6 1.6 0 0 1 15 6.1v1.3" stroke-linejoin="round"/>
-              <path d="M3.6 12.2h16.8" stroke-linecap="round"/>
-            </svg>
           </span>
           <span class="side-nav-label">{{ item.label }}</span>
-          <svg v-if="item.expandable" class="side-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <svg v-if="item.expandable" class="side-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
             <path d="M6.5 9.5 12 15l5.5-5.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
@@ -3240,13 +3229,13 @@ onMounted(async () => {
 }
 
 .side-nav {
-  width: 248px;
-  flex: 0 0 248px;
+  width: 220px;
+  flex: 0 0 220px;
   height: 100vh;
   margin: 0;
-  padding: 0 10px 12px;
+  padding: 0 8px 16px;
   background: #fff;
-  border-right: 1px solid #e6ebf2;
+  border-right: 1px solid #e8edf3;
   overflow-y: auto;
 }
 
@@ -3263,13 +3252,13 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  height: 64px;
-  padding: 0 12px;
+  height: 58px;
+  padding: 0 10px;
 }
 
 .side-nav-logo {
   display: block;
-  height: 40px;
+  height: 30px;
   width: auto;
   max-width: 100%;
   object-fit: contain;
@@ -3277,17 +3266,17 @@ onMounted(async () => {
 }
 
 .side-nav-kicker {
-  margin: 0.15rem 0 0.4rem 12px;
+  margin: 0.1rem 0 0.35rem 12px;
   font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.06em;
   color: #3b82f6;
 }
 
 .side-nav-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .side-nav-item {
@@ -3295,13 +3284,14 @@ onMounted(async () => {
   align-items: center;
   gap: 0.75rem;
   width: 100%;
-  padding: 0.52rem 0.7rem;
+  min-height: 44px;
+  padding: 0.55rem 0.7rem;
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #98a2b3;
+  color: #a3acb8;
   font-family: inherit;
-  font-size: 0.9rem;
+  font-size: 0.875rem;
   font-weight: 500;
   line-height: 1.2;
   text-align: left;
@@ -3310,13 +3300,13 @@ onMounted(async () => {
 
 .side-nav-item:hover {
   background: #f7f8fa;
-  color: #7d8794;
+  color: #8b95a3;
 }
 
 .side-nav-item.active {
-  background: #f1f3f6;
-  color: #3d4b5c;
-  font-weight: 600;
+  background: #f3f5f8;
+  color: #8b95a3;
+  font-weight: 500;
 }
 
 .side-nav-icon {
@@ -3329,8 +3319,9 @@ onMounted(async () => {
 }
 
 .side-nav-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
+  stroke-linejoin: round;
 }
 
 .side-nav-label {
@@ -3339,9 +3330,10 @@ onMounted(async () => {
 }
 
 .side-nav-chevron {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
+  opacity: 0.9;
 }
 
 .app-main {
