@@ -3223,19 +3223,26 @@ onMounted(async () => {
   display: flex;
   flex-direction: row;
   align-items: stretch;
+  gap: 12px;
   height: 100vh;
+  padding: 12px;
   overflow: hidden;
-  background: #f4f6f9;
+  background: #eef2f6;
+  box-sizing: border-box;
 }
 
 .side-nav {
-  width: 220px;
-  flex: 0 0 220px;
-  height: 100vh;
+  width: 252px;
+  flex: 0 0 252px;
+  min-height: 0;
+  align-self: stretch;
   margin: 0;
-  padding: 0 8px 16px;
+  padding: 0 12px 16px;
   background: #fff;
-  border-right: 1px solid #e8edf3;
+  border: none;
+  border-radius: 18px;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -3252,8 +3259,10 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  height: 58px;
-  padding: 0 10px;
+  height: 64px;
+  margin: 0 -12px 10px;
+  padding: 0 18px;
+  border-bottom: 1px solid #eef1f5;
 }
 
 .side-nav-logo {
@@ -3342,9 +3351,9 @@ onMounted(async () => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: auto;
   overflow: hidden;
-  background: #f4f6f9;
+  background: transparent;
 }
 
 .section-placeholder {
