@@ -1752,6 +1752,14 @@ onMounted(async () => {
 <template>
   <div class="app-layout">
     <aside class="side-nav" aria-label="Sezioni">
+      <div class="side-nav-brand">
+        <span class="side-nav-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M13.4 2.2 4.8 13.1h6.1l-1.5 8.7 9.8-12.2h-6.3L13.4 2.2z"/>
+          </svg>
+        </span>
+        <span>Spark</span>
+      </div>
       <p class="side-nav-kicker">SEZIONI</p>
       <nav class="side-nav-list">
         <button
@@ -1841,19 +1849,17 @@ onMounted(async () => {
           <span class="tab-label">{{ s.label }}</span>
         </button>
       </nav>
-    </header>
-
-    <div ref="mainWrapRef" class="main-wrap">
-    <header class="main-header">
-      <button class="btn-primary" @click="startNuovaAnalisi">
+      <button class="btn-primary tab-bar-action" @click="startNuovaAnalisi">
         <span>NUOVA ANALISI</span>
       </button>
     </header>
 
+    <div ref="mainWrapRef" class="main-wrap">
+
     <!-- Flusso unificato: Upload → Mapping → Risultati -->
     <template v-if="showAnalisiFlow">
       <!-- Step 1: Link Excel -->
-      <div v-if="analisiStep === 'upload'" class="analisi-content">
+      <div v-if="analisiStep === 'upload'" class="analisi-content panel-card">
         <h2 class="analisi-title">Collegamento al file Excel</h2>
         <p class="analisi-desc">Incolla il link a un file Excel (.xlsx) in cloud oppure carica un file locale (.xlsx, .xls, .csv). L'app mapperà automaticamente le colonne per la valutazione dei lavori di pari valore (job grading).</p>
         <div class="url-input-wrap">
@@ -3233,22 +3239,19 @@ onMounted(async () => {
   display: flex;
   flex-direction: row;
   align-items: stretch;
-  min-height: 100vh;
-  background: #eef1f5;
+  height: 100vh;
+  overflow: hidden;
+  background: #f4f6f9;
 }
 
 .side-nav {
-  width: 272px;
-  flex: 0 0 272px;
-  align-self: flex-start;
-  position: sticky;
-  top: 12px;
-  max-height: calc(100vh - 24px);
-  margin: 12px 0 12px 12px;
-  padding: 1.35rem 0.7rem 0.85rem;
+  width: 248px;
+  flex: 0 0 248px;
+  height: 100vh;
+  margin: 0;
+  padding: 0 10px 12px;
   background: #fff;
-  border-radius: 16px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  border-right: 1px solid #e6ebf2;
   overflow-y: auto;
 }
 
@@ -3261,11 +3264,35 @@ onMounted(async () => {
   border-radius: 8px;
 }
 
-.side-nav-kicker {
-  margin: 0 0 0.7rem 0.85rem;
-  font-size: 0.72rem;
+.side-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 64px;
+  padding: 0 12px;
+  color: #1b2430;
+  font-size: 1.15rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: -0.02em;
+}
+
+.side-nav-logo {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  color: #3b82f6;
+}
+
+.side-nav-logo svg {
+  width: 22px;
+  height: 22px;
+}
+
+.side-nav-kicker {
+  margin: 0.15rem 0 0.4rem 12px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
   color: #3b82f6;
 }
 
@@ -3278,15 +3305,15 @@ onMounted(async () => {
 .side-nav-item {
   display: flex;
   align-items: center;
-  gap: 0.8rem;
+  gap: 0.75rem;
   width: 100%;
-  padding: 0.68rem 0.8rem;
+  padding: 0.52rem 0.7rem;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
-  color: #9aa3b2;
+  color: #98a2b3;
   font-family: inherit;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 500;
   line-height: 1.2;
   text-align: left;
@@ -3314,8 +3341,8 @@ onMounted(async () => {
 }
 
 .side-nav-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .side-nav-label {
@@ -3332,9 +3359,12 @@ onMounted(async () => {
 .app-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  background: #f4f6f9;
 }
 
 .section-placeholder {
@@ -3344,12 +3374,20 @@ onMounted(async () => {
 .tab-bar {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
-  padding: 0 1.5rem;
-  min-height: 56px;
-  background: var(--bg-card);
-  box-shadow: var(--shadow-soft);
-  border-bottom: 1px solid var(--border-light);
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1.25rem 0 0.35rem;
+  height: 64px;
+  min-height: 64px;
+  flex-shrink: 0;
+  background: #fff;
+  border-bottom: 1px solid #e6ebf2;
+}
+
+.tab-bar-action {
+  padding: 0.55rem 1.05rem;
+  border-radius: 10px;
+  flex-shrink: 0;
 }
 
 .tabs {
@@ -3404,8 +3442,26 @@ onMounted(async () => {
 .main-wrap {
   flex: 1;
   min-width: 0;
-  padding: 1.5rem 2rem 2rem;
+  min-height: 0;
+  padding: 1.25rem 1.5rem 2rem;
   overflow-y: auto;
+  background: #f4f6f9;
+}
+
+.analisi-content.panel-card {
+  max-width: none;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #eef1f6;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  padding: 1.35rem 1.5rem 1.5rem;
+}
+
+.panel-card .analisi-title {
+  color: #2563eb;
+  font-size: 1.05rem;
+  font-weight: 600;
 }
 
 .main-header {

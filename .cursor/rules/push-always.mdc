@@ -1,0 +1,13 @@
+---
+description: Dopo ogni modifica, commit e push su origin/main
+alwaysApply: true
+---
+
+# Push sempre
+
+Dopo ogni modifica in questo progetto, fai commit e push su `origin/main` senza aspettare che ti venga chiesto di nuovo.
+
+- Non usare force push.
+- Non aggiornare la git config.
+- Non saltare gli hook.
+- Non committare file con segreti (`.env`, credenziali).
