@@ -1753,12 +1753,7 @@ onMounted(async () => {
   <div class="app-layout">
     <aside class="side-nav" aria-label="Sezioni">
       <div class="side-nav-brand">
-        <span class="side-nav-logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M13.4 2.2 4.8 13.1h6.1l-1.5 8.7 9.8-12.2h-6.3L13.4 2.2z"/>
-          </svg>
-        </span>
-        <span>Spark</span>
+        <img class="side-nav-logo" src="/spark-logo.png" alt="Spark" />
       </div>
       <p class="side-nav-kicker">SEZIONI</p>
       <nav class="side-nav-list">
@@ -3267,25 +3262,18 @@ onMounted(async () => {
 .side-nav-brand {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: flex-start;
   height: 64px;
   padding: 0 12px;
-  color: #1b2430;
-  font-size: 1.15rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
 }
 
 .side-nav-logo {
-  width: 22px;
-  height: 22px;
-  display: flex;
-  color: #3b82f6;
-}
-
-.side-nav-logo svg {
-  width: 22px;
-  height: 22px;
+  display: block;
+  height: 40px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .side-nav-kicker {
@@ -3395,7 +3383,14 @@ onMounted(async () => {
   align-items: center;
   gap: 0.25rem;
   flex: 1;
+  min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
