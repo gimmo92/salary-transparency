@@ -73,6 +73,27 @@ const sections = [
   { id: 'storico', label: 'Storico', icon: 'history' },
 ]
 
+/** Menu laterale (shell sezioni) */
+const activeSideItem = ref('compensation')
+const sideMenu = [
+  { id: 'profilo', label: 'Profilo', icon: 'info' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'chart' },
+  { id: 'azienda', label: 'La mia azienda', icon: 'user', expandable: true },
+  { id: 'onboarding', label: 'Onboarding', icon: 'bookmark' },
+  { id: 'mbo', label: 'MBO', icon: 'target', expandable: true },
+  { id: 'smart-upload', label: 'Smart Upload', icon: 'info' },
+  { id: 'competenze', label: 'Competenze', icon: 'book-open', expandable: true },
+  { id: 'valutazioni', label: 'Valutazioni', icon: 'eval', expandable: true },
+  { id: 'okr', label: 'OKR', icon: 'okr', expandable: true },
+  { id: 'clima', label: 'Analisi di Clima', icon: 'clipboard', expandable: true },
+  { id: 'formazione', label: 'Formazione', icon: 'book', expandable: true },
+  { id: 'compensation', label: 'Compensation', icon: 'info' },
+  { id: 'ats', label: 'ATS', icon: 'briefcase' },
+]
+const activeSideLabel = computed(
+  () => sideMenu.find((item) => item.id === activeSideItem.value)?.label ?? '',
+)
+
 // Flusso unificato
 const analisiStep = ref('upload') // idle | upload | mapping | results — default upload con sezione Analisi
 const excelRows = ref([])
@@ -1730,6 +1751,80 @@ onMounted(async () => {
 </script>
 <template>
   <div class="app-layout">
+    <aside class="side-nav" aria-label="Sezioni">
+      <p class="side-nav-kicker">SEZIONI</p>
+      <nav class="side-nav-list">
+        <button
+          v-for="item in sideMenu"
+          :key="item.id"
+          type="button"
+          class="side-nav-item"
+          :class="{ active: activeSideItem === item.id }"
+          @click="activeSideItem = item.id"
+        >
+          <span class="side-nav-icon" aria-hidden="true">
+            <svg v-if="item.icon === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <circle cx="12" cy="12" r="8.25"/>
+              <path d="M12 11.2v5" stroke-linecap="round"/>
+              <circle cx="12" cy="8.1" r="0.85" fill="currentColor" stroke="none"/>
+            </svg>
+            <svg v-else-if="item.icon === 'chart'" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="4" y="12" width="3.4" height="8" rx="0.7"/>
+              <rect x="10.3" y="7.5" width="3.4" height="12.5" rx="0.7"/>
+              <rect x="16.6" y="4" width="3.4" height="16" rx="0.7"/>
+            </svg>
+            <svg v-else-if="item.icon === 'user'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <circle cx="12" cy="8.2" r="3.1"/>
+              <path d="M5.6 19.2c1.15-3.05 3.35-4.55 6.4-4.55s5.25 1.5 6.4 4.55" stroke-linecap="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'bookmark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M7 4.5h8.2A1.8 1.8 0 0 1 17 6.3V19.5l-5-2.6-5 2.6V6.3A1.8 1.8 0 0 1 8.8 4.5H7z" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'target'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <circle cx="12" cy="12" r="8"/>
+              <circle cx="12" cy="12" r="4.2"/>
+              <circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none"/>
+            </svg>
+            <svg v-else-if="item.icon === 'book-open'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M12 6.2C10.4 5 8.1 4.4 4.5 4.4V17.2c3.6 0 5.9.6 7.5 1.8" stroke-linejoin="round"/>
+              <path d="M12 6.2c1.6-1.2 3.9-1.8 7.5-1.8v12.8c-3.6 0-5.9.6-7.5 1.8" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'eval'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M4.5 16.5 9 12l3 2.6 6.2-7.1" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M14.2 7.5H18.5V11.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'okr'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M4.5 17.5V12" stroke-linecap="round"/>
+              <path d="M9.5 17.5V9" stroke-linecap="round"/>
+              <path d="M14.5 17.5V6.5" stroke-linecap="round"/>
+              <path d="M19.5 17.5V4.5" stroke-linecap="round"/>
+              <path d="M4 19.2h16" stroke-linecap="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'clipboard'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <rect x="6.2" y="4.8" width="11.6" height="15" rx="1.8"/>
+              <path d="M9.2 4.6h5.6v2.1H9.2z" stroke-linejoin="round"/>
+              <path d="M9 11.2h6M9 14.2h6M9 17.2h3.6" stroke-linecap="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'book'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M6.2 5h10.2A1.6 1.6 0 0 1 18 6.6V19H8.4A2.2 2.2 0 0 0 6.2 21.2V5z" stroke-linejoin="round"/>
+              <path d="M6.2 5A2.2 2.2 0 0 0 4 7.2V18" stroke-linecap="round"/>
+            </svg>
+            <svg v-else-if="item.icon === 'briefcase'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <rect x="3.6" y="7.4" width="16.8" height="11.4" rx="1.8"/>
+              <path d="M9 7.4V6.1A1.6 1.6 0 0 1 10.6 4.5h2.8A1.6 1.6 0 0 1 15 6.1v1.3" stroke-linejoin="round"/>
+              <path d="M3.6 12.2h16.8" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span class="side-nav-label">{{ item.label }}</span>
+          <svg v-if="item.expandable" class="side-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M6.5 9.5 12 15l5.5-5.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </nav>
+    </aside>
+
+    <div class="app-main">
+    <template v-if="activeSideItem === 'compensation'">
     <header class="tab-bar">
       <nav class="tabs">
         <button
@@ -3123,6 +3218,12 @@ onMounted(async () => {
       </div>
     </template>
     </div>
+    </template>
+    <div v-else class="section-placeholder">
+      <h2 class="analisi-title">{{ activeSideLabel }}</h2>
+      <p class="analisi-desc">Questa sezione non è disponibile in questa vista.</p>
+    </div>
+    </div>
   </div>
 
 </template>
@@ -3130,8 +3231,114 @@ onMounted(async () => {
 <style scoped>
 .app-layout {
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 100vh;
+  background: #eef1f5;
+}
+
+.side-nav {
+  width: 272px;
+  flex: 0 0 272px;
+  align-self: flex-start;
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  margin: 12px 0 12px 12px;
+  padding: 1.35rem 0.7rem 0.85rem;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  overflow-y: auto;
+}
+
+.side-nav::-webkit-scrollbar {
+  width: 8px;
+}
+
+.side-nav::-webkit-scrollbar-thumb {
+  background: #c5cad3;
+  border-radius: 8px;
+}
+
+.side-nav-kicker {
+  margin: 0 0 0.7rem 0.85rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #3b82f6;
+}
+
+.side-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+  padding: 0.68rem 0.8rem;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #9aa3b2;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.side-nav-item:hover {
+  background: #f7f8fa;
+  color: #7d8794;
+}
+
+.side-nav-item.active {
+  background: #f1f3f6;
+  color: #3d4b5c;
+  font-weight: 600;
+}
+
+.side-nav-icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.side-nav-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.side-nav-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.side-nav-chevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   min-height: 100vh;
+}
+
+.section-placeholder {
+  padding: 2.5rem 2rem;
 }
 
 .tab-bar {
