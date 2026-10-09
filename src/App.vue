@@ -52,7 +52,23 @@ import {
   computeGapHotspots,
   gapStatusCssClass,
 } from './lib/gapGroupAnalysis.js'
-import { saveAnalysis, fetchAnalyses, fetchAnalysisById, deleteAnalysisById } from './lib/persistence.js'
+import {
+  saveAnalysis,
+  fetchAnalyses,
+  fetchAnalysisById,
+  deleteAnalysisById,
+  updateAnalysisSnapshot,
+} from './lib/persistence.js'
+import {
+  SNAPSHOT_VERSION,
+  buildAnalysisSnapshot,
+  buildHistoryView,
+  needsSnapshotUpgrade,
+  peopleFromSource,
+  snapshotFromStoredRecord,
+  sourceLabel,
+} from './lib/analysisSnapshot.js'
+import { simulateHire } from './lib/hireSimulation.js'
 import {
   GAP_REPORT_VERSION,
   buildGroupsAboveThreshold,
@@ -71,6 +87,7 @@ const activeSection = ref('analisi')
 const sections = [
   { id: 'analisi', label: 'Analisi', icon: 'table' },
   { id: 'storico', label: 'Storico', icon: 'history' },
+  { id: 'insights', label: 'Analisi storico', icon: 'chart' },
 ]
 
 /** Menu laterale (shell sezioni) */
@@ -106,6 +123,8 @@ const uploadLoading = ref(false)
 const geminiLoading = ref(false)
 const analysisLoading = ref(false)
 const saveStatus = ref('')
+const saveStatusIsError = ref(false)
+const historySaving = ref(false)
 
 const indicatorsResult = ref(null)
 const indicatorsSource = ref('locale')
@@ -209,6 +228,7 @@ function isMappingFieldAssigned(role) {
 
 const showAnalisiFlow = computed(() => activeSection.value === 'analisi')
 const showStorico = computed(() => activeSection.value === 'storico')
+const showInsights = computed(() => activeSection.value === 'insights')
 
 // Storico
 const storicoList = ref([])
@@ -220,7 +240,22 @@ async function loadStorico() {
   storicoLoading.value = true
   storicoError.value = ''
   try {
-    storicoList.value = await fetchAnalyses()
+    const list = await fetchAnalyses()
+    for (const item of list) {
+      if (!needsSnapshotUpgrade(item)) continue
+      try {
+        const full = await fetchAnalysisById(item.id)
+        const snap = snapshotFromStoredRecord(full)
+        if (snap?.version === SNAPSHOT_VERSION) {
+          await updateAnalysisSnapshot(item.id, snap)
+          item.snapshot_json = snap
+          if (!item.row_count && Array.isArray(full.rows_json)) item.row_count = full.rows_json.length
+        }
+      } catch {
+        // un record illeggibile non blocca gli altri
+      }
+    }
+    storicoList.value = list
   } catch (err) {
     storicoError.value = err.message || 'Impossibile caricare lo storico.'
   } finally {
@@ -249,21 +284,37 @@ async function viewAnalysis(id) {
   try {
     const record = await fetchAnalysisById(id)
     const results = record.results_json || {}
-    indicatorsResult.value = results.gender || null
-    indicatorsSource.value = (record.calculation_source || '').includes('gender:ai') ? 'ai' : 'locale'
-
-    const jg = results.jobGrading || []
-    jobResults.value = jg
     justifications.value = {}
 
     excelUrl.value = record.source_url || ''
     columnMapping.value = record.mapping_json || {}
     excelHeaders.value = record.headers_json || []
     excelRows.value = record.rows_json || []
-    saveStatus.value = `Analisi caricata dallo storico (ID: ${record.id})`
+    transparencyRoleOverrides.value = record.overrides_json || {}
+    saveStatusIsError.value = false
+    const storedRows = Array.isArray(record.rows_json) ? record.rows_json.length : 0
+    saveStatus.value = `Analisi caricata dallo storico (${storedRows} righe).`
 
-    const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
-    genderNormalizedCache.value = normalizedGender
+    const canRebuild =
+      excelRows.value.length > 0 &&
+      excelHeaders.value.length > 0 &&
+      columnMapping.value &&
+      Object.keys(columnMapping.value).length > 0
+
+    if (canRebuild) {
+      runJobGrading()
+      const normalizedGender = buildNormalizedData(excelRows.value, excelHeaders.value, columnMapping.value)
+      genderNormalizedCache.value = normalizedGender
+      indicatorsResult.value = normalizedGender.length
+        ? computeIndicators(normalizedGender, { metric: euDashboardMetric.value })
+        : null
+      indicatorsSource.value = 'locale'
+    } else {
+      indicatorsResult.value = results.gender || null
+      indicatorsSource.value = (record.calculation_source || '').includes('gender:ai') ? 'ai' : 'locale'
+      jobResults.value = results.jobGrading || []
+      genderNormalizedCache.value = []
+    }
     bandGenderJustifications.value = {}
     quartileOutlierJustifications.value = {}
 
@@ -289,6 +340,108 @@ function analysisTypeLabel(t) {
   if (t === 'job_grading') return 'Job Grading'
   if (t === 'combined') return 'Analisi completa'
   return t || '–'
+}
+
+const insightsPane = ref('andamento')
+const historyView = computed(() => buildHistoryView(storicoList.value))
+
+const simForm = ref({
+  name: '',
+  gender: 'F',
+  level: '',
+  role: '',
+  baseSalary: '',
+  variableComponents: '',
+  partTimePct: 100,
+})
+const simResult = ref(null)
+const simError = ref('')
+
+const simLevelOptions = computed(() => {
+  const set = new Set()
+  for (const band of jobResults.value || []) {
+    if (band?.level) set.add(String(band.level))
+  }
+  return [...set]
+})
+
+const simRoleOptions = computed(() => {
+  const set = new Set()
+  for (const band of jobResults.value || []) {
+    for (const hay of band.hayBands || []) {
+      for (const role of hay.roles || []) {
+        if (role?.role) set.add(String(role.role))
+      }
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, 'it'))
+})
+
+const canSimulate = computed(
+  () => excelRows.value.length > 0 && Object.keys(columnMapping.value || {}).length > 0,
+)
+
+function formatEuro(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '–'
+  return `${Number(n).toLocaleString('it-IT', { maximumFractionDigits: 0 })} €`
+}
+
+function formatDeltaEuro(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '–'
+  const v = Number(n)
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toLocaleString('it-IT', { maximumFractionDigits: 0 })} €`
+}
+
+function formatDeltaPct(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '–'
+  const v = Number(n)
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toFixed(2)} pp`
+}
+
+function formatDeltaCount(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '–'
+  const v = Number(n)
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toLocaleString('it-IT', { maximumFractionDigits: 0 })}`
+}
+
+function deltaOf(after, before) {
+  if (after == null || before == null) return null
+  if (!Number.isFinite(Number(after)) || !Number.isFinite(Number(before))) return null
+  return Number(after) - Number(before)
+}
+
+function historyGapBarHeight(gap) {
+  const points = historyView.value.points || []
+  const max = Math.max(5, ...points.map((p) => Math.abs(Number(p.snapshot?.gapMean) || 0)))
+  const pct = Math.abs(Number(gap) || 0) / max
+  return `${Math.max(4, Math.round(pct * 96))}px`
+}
+
+function runHireSimulation() {
+  simError.value = ''
+  simResult.value = null
+  if (!canSimulate.value) {
+    simError.value = 'Esegui o apri un\'analisi: la simulazione usa i dipendenti già caricati.'
+    return
+  }
+  try {
+    const { people } = peopleFromSource({
+      rows: excelRows.value,
+      headers: excelHeaders.value,
+      mapping: columnMapping.value,
+      overrides: transparencyRoleOverrides.value,
+    })
+    simResult.value = simulateHire({
+      people,
+      overrides: transparencyRoleOverrides.value,
+      form: { ...simForm.value },
+    })
+  } catch (err) {
+    simError.value = err?.message || String(err)
+  }
 }
 
 function isGapAlert(pct) {
@@ -744,6 +897,39 @@ function runJobGrading() {
   }
 }
 
+async function persistCurrentAnalysis() {
+  if (!excelRows.value.length) {
+    saveStatusIsError.value = true
+    saveStatus.value = 'Nessun dato da salvare nello storico.'
+    return null
+  }
+  historySaving.value = true
+  try {
+    const snapshot = buildAnalysisSnapshot({ jobResults: jobResults.value })
+    const record = await saveAnalysis({
+      analysisType: 'combined',
+      sourceUrl: excelUrl.value || (excelFile.value ? `file:${excelFile.value.name}` : ''),
+      headers: excelHeaders.value,
+      mapping: columnMapping.value,
+      rows: excelRows.value,
+      snapshot,
+      overrides: transparencyRoleOverrides.value,
+      calculationSource: `gender:${indicatorsSource.value},job:locale`,
+    })
+    saveStatusIsError.value = false
+    const n = snapshot?.n || excelRows.value.length
+    saveStatus.value = `Analisi salvata nello storico (${n} dipendenti con retribuzione valida).`
+    storicoList.value = await fetchAnalyses()
+    return record
+  } catch (err) {
+    saveStatusIsError.value = true
+    saveStatus.value = `Analisi non salvata: ${err?.message || String(err)}`
+    return null
+  } finally {
+    historySaving.value = false
+  }
+}
+
 // Flusso unificato
 function startNuovaAnalisi() {
   activeSection.value = 'analisi'
@@ -756,6 +942,7 @@ function startNuovaAnalisi() {
   indicatorsResult.value = null
   jobResults.value = []
   saveStatus.value = ''
+  saveStatusIsError.value = false
   justifications.value = {}
   justifyingLevel.value = null
   genderViewMode.value = 'media'
@@ -946,21 +1133,7 @@ async function confirmMapping() {
     quartileOutlierJustifications.value = {}
     transparencyRoleOverrides.value = {}
 
-    // Salvataggio DB
-    try {
-      await saveAnalysis({
-        analysisType: 'combined',
-        sourceUrl: excelUrl.value || (excelFile.value ? `file:${excelFile.value.name}` : ''),
-        headers: excelHeaders.value,
-        mapping: columnMapping.value,
-        rows: excelRows.value.slice(0, 500),
-        results: { gender: indicatorsResult.value, jobGrading: jobResults.value },
-        calculationSource: `gender:${indicatorsSource.value},job:locale`,
-      })
-      saveStatus.value = ''
-    } catch (saveErr) {
-      saveStatus.value = `Analisi non salvata: ${saveErr.message || String(saveErr)}`
-    }
+    await persistCurrentAnalysis()
 
     resultsTab.value = 'eu_dashboard'
     analisiStep.value = 'results'
@@ -1824,11 +1997,12 @@ onMounted(async () => {
           :key="s.id"
           class="tab"
           :class="{ active: activeSection === s.id }"
-          @click="activeSection = s.id; if (s.id === 'analisi' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'storico') loadStorico()"
+          @click="activeSection = s.id; if (s.id === 'analisi' && analisiStep === 'idle') analisiStep = 'upload'; if (s.id === 'storico' || s.id === 'insights') loadStorico()"
         >
           <span class="tab-icon">
             <svg v-if="s.icon === 'table'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
             <svg v-else-if="s.icon === 'history'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <svg v-else-if="s.icon === 'chart'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16"/><path d="M8 15v-3M12 15V8M16 15v-5"/></svg>
           </span>
           <span class="tab-label">{{ s.label }}</span>
         </button>
@@ -1950,8 +2124,13 @@ onMounted(async () => {
 
       <!-- Step 3: Risultati con sub-tab -->
       <div v-else-if="analisiStep === 'results'" class="analisi-content results">
-        <h2 class="analisi-title">Risultati analisi</h2>
-        <p v-if="saveStatus" class="save-status">{{ saveStatus }}</p>
+        <div class="results-head">
+          <h2 class="analisi-title">Risultati analisi</h2>
+          <button type="button" class="btn-secondary" :disabled="historySaving" @click="persistCurrentAnalysis">
+            {{ historySaving ? 'Salvataggio…' : 'Salva nello storico' }}
+          </button>
+        </div>
+        <p v-if="saveStatus" :class="saveStatusIsError ? 'upload-error' : 'save-status'">{{ saveStatus }}</p>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
 
         <div class="results-subtabs eu-results-tabs">
@@ -3154,11 +3333,447 @@ onMounted(async () => {
       </div>
     </template>
 
+    <!-- Analisi storico + simulazione assunzione -->
+    <template v-else-if="showInsights">
+      <div class="analisi-content">
+        <h2 class="analisi-title">Analisi storico</h2>
+        <p class="analisi-desc">
+          Andamento delle analisi salvate e simulazione di una nuova assunzione: organico, gap di genere e medie delle fasce di grading.
+        </p>
+
+        <div class="results-subtabs eu-results-tabs insights-subtabs">
+          <button type="button" class="subtab" :class="{ active: insightsPane === 'andamento' }" @click="insightsPane = 'andamento'">
+            Andamento
+          </button>
+          <button type="button" class="subtab" :class="{ active: insightsPane === 'simulazione' }" @click="insightsPane = 'simulazione'">
+            Simulazione assunzione
+          </button>
+        </div>
+
+        <div v-if="insightsPane === 'andamento'">
+          <p v-if="storicoLoading && historyView.points.length === 0" class="storico-status">Caricamento storico…</p>
+          <p v-if="storicoError" class="upload-error">{{ storicoError }}</p>
+          <div v-if="!storicoLoading && historyView.points.length === 0 && !storicoError" class="storico-empty">
+            Nessuna analisi nello storico. Completa un’analisi: viene salvata in automatico e compare qui.
+          </div>
+
+          <template v-if="historyView.points.length">
+            <div class="hist-kpis">
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">Analisi salvate</span>
+                <strong>{{ historyView.points.length }}</strong>
+              </div>
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">Organico ultimo</span>
+                <strong>{{ historyView.latest.snapshot.n }}</strong>
+                <span v-if="historyView.previous" class="hist-kpi-delta">
+                  {{ formatDeltaCount(deltaOf(historyView.latest.snapshot.n, historyView.previous.snapshot.n)) }}
+                  vs precedente
+                </span>
+              </div>
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">Media totale</span>
+                <strong>{{ formatEuro(historyView.latest.snapshot.avgTotal) }}</strong>
+                <span v-if="historyView.previous" class="hist-kpi-delta">
+                  {{ formatDeltaEuro(deltaOf(historyView.latest.snapshot.avgTotal, historyView.previous.snapshot.avgTotal)) }}
+                </span>
+              </div>
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">Gap medio M/F</span>
+                <strong>{{ formatGapMforF(historyView.latest.snapshot.gapMean) }}</strong>
+                <span v-if="historyView.previous" class="hist-kpi-delta">
+                  {{ formatDeltaPct(deltaOf(historyView.latest.snapshot.gapMean, historyView.previous.snapshot.gapMean)) }}
+                </span>
+              </div>
+            </div>
+
+            <h3 class="hist-heading">Gap medio nel tempo</h3>
+            <p class="hist-note">Gap sulla retribuzione totale: positivo significa uomini pagati di più. Il confronto usa le analisi salvate, dalla più vecchia alla più recente.</p>
+            <div class="hist-gap-chart">
+              <div v-for="p in historyView.points" :key="p.id" class="hist-gap-col">
+                <div
+                  class="hist-gap-bar"
+                  :class="euGapSeverityClass(p.snapshot.gapMean)"
+                  :style="{ height: historyGapBarHeight(p.snapshot.gapMean) }"
+                  :title="formatGapMforF(p.snapshot.gapMean)"
+                ></div>
+                <span class="hist-gap-val">{{ formatPctSigned(p.snapshot.gapMean) }}</span>
+                <span class="hist-gap-date">{{ formatDate(p.createdAt) }}</span>
+              </div>
+            </div>
+
+            <h3 class="hist-heading">Analisi confrontate</h3>
+            <p v-if="historyView.hiddenCount" class="hist-note">
+              Le tabelle di fascia mostrano le ultime {{ historyView.shown.length }} analisi. Nello storico ce ne sono altre {{ historyView.hiddenCount }}.
+            </p>
+            <div class="storico-table-wrap">
+              <table class="storico-table">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Fonte</th>
+                    <th>N</th>
+                    <th>N M</th>
+                    <th>N F</th>
+                    <th>Media tot.</th>
+                    <th>Media M</th>
+                    <th>Media F</th>
+                    <th>Gap medio</th>
+                    <th>Gap mediano</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in [...historyView.points].reverse()" :key="p.id">
+                    <td>{{ formatDate(p.createdAt) }}</td>
+                    <td class="storico-url">{{ p.label }}</td>
+                    <td>{{ p.snapshot.n }}</td>
+                    <td>{{ p.snapshot.nMen }}</td>
+                    <td>{{ p.snapshot.nWomen }}</td>
+                    <td>{{ formatEuro(p.snapshot.avgTotal) }}</td>
+                    <td>{{ formatEuro(p.snapshot.avgMen) }}</td>
+                    <td>{{ formatEuro(p.snapshot.avgWomen) }}</td>
+                    <td>{{ formatGapMforF(p.snapshot.gapMean) }}</td>
+                    <td>{{ formatGapMforF(p.snapshot.gapMedian) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 class="hist-heading">Medie per livello</h3>
+            <div class="storico-table-wrap">
+              <table class="storico-table">
+                <thead>
+                  <tr>
+                    <th>Livello</th>
+                    <th v-for="p in historyView.shown" :key="p.id">{{ formatDate(p.createdAt) }}</th>
+                    <th>Delta ultima</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in historyView.levels" :key="row.level">
+                    <td>{{ row.level }}</td>
+                    <td v-for="(cell, idx) in row.cells" :key="historyView.shown[idx].id">
+                      <template v-if="cell">{{ formatEuro(cell.avgTotal) }} <span class="hist-n">n {{ cell.n }}</span></template>
+                      <template v-else>–</template>
+                    </td>
+                    <td>{{ formatDeltaEuro(deltaOf(row.cells.at(-1)?.avgTotal, row.cells.length > 1 ? row.cells.at(-2)?.avgTotal : null)) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 class="hist-heading">Medie per fascia di grading</h3>
+            <p class="hist-note">Ogni riga è un livello con lo stesso punteggio di fascia. La media è la retribuzione totale annua.</p>
+            <div v-if="historyView.bands.length === 0" class="storico-empty">Nessuna fascia nelle analisi salvate.</div>
+            <div v-else class="storico-table-wrap">
+              <table class="storico-table">
+                <thead>
+                  <tr>
+                    <th>Livello</th>
+                    <th>Fascia</th>
+                    <th v-for="p in historyView.shown" :key="p.id">{{ formatDate(p.createdAt) }}</th>
+                    <th>Delta media</th>
+                    <th>Delta gap</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in historyView.bands" :key="row.key">
+                    <td>{{ row.level }}</td>
+                    <td>{{ row.fasciaLabel || '–' }} <span class="hist-n">{{ row.score }}/100</span></td>
+                    <td v-for="(cell, idx) in row.cells" :key="historyView.shown[idx].id">
+                      <template v-if="cell">
+                        {{ formatEuro(cell.avgTotal) }}
+                        <span class="hist-n">n {{ cell.n }} · {{ formatGapMforF(cell.gapPct) }}</span>
+                      </template>
+                      <template v-else>–</template>
+                    </td>
+                    <td>{{ formatDeltaEuro(deltaOf(row.cells.at(-1)?.avgTotal, row.cells.length > 1 ? row.cells.at(-2)?.avgTotal : null)) }}</td>
+                    <td>{{ formatDeltaPct(deltaOf(row.cells.at(-1)?.gapPct, row.cells.length > 1 ? row.cells.at(-2)?.gapPct : null)) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+
+        <div v-else class="sim-pane">
+          <p class="hist-note">
+            Il calcolo aggiunge un dipendente ipotetico ai dati dell’analisi aperta. La fascia è quella del ruolo (punteggio di grading). Le medie sono sulla retribuzione totale annua, come nel job grading.
+          </p>
+          <p v-if="!canSimulate" class="upload-error">Apri o completa un’analisi: la simulazione parte dai dipendenti già caricati.</p>
+
+          <form class="sim-form" @submit.prevent="runHireSimulation">
+            <label class="sim-field">
+              <span>Nome</span>
+              <input v-model="simForm.name" type="text" class="url-input" placeholder="Es. Nuova assunzione" :disabled="!canSimulate" />
+            </label>
+            <label class="sim-field">
+              <span>Genere</span>
+              <select v-model="simForm.gender" class="url-input" :disabled="!canSimulate">
+                <option value="F">Donna</option>
+                <option value="M">Uomo</option>
+              </select>
+            </label>
+            <label class="sim-field">
+              <span>Livello CCNL</span>
+              <input v-model="simForm.level" type="text" class="url-input" list="sim-level-options" placeholder="Livello" :disabled="!canSimulate" />
+              <datalist id="sim-level-options">
+                <option v-for="level in simLevelOptions" :key="level" :value="level"></option>
+              </datalist>
+            </label>
+            <label class="sim-field">
+              <span>Ruolo</span>
+              <input v-model="simForm.role" type="text" class="url-input" list="sim-role-options" placeholder="Ruolo esistente o nuovo" :disabled="!canSimulate" />
+              <datalist id="sim-role-options">
+                <option v-for="role in simRoleOptions" :key="role" :value="role"></option>
+              </datalist>
+            </label>
+            <label class="sim-field">
+              <span>Retribuzione base annua</span>
+              <input v-model="simForm.baseSalary" type="text" inputmode="decimal" class="url-input" placeholder="Es. 32000" :disabled="!canSimulate" />
+            </label>
+            <label class="sim-field">
+              <span>Componenti variabili annue</span>
+              <input v-model="simForm.variableComponents" type="text" inputmode="decimal" class="url-input" placeholder="Es. 2000" :disabled="!canSimulate" />
+            </label>
+            <label class="sim-field">
+              <span>Part-time %</span>
+              <input v-model.number="simForm.partTimePct" type="number" min="1" max="100" class="url-input" :disabled="!canSimulate" />
+            </label>
+            <div class="sim-actions">
+              <button type="submit" class="btn-primary" :disabled="!canSimulate">Calcola ripercussioni</button>
+            </div>
+          </form>
+          <p v-if="simError" class="upload-error">{{ simError }}</p>
+
+          <div v-if="simResult" class="sim-result">
+            <h3 class="hist-heading">Nuovo dipendente</h3>
+            <div class="hist-kpis">
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">{{ simResult.employee.name }}</span>
+                <strong>{{ simResult.employee.gender === 'M' ? 'Uomo' : 'Donna' }}</strong>
+                <span class="hist-kpi-delta">{{ simResult.employee.role }} · {{ simResult.placement?.level || simForm.level }}</span>
+              </div>
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">Retribuzione totale</span>
+                <strong>{{ formatEuro(simResult.employee.totalSalary) }}</strong>
+                <span class="hist-kpi-delta">Base {{ formatEuro(simResult.employee.baseSalary) }} · var. {{ formatEuro(simResult.employee.variableComponents) }}</span>
+              </div>
+              <div class="hist-kpi">
+                <span class="hist-kpi-label">Fascia</span>
+                <strong>{{ simResult.placement?.fasciaLabel || '–' }}</strong>
+                <span class="hist-kpi-delta">Scostamento vs nuova media {{ formatPctSigned(simResult.employee.deviationPct) }}</span>
+              </div>
+            </div>
+            <p v-if="simResult.roleMove.moved" class="hist-note">
+              Il punteggio medio del ruolo passa da {{ formatNum(simResult.roleMove.beforeScore) }} a {{ formatNum(simResult.roleMove.afterScore) }}.
+              La fascia del ruolo passa da {{ simResult.roleMove.beforeFascia || 'nessuna' }} a {{ simResult.roleMove.afterFascia || '–' }}.
+            </p>
+            <p v-else-if="!simResult.roleMove.beforeFascia && simResult.placement?.newFascia" class="hist-note">
+              Ruolo nuovo: apre una fascia che prima non c’era su questo livello. La media di quella fascia coincide con la retribuzione del nuovo ingresso.
+            </p>
+            <p v-else-if="!simResult.roleMove.beforeFascia" class="hist-note">
+              Ruolo nuovo: entra nella fascia {{ simResult.placement?.fasciaLabel || '–' }}, già presente sul livello. La media si ricalcola con il nuovo ingresso.
+            </p>
+            <p v-else class="hist-note">
+              Il ruolo resta nella stessa fascia. Cambia la media, e con essa lo scostamento di chi è già dentro.
+            </p>
+
+            <h3 class="hist-heading">Azienda, prima e dopo</h3>
+            <div class="storico-table-wrap">
+              <table class="storico-table">
+                <thead>
+                  <tr><th>Indicatore</th><th>Prima</th><th>Dopo</th><th>Delta</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Dipendenti</td>
+                    <td>{{ simResult.beforeKpi.n }}</td>
+                    <td>{{ simResult.afterKpi.n }}</td>
+                    <td>{{ deltaOf(simResult.afterKpi.n, simResult.beforeKpi.n) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media totale</td>
+                    <td>{{ formatEuro(simResult.beforeKpi.avgTotal) }}</td>
+                    <td>{{ formatEuro(simResult.afterKpi.avgTotal) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.afterKpi.avgTotal, simResult.beforeKpi.avgTotal)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media base</td>
+                    <td>{{ formatEuro(simResult.beforeKpi.avgBase) }}</td>
+                    <td>{{ formatEuro(simResult.afterKpi.avgBase) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.afterKpi.avgBase, simResult.beforeKpi.avgBase)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media variabili</td>
+                    <td>{{ formatEuro(simResult.beforeKpi.avgVar) }}</td>
+                    <td>{{ formatEuro(simResult.afterKpi.avgVar) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.afterKpi.avgVar, simResult.beforeKpi.avgVar)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media uomini</td>
+                    <td>{{ formatEuro(simResult.beforeKpi.avgMen) }}</td>
+                    <td>{{ formatEuro(simResult.afterKpi.avgMen) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.afterKpi.avgMen, simResult.beforeKpi.avgMen)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media donne</td>
+                    <td>{{ formatEuro(simResult.beforeKpi.avgWomen) }}</td>
+                    <td>{{ formatEuro(simResult.afterKpi.avgWomen) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.afterKpi.avgWomen, simResult.beforeKpi.avgWomen)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Gap medio</td>
+                    <td>{{ formatGapMforF(simResult.beforeKpi.gapMean) }}</td>
+                    <td>{{ formatGapMforF(simResult.afterKpi.gapMean) }}</td>
+                    <td>{{ formatDeltaPct(deltaOf(simResult.afterKpi.gapMean, simResult.beforeKpi.gapMean)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Gap mediano</td>
+                    <td>{{ formatGapMforF(simResult.beforeKpi.gapMedian) }}</td>
+                    <td>{{ formatGapMforF(simResult.afterKpi.gapMedian) }}</td>
+                    <td>{{ formatDeltaPct(deltaOf(simResult.afterKpi.gapMedian, simResult.beforeKpi.gapMedian)) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 class="hist-heading">Fascia di ingresso</h3>
+            <div v-if="simResult.placement" class="storico-table-wrap">
+              <table class="storico-table">
+                <thead>
+                  <tr><th></th><th>Prima</th><th>Dopo</th><th>Delta</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>N in fascia</td>
+                    <td>{{ simResult.placement.nBefore }}</td>
+                    <td>{{ simResult.placement.nAfter }}</td>
+                    <td>{{ deltaOf(simResult.placement.nAfter, simResult.placement.nBefore) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media totale fascia</td>
+                    <td>{{ formatEuro(simResult.placement.avgTotalBefore) }}</td>
+                    <td>{{ formatEuro(simResult.placement.avgTotalAfter) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.placement.avgTotalAfter, simResult.placement.avgTotalBefore)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media base fascia</td>
+                    <td>{{ formatEuro(simResult.placement.avgBaseBefore) }}</td>
+                    <td>{{ formatEuro(simResult.placement.avgBaseAfter) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.placement.avgBaseAfter, simResult.placement.avgBaseBefore)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media variabili fascia</td>
+                    <td>{{ formatEuro(simResult.placement.avgVarBefore) }}</td>
+                    <td>{{ formatEuro(simResult.placement.avgVarAfter) }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.placement.avgVarAfter, simResult.placement.avgVarBefore)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media uomini in fascia</td>
+                    <td>{{ simResult.placement.nMenBefore ? formatEuro(simResult.placement.avgMenBefore) : '–' }}</td>
+                    <td>{{ simResult.placement.nMenAfter ? formatEuro(simResult.placement.avgMenAfter) : '–' }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.placement.avgMenAfter, simResult.placement.avgMenBefore)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Media donne in fascia</td>
+                    <td>{{ simResult.placement.nWomenBefore ? formatEuro(simResult.placement.avgWomenBefore) : '–' }}</td>
+                    <td>{{ simResult.placement.nWomenAfter ? formatEuro(simResult.placement.avgWomenAfter) : '–' }}</td>
+                    <td>{{ formatDeltaEuro(deltaOf(simResult.placement.avgWomenAfter, simResult.placement.avgWomenBefore)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>Gap di fascia</td>
+                    <td>{{ formatGapMforF(simResult.placement.gapBefore) }}</td>
+                    <td>{{ formatGapMforF(simResult.placement.gapAfter) }}</td>
+                    <td>{{ formatDeltaPct(deltaOf(simResult.placement.gapAfter, simResult.placement.gapBefore)) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 class="hist-heading">Ripercussione sulle fasce</h3>
+            <template v-for="group in simResult.levelGroups.filter((g) => g.affected)" :key="group.level">
+              <h4 class="sim-level-title">
+                Livello {{ group.level }}
+                <span v-if="group.isHireLevel" class="hist-n">ingresso</span>
+              </h4>
+              <p class="hist-note">
+                Media di livello {{ formatEuro(group.before?.avgTotal) }} → {{ formatEuro(group.after?.avgTotal) }}
+                ({{ formatDeltaEuro(deltaOf(group.after?.avgTotal, group.before?.avgTotal)) }}).
+                {{ formatGapMforF(group.before?.gapPct) }} → {{ formatGapMforF(group.after?.gapPct) }}.
+              </p>
+              <div class="storico-table-wrap">
+                <table class="storico-table">
+                  <thead>
+                    <tr>
+                      <th>Fascia</th>
+                      <th>N prima</th>
+                      <th>N dopo</th>
+                      <th>Media prima</th>
+                      <th>Media dopo</th>
+                      <th>Delta media</th>
+                      <th>Gap prima</th>
+                      <th>Gap dopo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in group.bands" :key="row.key" :class="{ 'sim-row-changed': row.changed }">
+                      <td>{{ row.fasciaLabel }} <span class="hist-n">{{ row.score }}/100</span></td>
+                      <td>{{ row.before?.n ?? 0 }}</td>
+                      <td>{{ row.after?.n ?? 0 }}</td>
+                      <td>{{ formatEuro(row.before?.avgTotal) }}</td>
+                      <td>{{ formatEuro(row.after?.avgTotal) }}</td>
+                      <td>{{ formatDeltaEuro(deltaOf(row.after?.avgTotal, row.before?.avgTotal)) }}</td>
+                      <td>{{ formatGapMforF(row.before?.gapPct) }}</td>
+                      <td>{{ formatGapMforF(row.after?.gapPct) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+
+            <h3 v-if="simResult.colleagueShifts.length" class="hist-heading">Scostamento di chi è già in fascia</h3>
+            <p v-if="simResult.colleagueShifts.length" class="hist-note">
+              La nuova media sposta lo scostamento percentuale dei presenti.
+              <template v-if="simResult.colleagueShiftCount > simResult.colleagueShifts.length">
+                Qui i {{ simResult.colleagueShifts.length }} movimenti più ampi su {{ simResult.colleagueShiftCount }}.
+              </template>
+            </p>
+            <div v-if="simResult.colleagueShifts.length" class="storico-table-wrap">
+              <table class="storico-table">
+                <thead>
+                  <tr>
+                    <th>Persona</th>
+                    <th>Ruolo</th>
+                    <th>Totale</th>
+                    <th>Scost. prima</th>
+                    <th>Scost. dopo</th>
+                    <th>Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in simResult.colleagueShifts" :key="p.index">
+                    <td>{{ p.name }}</td>
+                    <td>{{ p.role }}</td>
+                    <td>{{ formatEuro(p.totalSalary) }}</td>
+                    <td>{{ formatPctSigned(p.beforeDev) }}</td>
+                    <td>{{ formatPctSigned(p.afterDev) }}</td>
+                    <td>{{ formatDeltaPct(p.deltaDev) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- Storico analisi -->
     <template v-else-if="showStorico">
       <div class="analisi-content">
         <h2 class="analisi-title">Storico Analisi</h2>
-        <p v-if="storicoLoading" class="storico-status">Caricamento storico…</p>
+        <p class="analisi-desc">Ogni analisi completata viene salvata per intero in questo browser, insieme a organico, gap e medie di fascia.</p>
+        <p v-if="storicoLoading && storicoList.length === 0" class="storico-status">Caricamento storico…</p>
         <p v-if="storicoError" class="upload-error">{{ storicoError }}</p>
         <div v-if="!storicoLoading && storicoList.length === 0 && !storicoError" class="storico-empty">
           Nessuna analisi salvata.
@@ -3168,20 +3783,20 @@ onMounted(async () => {
             <thead>
               <tr>
                 <th>Data</th>
-                <th>Tipo</th>
                 <th>Fonte</th>
-                <th>Calcolo</th>
-                <th>ID</th>
+                <th>Dipendenti</th>
+                <th>Media totale</th>
+                <th>Gap medio</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="a in storicoList" :key="a.id">
                 <td>{{ formatDate(a.created_at) }}</td>
-                <td>{{ analysisTypeLabel(a.analysis_type) }}</td>
-                <td class="storico-url">{{ a.source_url || '–' }}</td>
-                <td>{{ a.calculation_source || '–' }}</td>
-                <td class="storico-id">{{ a.id.slice(0, 8) }}…</td>
+                <td class="storico-url" :title="a.source_url || ''">{{ sourceLabel(a) }}</td>
+                <td>{{ a.snapshot_json?.n ?? a.row_count ?? '–' }}</td>
+                <td>{{ formatEuro(a.snapshot_json?.avgTotal) }}</td>
+                <td>{{ formatGapMforF(a.snapshot_json?.gapMean) }}</td>
                 <td class="storico-actions">
                   <button
                     class="btn-view"
@@ -6280,5 +6895,138 @@ onMounted(async () => {
   font-size: 0.85rem;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+.results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.results-head .analisi-title {
+  margin-bottom: 0;
+}
+
+.insights-subtabs {
+  margin: 0.5rem 0 1.25rem;
+}
+
+.hist-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.hist-kpi {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.hist-kpi strong {
+  font-size: 1.15rem;
+}
+
+.hist-kpi-label,
+.hist-kpi-delta,
+.hist-note,
+.hist-n {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.hist-heading {
+  margin: 1.25rem 0 0.4rem;
+  font-size: 1rem;
+}
+
+.hist-note {
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+}
+
+.hist-gap-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding: 0.75rem 0.25rem 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.hist-gap-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 92px;
+  gap: 0.3rem;
+}
+
+.hist-gap-bar {
+  width: 28px;
+  border-radius: 6px 6px 2px 2px;
+  background: #94a3b8;
+}
+
+.hist-gap-bar.gap-severity-green { background: #16a34a; }
+.hist-gap-bar.gap-severity-yellow { background: #ca8a04; }
+.hist-gap-bar.gap-severity-red { background: #dc2626; }
+
+.hist-gap-val {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.hist-gap-date {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.sim-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.sim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sim-field .url-input {
+  width: 100%;
+}
+
+.sim-actions {
+  display: flex;
+  align-items: flex-end;
+}
+
+.sim-level-title {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.sim-row-changed {
+  background: rgba(10, 108, 210, 0.06);
+}
+
+.hist-n {
+  display: block;
+  font-weight: 500;
 }
 </style>
