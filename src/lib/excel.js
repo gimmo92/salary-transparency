@@ -20,6 +20,26 @@ export const COLUMN_ROLES = {
   partTimePct: 'partTimePct',
   /** Data assunzione / ingresso */
   hireDate: 'hireDate',
+  /** Data cessazione / fine rapporto */
+  terminationDate: 'terminationDate',
+  /** Scatti di anzianità (importo) */
+  senioritySteps: 'senioritySteps',
+  /** Altre voci fisse oltre base e superminimi */
+  otherFixedItems: 'otherFixedItems',
+  /** Bonus / MBO */
+  bonusMbo: 'bonusMbo',
+  /** Premio di risultato */
+  resultBonus: 'resultBonus',
+  /** Straordinari */
+  overtime: 'overtime',
+  /** Indennità variabili */
+  variableAllowances: 'variableAllowances',
+  /** Una tantum */
+  oneOffPayment: 'oneOffPayment',
+  /** Fringe benefit */
+  fringeBenefits: 'fringeBenefits',
+  /** Welfare aziendale */
+  companyWelfare: 'companyWelfare',
   /** CCNL / contratto collettivo di riferimento (es. Metalmeccanico Industria) */
   ccnl: 'ccnl',
   /** Componenti strutturali continuative (livello retributivo) */
@@ -50,6 +70,16 @@ export function getRoleLabel(role) {
     [COLUMN_ROLES.performanceScore]: 'Punteggio performance',
     [COLUMN_ROLES.partTimePct]: '% Part-time',
     [COLUMN_ROLES.hireDate]: 'Data di assunzione',
+    [COLUMN_ROLES.terminationDate]: 'Data cessazione',
+    [COLUMN_ROLES.senioritySteps]: 'Scatti di anzianità',
+    [COLUMN_ROLES.otherFixedItems]: 'Altre voci fisse',
+    [COLUMN_ROLES.bonusMbo]: 'Bonus / MBO',
+    [COLUMN_ROLES.resultBonus]: 'Premio di risultato',
+    [COLUMN_ROLES.overtime]: 'Straordinari',
+    [COLUMN_ROLES.variableAllowances]: 'Indennità variabili',
+    [COLUMN_ROLES.oneOffPayment]: 'Una tantum',
+    [COLUMN_ROLES.fringeBenefits]: 'Fringe benefit',
+    [COLUMN_ROLES.companyWelfare]: 'Welfare aziendale',
     [COLUMN_ROLES.ccnl]: 'CCNL (contratto collettivo / settore)',
     [COLUMN_ROLES.structuralComponents]: 'Componenti strutturali (voci continuative/fisse)',
     [COLUMN_ROLES.individualComponents]: 'Componenti individuali (voci discrezionali/una-tantum)',
@@ -67,6 +97,16 @@ export const MAPPING_REQUIRED_ROLES = [
   COLUMN_ROLES.baseSalary,
   COLUMN_ROLES.superminimo,
   COLUMN_ROLES.superminimoAssoluto,
+  COLUMN_ROLES.terminationDate,
+  COLUMN_ROLES.senioritySteps,
+  COLUMN_ROLES.otherFixedItems,
+  COLUMN_ROLES.bonusMbo,
+  COLUMN_ROLES.resultBonus,
+  COLUMN_ROLES.overtime,
+  COLUMN_ROLES.variableAllowances,
+  COLUMN_ROLES.oneOffPayment,
+  COLUMN_ROLES.fringeBenefits,
+  COLUMN_ROLES.companyWelfare,
 ]
 
 /** Colonne consigliate per analisi normativa affidabile (non bloccano l'avvio) */
@@ -114,6 +154,66 @@ export const MAPPING_UI_SECTIONS = [
         role: COLUMN_ROLES.superminimoAssoluto,
         label: 'Superminimo ass.le',
         hint: 'Obbligatorio per procedere; escluso dalla retribuzione base nelle analisi',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.terminationDate,
+        label: 'Data cessazione',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.senioritySteps,
+        label: 'Scatti di anzianità',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.otherFixedItems,
+        label: 'Altre voci fisse',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.bonusMbo,
+        label: 'Bonus / MBO',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.resultBonus,
+        label: 'Premio di risultato',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.overtime,
+        label: 'Straordinari',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.variableAllowances,
+        label: 'Indennità variabili',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.oneOffPayment,
+        label: 'Una tantum',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.fringeBenefits,
+        label: 'Fringe benefit',
+        hint: 'Obbligatorio per procedere',
+        badge: 'required',
+      },
+      {
+        role: COLUMN_ROLES.companyWelfare,
+        label: 'Welfare aziendale',
+        hint: 'Obbligatorio per procedere',
         badge: 'required',
       },
       {
@@ -332,6 +432,16 @@ export function buildNormalizedData(rows, headers, mapping) {
   const senIdx = idx(COLUMN_ROLES.seniority)
   const ptIdx = idx(COLUMN_ROLES.partTimePct)
   const hireIdx = idx(COLUMN_ROLES.hireDate)
+  const terminationIdx = idx(COLUMN_ROLES.terminationDate)
+  const seniorityStepsIdx = idx(COLUMN_ROLES.senioritySteps)
+  const otherFixedIdx = idx(COLUMN_ROLES.otherFixedItems)
+  const bonusMboIdx = idx(COLUMN_ROLES.bonusMbo)
+  const resultBonusIdx = idx(COLUMN_ROLES.resultBonus)
+  const overtimeIdx = idx(COLUMN_ROLES.overtime)
+  const variableAllowancesIdx = idx(COLUMN_ROLES.variableAllowances)
+  const oneOffIdx = idx(COLUMN_ROLES.oneOffPayment)
+  const fringeIdx = idx(COLUMN_ROLES.fringeBenefits)
+  const welfareIdx = idx(COLUMN_ROLES.companyWelfare)
   const ccnlIdx = idx(COLUMN_ROLES.ccnl)
   const structIdx = idx(COLUMN_ROLES.structuralComponents)
   const indivIdx = idx(COLUMN_ROLES.individualComponents)
@@ -408,6 +518,17 @@ export function buildNormalizedData(rows, headers, mapping) {
         performanceScore: perfIdx != null ? parsePerformanceScore(row[perfIdx]) : null,
         partTimePct: ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100,
         hireDate: hireIdx != null ? row[hireIdx] : null,
+        terminationDate: terminationIdx != null ? row[terminationIdx] : null,
+        senioritySteps: seniorityStepsIdx != null ? parseNumber(row[seniorityStepsIdx]) : 0,
+        otherFixedItems: otherFixedIdx != null ? parseNumber(row[otherFixedIdx]) : 0,
+        bonusMbo: bonusMboIdx != null ? parseNumber(row[bonusMboIdx]) : 0,
+        resultBonus: resultBonusIdx != null ? parseNumber(row[resultBonusIdx]) : 0,
+        overtime: overtimeIdx != null ? parseNumber(row[overtimeIdx]) : 0,
+        variableAllowances:
+          variableAllowancesIdx != null ? parseNumber(row[variableAllowancesIdx]) : 0,
+        oneOffPayment: oneOffIdx != null ? parseNumber(row[oneOffIdx]) : 0,
+        fringeBenefits: fringeIdx != null ? parseNumber(row[fringeIdx]) : 0,
+        companyWelfare: welfareIdx != null ? parseNumber(row[welfareIdx]) : 0,
         ccnl:
           ccnlIdx != null && row[ccnlIdx] != null && String(row[ccnlIdx]).trim() !== ''
             ? String(row[ccnlIdx]).trim()

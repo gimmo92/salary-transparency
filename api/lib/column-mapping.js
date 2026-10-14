@@ -20,6 +20,16 @@ const R = {
   performanceScore: 'performanceScore',
   partTimePct: 'partTimePct',
   hireDate: 'hireDate',
+  terminationDate: 'terminationDate',
+  senioritySteps: 'senioritySteps',
+  otherFixedItems: 'otherFixedItems',
+  bonusMbo: 'bonusMbo',
+  resultBonus: 'resultBonus',
+  overtime: 'overtime',
+  variableAllowances: 'variableAllowances',
+  oneOffPayment: 'oneOffPayment',
+  fringeBenefits: 'fringeBenefits',
+  companyWelfare: 'companyWelfare',
   ccnl: 'ccnl',
   structuralComponents: 'structuralComponents',
   individualComponents: 'individualComponents',
@@ -37,6 +47,15 @@ const SALARY_PRIORITY_ROLES = new Set([
   R.totalSalary,
   R.superminimo,
   R.superminimoAssoluto,
+  R.senioritySteps,
+  R.otherFixedItems,
+  R.bonusMbo,
+  R.resultBonus,
+  R.overtime,
+  R.variableAllowances,
+  R.oneOffPayment,
+  R.fringeBenefits,
+  R.companyWelfare,
 ])
 
 const DISQUALIFY = {
@@ -76,7 +95,23 @@ const DISQUALIFY = {
     /\bretribuzione\s*base\b/i,
     /\bral\s*fiss/i,
     /\bcentro\s*di\s*costo/i,
+    /\bbonus\b/i,
+    /\bmbo\b/i,
+    /\bpremio\s+di\s+risultat/i,
+    /\bstraordinar/i,
+    /\bindennit[aà]\s+variabil/i,
+    /\buna[\s-]*tantum\b/i,
+    /\bfringe\b/i,
+    /\bwelfare\b/i,
+    /\bscatti?\b/i,
   ],
+  [R.individualComponents]: [/\buna[\s-]*tantum\b/i, /\bfringe\b/i, /\bwelfare\b/i],
+  [R.hireDate]: [/\bcessaz/i, /\bdimission/i, /\blicenziament/i, /\bfine\s+rapporto\b/i, /\bdata\s+uscita\b/i],
+  [R.seniority]: [/\bscatt/i],
+  [R.terminationDate]: [/\bassunzion/i, /\bingresso\b/i, /\bhire\b/i],
+  [R.otherFixedItems]: [/\bsuperminimo\b/i, /\bretribuzione\s*base\b/i, /\bral\b/i],
+  [R.bonusMbo]: [/\bpremio\s+di\s+risultat/i, /\bstraordinar/i, /\bwelfare\b/i, /\bfringe\b/i],
+  [R.fringeBenefits]: [/\bwelfare\b/i],
   [R.ccnl]: [/\blivello\b/i, /\bminimo\b/i, /\btabell/i, /\binquadramento\b/i],
   [R.level]: [/^ccnl$/i, /\bcontratto\s*collettivo\b/i],
   [R.superminimo]: [/\bass\.?\s*le\b/i, /\bassorb/i],
@@ -144,6 +179,56 @@ const SCORE_PATTERNS = {
   ],
   [R.hireDate]: [
     { re: /\b(data\s*assunzione|data\s*ingresso|hire\s*date)\b/i, w: 9 },
+  ],
+  [R.terminationDate]: [
+    { re: /\bdata\s+(di\s+)?cessazione\b/i, w: 12 },
+    { re: /\bcessazione\s+(rapporto|contratto)\b/i, w: 10 },
+    { re: /\b(data\s+)?(dimissioni|licenziamento|fine\s+rapporto)\b/i, w: 8 },
+    { re: /\bdata\s+uscita\b/i, w: 8 },
+    { re: /\btermination\s+date\b/i, w: 9 },
+  ],
+  [R.senioritySteps]: [
+    { re: /\bscatti?\s+di\s+anzianit/i, w: 12 },
+    { re: /\bscatti?\s+anzianit/i, w: 11 },
+    { re: /\bscatti?\b/i, w: 8 },
+  ],
+  [R.otherFixedItems]: [
+    { re: /\baltre\s+voci\s+fisse\b/i, w: 12 },
+    { re: /\baltre\s+competenze\s+fisse\b/i, w: 11 },
+    { re: /\baltre\s+indennit[aà]\s+fisse\b/i, w: 11 },
+    { re: /\bvoci\s+fisse\b/i, w: 9 },
+  ],
+  [R.bonusMbo]: [
+    { re: /\bbonus\s*\/\s*mbo\b/i, w: 12 },
+    { re: /\bbonus\s+mbo\b/i, w: 12 },
+    { re: /\bmbo\b/i, w: 10 },
+    { re: /\bbonus\b/i, w: 9 },
+  ],
+  [R.resultBonus]: [
+    { re: /\bpremio\s+di\s+risultato\b/i, w: 12 },
+    { re: /\bpremio\s+risultato\b/i, w: 11 },
+    { re: /\bpdr\b/i, w: 6 },
+  ],
+  [R.overtime]: [
+    { re: /\b(ore\s+)?straordinar/i, w: 11 },
+    { re: /\bovertime\b/i, w: 9 },
+  ],
+  [R.variableAllowances]: [
+    { re: /\bindennit[aà]\s+variabil/i, w: 12 },
+    { re: /\bind\.?\s*variabil/i, w: 8 },
+  ],
+  [R.oneOffPayment]: [
+    { re: /\buna[\s-]*tantum\b/i, w: 12 },
+    { re: /\bone[\s-]*off\b/i, w: 8 },
+  ],
+  [R.fringeBenefits]: [
+    { re: /\bfringe\s*benefit/i, w: 12 },
+    { re: /\bfringe\b/i, w: 9 },
+    { re: /\bbenefit\s+in\s+kind\b/i, w: 8 },
+  ],
+  [R.companyWelfare]: [
+    { re: /\bwelfare\s+aziendale\b/i, w: 12 },
+    { re: /\bwelfare\b/i, w: 9 },
   ],
   [R.structuralComponents]: [
     { re: /\b(struttural|continuativ|fiss[ae]\s*annu)\b/i, w: 8 },
@@ -258,11 +343,21 @@ export function detectColumnRoles(headers, rows) {
     R.gender,
     R.employeeName,
     R.baseSalary,
+    R.senioritySteps,
+    R.otherFixedItems,
+    R.bonusMbo,
+    R.resultBonus,
+    R.overtime,
+    R.variableAllowances,
+    R.oneOffPayment,
+    R.fringeBenefits,
+    R.companyWelfare,
     R.structuralComponents,
     R.individualComponents,
     R.variableComponents,
     R.totalSalary,
     R.partTimePct,
+    R.terminationDate,
     R.hireDate,
     R.ccnl,
     R.role,
@@ -342,7 +437,7 @@ Ti passo l'elenco colonne (indice 0-based) con esempi di valori. Mappa ogni "ruo
 REGOLE OBBLIGATORIE (Italia):
 - baseSalary = retribuzione FISSA/BASE annua (RAL base, competenze fisse, stipendio base). MAI: 14ma, 13ma, mensilità aggiuntive, INPS, contributi, TFR, accantonamenti, "totale variabili" da sola.
 - totalSalary = retribuzione TOTALE annua lorda (totale competenze, lordo annuo, RAL totale). MAI: INPS, contributi previdenziali, costo azienda, solo componenti variabili, 14ma/13ma.
-- variableComponents = bonus, premi, MBO, componenti variabili (es. "TOT COMP VARIAB"). MAI: base fissa, INPS.
+- variableComponents = totale componenti variabili aggregato (es. "TOT COMP VARIAB"), solo se non è una voce specifica. MAI: base fissa, INPS, bonus/MBO, premio di risultato, straordinari, indennità variabili, una tantum, fringe, welfare, scatti.
 - gender = sesso/genere (M/F).
 - employeeName = nome dipendente / nominativo.
 - category = categoria o inquadramento (centro di costo solo se è l'unica colonna organizzativa).
@@ -353,7 +448,17 @@ REGOLE OBBLIGATORIE (Italia):
 - roleSeniority = anzianità nel ruolo attuale.
 - performanceScore = valutazione performance se presente.
 - partTimePct = percentuale part-time (100 = full time).
-- hireDate = data assunzione / ingresso.
+- hireDate = data assunzione / ingresso. MAI data cessazione, dimissioni o fine rapporto.
+- terminationDate = data cessazione / fine rapporto / dimissioni / uscita. MAI data assunzione.
+- senioritySteps = importo scatti di anzianità. MAI gli anni di anzianità.
+- otherFixedItems = altre voci fisse (competenze o indennità fisse diverse da base e superminimo).
+- bonusMbo = bonus o MBO. MAI premio di risultato, straordinari, welfare, fringe.
+- resultBonus = premio di risultato (PDR).
+- overtime = straordinari.
+- variableAllowances = indennità variabili.
+- oneOffPayment = una tantum.
+- fringeBenefits = fringe benefit. MAI welfare aziendale.
+- companyWelfare = welfare aziendale.
 - ccnl = nome CCNL / contratto collettivo / settore (es. Metalmeccanico Industria). NON livello di inquadramento né minimo tabellare.
 - structuralComponents = somma componenti strutturali continuative/fisse (escluse da totali INPS).
 - individualComponents = somma componenti individuali/discrezionali/una-tantum.

@@ -425,6 +425,16 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
   const perfScoreIdx = idx(COLUMN_ROLES.performanceScore)
   const ptIdx = idx(COLUMN_ROLES.partTimePct)
   const hireIdx = idx(COLUMN_ROLES.hireDate)
+  const terminationIdx = idx(COLUMN_ROLES.terminationDate)
+  const seniorityStepsIdx = idx(COLUMN_ROLES.senioritySteps)
+  const otherFixedIdx = idx(COLUMN_ROLES.otherFixedItems)
+  const bonusMboIdx = idx(COLUMN_ROLES.bonusMbo)
+  const resultBonusIdx = idx(COLUMN_ROLES.resultBonus)
+  const overtimeIdx = idx(COLUMN_ROLES.overtime)
+  const variableAllowancesIdx = idx(COLUMN_ROLES.variableAllowances)
+  const oneOffIdx = idx(COLUMN_ROLES.oneOffPayment)
+  const fringeIdx = idx(COLUMN_ROLES.fringeBenefits)
+  const welfareIdx = idx(COLUMN_ROLES.companyWelfare)
   const ccnlIdx = idx(COLUMN_ROLES.ccnl)
   const structIdx = idx(COLUMN_ROLES.structuralComponents)
   const indivIdx = idx(COLUMN_ROLES.individualComponents)
@@ -484,6 +494,17 @@ export function buildNormalizedJobGradingData(rows, headers, mapping) {
       totalSalary: total,
       partTimePct: ptIdx != null ? parsePartTimePct(row[ptIdx]) : 100,
       hireDate: hireIdx != null ? row[hireIdx] : null,
+      terminationDate: terminationIdx != null ? row[terminationIdx] : null,
+      senioritySteps: seniorityStepsIdx != null ? parseNumber(row[seniorityStepsIdx]) : 0,
+      otherFixedItems: otherFixedIdx != null ? parseNumber(row[otherFixedIdx]) : 0,
+      bonusMbo: bonusMboIdx != null ? parseNumber(row[bonusMboIdx]) : 0,
+      resultBonus: resultBonusIdx != null ? parseNumber(row[resultBonusIdx]) : 0,
+      overtime: overtimeIdx != null ? parseNumber(row[overtimeIdx]) : 0,
+      variableAllowances:
+        variableAllowancesIdx != null ? parseNumber(row[variableAllowancesIdx]) : 0,
+      oneOffPayment: oneOffIdx != null ? parseNumber(row[oneOffIdx]) : 0,
+      fringeBenefits: fringeIdx != null ? parseNumber(row[fringeIdx]) : 0,
+      companyWelfare: welfareIdx != null ? parseNumber(row[welfareIdx]) : 0,
       ccnl:
         ccnlIdx != null && row[ccnlIdx] != null && String(row[ccnlIdx]).trim() !== ''
           ? String(row[ccnlIdx]).trim()
